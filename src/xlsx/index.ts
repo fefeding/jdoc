@@ -96,7 +96,6 @@ export async function xlsxToMatrix(
     const sheet = sheetName ? sheets.find((item) => item.name === sheetName) : sheets[0];
     if (!sheet) throw wrapError('xlsx', '解析', new Error(`未找到工作表：${sheetName}`));
 
-    const { cellText } = await import('./to-html');
     const matrix = sheet.rows.map((row) => {
         const cells = Array.isArray(row) ? row : ((row as { cells?: unknown[] }).cells ?? []);
         return cells.map((cell) => {

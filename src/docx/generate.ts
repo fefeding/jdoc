@@ -198,7 +198,8 @@ async function buildImageParagraphs(
 
         const imageRun = new ImageRun({
             type: toImageType(mime),
-            data: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+            // 直接传 Uint8Array，避免 Buffer（浏览器/非 Node 环境未定义）
+            data: bytes,
             transformation: { width, height },
             altText: block.alt ? { name: block.alt, title: block.alt, description: block.alt } : undefined
         } as ConstructorParameters<typeof ImageRun>[0]);
@@ -511,6 +512,8 @@ export async function generateDocx(
         ]
     });
 
-    const buffer = await Packer.toBuffer(document);
-    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    // 使用 toArrayBuffer 以跨平台：toBuffer 在非 Node 环境（浏览器、Deno、部分
+    // 打包运行时）会抛 "nodebuffer is not supported by this platform"。
+    const arrayBuffer = await Packer.toArrayBuffer(document);
+    return new Uint8Array(arrayBuffer);
 }

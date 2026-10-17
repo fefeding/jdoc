@@ -48,23 +48,24 @@ interface PdfjsLoadingTask {
     destroy?: () => void;
 }
 
-/** pdfjs-dist 的不同入口（浏览器 ESM / Node legacy） */
-const PDFJS_ENTRIES = [
-    'pdfjs-dist/legacy/build/pdf.mjs',
-    'pdfjs-dist/build/pdf.mjs',
-    'pdfjs-dist'
-];
-
 /** 尝试加载 pdfjs-dist，失败时抛出带安装指引的错误 */
 async function loadPdfjs(): Promise<PdfjsModule> {
     const errors: string[] = [];
-    for (const entry of PDFJS_ENTRIES) {
+    const attempt = async (loader: () => Promise<unknown>, label: string) => {
         try {
-            return (await import(/* @vite-ignore */ entry)) as PdfjsModule;
+            return (await loader()) as PdfjsModule;
         } catch (error) {
-            errors.push(`${entry}: ${(error as Error)?.message || error}`);
+            errors.push(`${label}: ${(error as Error)?.message || error}`);
+            return null;
         }
-    }
+    };
+    // 注意：必须使用字面量说明符（而非变量），否则打包器（Vite/Rollup）无法在浏览器
+    // 构建期将 pdfjs 打包进产物，运行时裸说明符会被浏览器拒绝。
+    const mod =
+        (await attempt(() => import('pdfjs-dist/legacy/build/pdf.mjs'), 'pdfjs-dist/legacy/build/pdf.mjs')) ||
+        (await attempt(() => import('pdfjs-dist/build/pdf.mjs'), 'pdfjs-dist/build/pdf.mjs')) ||
+        (await attempt(() => import('pdfjs-dist'), 'pdfjs-dist'));
+    if (mod) return mod;
     throw new JdocError(
         'PDF 解析需要 pdfjs-dist，请先安装：npm i pdfjs-dist（或 npm i @fefeding/jdoc）',
         'pdf',
@@ -208,6 +209,18 @@ export async function parsePdf(
         }
 
         const pdfjs = await loadPdfjs();
+        // 浏览器端 pdfjs 必须配置 worker。打包器（Vite/Rollup）会把该 URL 表达式
+        // 解析为构建产物中的 worker 资源地址；Node 端无需 worker，直接跳过。
+        if (typeof window !== 'undefined' && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+            try {
+                pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+                    'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+                    import.meta.url
+                ).toString();
+            } catch {
+                // 资源解析失败不阻断：调用方可自行设置 GlobalWorkerOptions.workerSrc
+            }
+        }
         const standardFontDataUrl = options.standardFontDataUrl || (await resolveResourceUrl('standard_fonts'));
         const cMapUrl = await resolveResourceUrl('cmaps');
 

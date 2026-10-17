@@ -11,28 +11,65 @@ body{margin:0;padding:24px;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe
 h1{font-size:20px;margin:0 0 4px}
 h2{font-size:15px;margin:0 0 10px}
 .sub{color:var(--mut);margin-bottom:20px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
 @media(max-width:900px){.grid{grid-template-columns:1fr}}
-.card{border:1px solid var(--bd);border-radius:8px;padding:16px;background:#fff}
+.card{border:1px solid var(--bd);border-radius:8px;padding:16px;background:#fff;min-width:0}
 .card+.card{margin-top:20px}
 .drop{border:2px dashed var(--bd);border-radius:8px;padding:28px;text-align:center;cursor:pointer;transition:.15s;background:var(--bg)}
 .drop:hover,.drop.over{border-color:var(--pri);background:#eef4ff}
 .drop b{color:var(--pri)}
 label{display:inline-block;margin:4px 8px 4px 0;font-size:13px}
-input[type=text],textarea{width:100%;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;font:inherit;margin-bottom:8px}
-textarea{min-height:110px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+input[type=text],textarea,select{width:100%;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;font:inherit;margin-bottom:8px}
+textarea{min-height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 button{padding:6px 14px;border:1px solid var(--bd);border-radius:6px;background:var(--pri);color:#fff;font:inherit;cursor:pointer;margin-right:8px}
 button.ghost{background:#fff;color:var(--fg)}
-button:hover{opacity:.88}
-#out{border:1px solid var(--bd);border-radius:6px;padding:12px;max-height:460px;overflow:auto;background:var(--bg)}
-#log{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);margin-top:10px;min-height:20px}
+button:disabled{opacity:.5;cursor:wait}
+button:hover:not(:disabled){opacity:.88}
+#log,#log2{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);margin-top:10px;min-height:20px}
 pre{white-space:pre-wrap;word-break:break-all;font-size:12px;margin:0}
 .badge{display:inline-block;padding:1px 8px;border-radius:20px;background:#ddf4ff;color:#0969da;font-size:12px;margin-right:6px}
+.presets{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+@media(max-width:600px){.presets{grid-template-columns:1fr}}
+.preset{text-align:left;padding:8px 10px;border:1px solid var(--bd);border-radius:6px;background:#fff;color:var(--fg);margin:0;display:flex;flex-direction:column;gap:2px}
+.preset:hover{border-color:var(--pri);background:#f0f6ff}
+.preset b{font-size:13px}
+.preset small{color:var(--mut);font-size:12px;line-height:1.4}
+.result{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--bd);font-size:13px}
+.result:last-child{border-bottom:none}
+.result .name{flex:1}
+.result .size{color:var(--mut);font-size:12px;font-family:ui-monospace,Menlo,monospace}
+.result a{color:var(--pri);cursor:pointer;font-size:12px}
+.hint{font-size:12px;color:var(--mut);margin:0 0 10px}
+
+/* 解析预览：渲染效果 / JSON 双视图 */
+#out-view{border:1px solid var(--bd);border-radius:6px;padding:12px;max-height:520px;overflow:auto;background:#fff}
+#out-json{border:1px solid var(--bd);border-radius:6px;padding:12px;max-height:520px;overflow:auto;background:var(--bg)}
+#out-json pre{margin:0}
+[hidden]{display:none !important}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tab{padding:5px 14px;border:1px solid var(--bd);background:#fff;color:var(--mut);border-radius:6px;cursor:pointer;font:inherit;margin:0}
+.tab:hover{border-color:var(--pri);color:var(--pri)}
+.tab.active{background:var(--pri);border-color:var(--pri);color:#fff}
+.meta{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.ms{color:var(--mut);font-size:12px}
+figure.slide,figure.page{margin:0 0 14px;border:1px solid var(--bd);border-radius:8px;overflow:hidden;background:#fff}
+figure.slide figcaption,figure.page figcaption{padding:6px 10px;background:var(--bg);border-bottom:1px solid var(--bd);font-size:12px;color:var(--mut)}
+.slide-body{position:relative;overflow:auto;background:#fff}
+.page-body{padding:14px;white-space:pre-wrap;font-size:13px;line-height:1.7;max-height:440px;overflow:auto}
+.empty{color:#8b949e}
+.zoom-bar{display:flex;align-items:center;gap:6px;margin-bottom:10px}
+.zbtn{padding:4px 10px;border:1px solid var(--bd);background:#fff;color:var(--fg);border-radius:6px;cursor:pointer;font:inherit;margin:0;font-size:13px}
+.zbtn:hover{border-color:var(--pri);color:var(--pri)}
+#zoom-label{font-size:12px;color:var(--mut);min-width:44px;text-align:center}
+#zoom-layer{zoom:1;width:max-content}
+.slide-scaler{display:inline-block;vertical-align:top;margin:0 0 14px}
+.pptx-slides{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:8px}
 </style>
 </head>
 <body>
+<style id="pptx-styles"></style>
 <h1>@fefeding/jdoc</h1>
-<div class="sub">PPTX / DOCX / XLSX / PDF — 一套 API 解析与生成，浏览器与 Node.js 双端可用</div>
+<div class="sub">PPTX / DOCX / XLSX / PDF — 一套 API 解析与生成，浏览器与 Node.js 双端可用。本页演示直接调用 <code>jsonToDocx / jsonToXlsx / jsonToPdf</code> 生成各种文档，并把生成结果回读解析做预览。</div>
 
 <div class="grid">
   <div>
@@ -47,34 +84,66 @@ pre{white-space:pre-wrap;word-break:break-all;font-size:12px;margin:0}
     </div>
     <div class="card">
       <h2>预览</h2>
-      <div id="out"><em style="color:#8b949e">解析结果会显示在这里</em></div>
+      <div class="tabs">
+        <button type="button" class="tab active" data-view="view">渲染效果</button>
+        <button type="button" class="tab" data-view="json">JSON</button>
+      </div>
+      <div class="zoom-bar">
+        <button type="button" class="zbtn" data-zoom="out" title="缩小">−</button>
+        <span id="zoom-label">100%</span>
+        <button type="button" class="zbtn" data-zoom="in" title="放大">＋</button>
+        <button type="button" class="zbtn" data-zoom="fit">适应宽度</button>
+        <button type="button" class="zbtn" data-zoom="reset">实际大小</button>
+      </div>
+      <div id="out-view"><em style="color:#8b949e">解析结果会显示在这里</em></div>
+      <div id="out-json" hidden></div>
     </div>
   </div>
 
-  <div class="card">
-    <h2>一键生成并下载</h2>
-    <button id="mk-docx">DOCX</button>
-    <button id="mk-xlsx">XLSX</button>
-    <button id="mk-pdf">PDF</button>
-    <button id="mk-pptx" class="ghost">PPTX</button>
-    <div id="log2" style="color:var(--mut);font-size:12px;margin:10px 0 16px"></div>
+  <div>
+    <div class="card">
+      <h2>生成 DOCX <span class="badge" id="cnt-docx"></span></h2>
+      <p class="hint">标题 / 富文本 / 列表 / 表格 / 引用 / 代码块 / 分页符，全部走 <code>jsonToDocx</code>。</p>
+      <div class="presets" id="presets-docx"></div>
+      <button class="ghost" id="all-docx">生成全部</button>
+    </div>
 
-    <h2>自定义生成</h2>
-    <textarea id="spec">{
-  "metadata": { "title": "示例文档" },
-  "blocks": [
-    { "type": "heading", "level": 1, "text": "自定义生成" },
-    { "type": "paragraph", "runs": [
-      { "text": "普通、" },
-      { "text": "加粗", "bold": true },
-      { "text": "、" },
-      { "text": "彩色", "color": "#FF0000", "size": 14 }
-    ] },
-    { "type": "list", "ordered": false, "items": ["要点一", "要点二"] },
-    { "type": "table", "header": true, "rows": [["模块","进度"],["A","100%"]] }
-  ]
-}</textarea>
-    <button id="mk-custom">按上面 JSON 生成 DOCX</button>
+    <div class="card">
+      <h2>生成 XLSX <span class="badge" id="cnt-xlsx"></span></h2>
+      <p class="hint">多工作表 / 合并单元格 / 冻结窗格 / 公式 / 数字格式 / 样式 / 超链接 / 批注，全部走 <code>jsonToXlsx</code>。</p>
+      <div class="presets" id="presets-xlsx"></div>
+      <button class="ghost" id="all-xlsx">生成全部</button>
+    </div>
+
+    <div class="card">
+      <h2>生成 PDF <span class="badge" id="cnt-pdf"></span></h2>
+      <p class="hint">
+        文本 / 标题 / 表格 / 矩形 / 线段 / 分页，全部走 <code>jsonToPdf</code>。
+        PDF 标准 14 字体不含中文字形，上传 TTF/OTF 后示例自动切换为中文。
+      </p>
+      <label>中文字体（可选）：<input type="file" id="font" accept=".ttf,.otf" style="width:auto" /></label>
+      <div id="font-state" class="hint">未上传：PDF 示例使用英文内容。</div>
+      <div class="presets" id="presets-pdf"></div>
+      <button class="ghost" id="all-pdf">生成全部</button>
+    </div>
+
+    <div class="card">
+      <h2>自定义 JSON 生成</h2>
+      <select id="fmt">
+        <option value="docx">DOCX（blocks 文档）</option>
+        <option value="xlsx">XLSX（sheets 工作簿）</option>
+        <option value="pdf">PDF（elements 元素）</option>
+        <option value="pptx">PPTX（slides 幻灯片）</option>
+      </select>
+      <textarea id="spec" spellcheck="false"></textarea>
+      <button id="mk-custom">按 JSON 生成并下载</button>
+      <div id="log2"></div>
+    </div>
+
+    <div class="card" id="results-card" hidden>
+      <h2>批量生成结果</h2>
+      <div id="results"></div>
+    </div>
   </div>
 </div>
 

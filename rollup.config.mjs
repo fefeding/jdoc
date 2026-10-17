@@ -23,7 +23,11 @@ const external = [
   ...Object.keys(pkg.peerDependencies || {}),
   // 仅在 Node 分支执行的动态探测用到这两个内置模块，
   // 显式声明可避免 browser 产物里出现未解析依赖告警
-  /^node:/
+  /^node:/,
+  // pdfjs-dist 通过子路径（如 pdfjs-dist/legacy/build/pdf.mjs）动态导入，
+  // 必须按前缀整体 external，否则 rollup 会为其切出独立 chunk 与 output.file 冲突。
+  // 库不内联它，运行时由消费方（Node 已装 optionalDep / 浏览器 bundler）提供。
+  /^pdfjs-dist/
 ];
 
 const ts = () =>
