@@ -1,0 +1,9 @@
+node_modules/
+test/
+coverage/
+examples/
+.vitepress/
+*.log
+.DS_Store
+.vscode/
+.idea/

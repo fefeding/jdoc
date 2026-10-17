@@ -1,0 +1,85 @@
+{
+  "name": "@fefeding/jdoc",
+  "version": "0.1.0",
+  "description": "文档解析与生成统一库：支持 PPTX / DOCX / XLSX / PDF 的解析与生成，纯 TypeScript，浏览器与 Node.js 双端可用",
+  "main": "./dist/jdoc.cjs",
+  "module": "./dist/jdoc.esm.js",
+  "browser": "./dist/jdoc.browser.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/jdoc.esm.js",
+      "require": "./dist/jdoc.cjs",
+      "browser": "./dist/jdoc.browser.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "homepage": "https://github.com/fefeding/jdoc#readme",
+  "bugs": {
+    "url": "https://github.com/fefeding/jdoc/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fefeding/jdoc.git"
+  },
+  "scripts": {
+    "build": "rimraf dist && rollup -c rollup.config.mjs --environment production",
+    "type-check": "tsc --noEmit --skipLibCheck",
+    "test": "vitest",
+    "test:run": "vitest run --no-cache",
+    "test:coverage": "vitest run --coverage --no-cache",
+    "prepublishOnly": "npm run build",
+    "examples": "vite --config vite.examples.config.ts",
+    "examples:build": "vite build --config vite.examples.config.ts"
+  },
+  "keywords": [
+    "docx",
+    "xlsx",
+    "pdf",
+    "pptx",
+    "文档解析",
+    "文档生成",
+    "parser",
+    "generator",
+    "office"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@fefeding/ppt-parser": "^1.0.26",
+    "docx": "^9.12.0",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.2",
+    "pdf-lib": "^1.17.1"
+  },
+  "optionalDependencies": {
+    "pdfjs-dist": "^6.4.299"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.8",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.3.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/node": "^20.19.43",
+    "@vitest/coverage-v8": "^1.6.1",
+    "jsdom": "^27.4.0",
+    "rimraf": "^5.0.10",
+    "rollup": "^4.63.5",
+    "rollup-plugin-dts": "^6.5.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.3",
+    "vitest": "^1.6.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "README.zh-CN.md"
+  ]
+}

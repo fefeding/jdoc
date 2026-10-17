@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-examples/
+coverage/
+*.log
+.DS_Store
+.vscode/
+.idea/
+test/fixtures/tmp/
