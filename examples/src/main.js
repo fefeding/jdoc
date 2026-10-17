@@ -20,6 +20,14 @@ import {
     xlsxToHtml,
     xlsxToJson
 } from 'jdoc';
+import { chartRenderer } from '@fefeding/ppt-parser/chart-renderer';
+import echarts from 'echarts';
+import echartsGL from 'echarts-gl';
+
+// chart-renderer 通过全局 echarts 渲染（UMD 引入会自动挂载，ESM 打包需手动暴露）。
+// echarts-gl 用于真 3D 图表；未加载时 3D 类型会自动降级为同族 2D。
+window.echarts = echarts;
+window['echarts-gl'] = echartsGL;
 
 const $ = (id) => document.getElementById(id);
 const log = (msg, target = 'log') => { $(target).textContent = msg; };
@@ -49,6 +57,7 @@ let currentZoom = 1;
  * @param html - HTML 字符串
  * @param node - 追加的内容，既可以是 DOM 节点（PPTX 逐页插入），也可以是 HTML 字符串
  */
+let pendingCharts = null;
 function setView(html, node) {
     const layer = document.createElement('div');
     layer.id = 'zoom-layer';
@@ -58,6 +67,20 @@ function setView(html, node) {
     view.innerHTML = '';
     view.appendChild(layer);
     fitZoom();
+    // 图表必须在幻灯片插入 DOM 之后渲染：容器需有可测量尺寸，否则 echarts 画布为 0×0
+    renderChartsInView();
+}
+
+/** 渲染待处理的 PPTX 图表（按 chartId 在幻灯片容器内定位占位元素） */
+function renderChartsInView() {
+    if (!pendingCharts) return;
+    const { charts, container } = pendingCharts;
+    pendingCharts = null;
+    try {
+        chartRenderer.renderCharts(charts, container);
+    } catch (error) {
+        console.warn('图表渲染失败：', error);
+    }
 }
 
 /** HTML 字符串 / DOM 节点 -> 可 appendChild 的节点（字符串不能丢给 appendChild） */
@@ -174,6 +197,8 @@ function buildPptxSlides(rendered) {
         while (holder.firstChild) scaler.appendChild(holder.firstChild);
         wrap.appendChild(scaler);
     }
+    // 幻灯片 HTML 中为图表预留了占位容器（chartId），交给官方 chart-renderer 渲染
+    pendingCharts = rendered.charts && rendered.charts.length ? { charts: rendered.charts, container: wrap } : null;
     return wrap;
 }
 
