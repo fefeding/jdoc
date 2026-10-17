@@ -44,15 +44,32 @@ const GENERATORS = { docx: jsonToDocx, xlsx: jsonToXlsx, pdf: jsonToPdf, pptx: j
 // ---------- 预览双视图（渲染效果 / JSON） ----------
 
 let currentZoom = 1;
+/**
+ * 展示预览内容
+ * @param html - HTML 字符串
+ * @param node - 追加的内容，既可以是 DOM 节点（PPTX 逐页插入），也可以是 HTML 字符串
+ */
 function setView(html, node) {
     const layer = document.createElement('div');
     layer.id = 'zoom-layer';
     if (html) layer.innerHTML = html;
-    if (node) layer.appendChild(node);
+    if (node) layer.appendChild(toNode(node));
     const view = $('out-view');
     view.innerHTML = '';
     view.appendChild(layer);
     fitZoom();
+}
+
+/** HTML 字符串 / DOM 节点 -> 可 appendChild 的节点（字符串不能丢给 appendChild） */
+function toNode(value) {
+    if (value == null) return null;
+    if (typeof value !== 'string') return value;
+    const template = document.createElement('template');
+    template.innerHTML = value;
+    if (template.content.childNodes.length === 1) return template.content.firstChild;
+    const fragment = document.createDocumentFragment();
+    while (template.content.firstChild) fragment.appendChild(template.content.firstChild);
+    return fragment;
 }
 function applyZoom() {
     const layer = $('zoom-layer');
