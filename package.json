@@ -47,7 +47,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@fefeding/ppt-parser": "^1.0.26",
+    "@fefeding/ppt-parser": "^1.0.27",
     "docx": "^9.12.0",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
