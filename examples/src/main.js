@@ -44,8 +44,14 @@ const GENERATORS = { docx: jsonToDocx, xlsx: jsonToXlsx, pdf: jsonToPdf, pptx: j
 // ---------- 预览双视图（渲染效果 / JSON） ----------
 
 let currentZoom = 1;
-function setView(html) {
-    $('out-view').innerHTML = `<div id="zoom-layer">${html}</div>`;
+function setView(html, node) {
+    const layer = document.createElement('div');
+    layer.id = 'zoom-layer';
+    if (html) layer.innerHTML = html;
+    if (node) layer.appendChild(node);
+    const view = $('out-view');
+    view.innerHTML = '';
+    view.appendChild(layer);
     fitZoom();
 }
 function applyZoom() {
@@ -122,13 +128,36 @@ async function parse(file) {
         setView(`<div class="meta">
             <span class="badge">${format || 'unknown'}</span>
             <span class="ms">${ms} ms</span>
-        </div>${view}`);
+        </div>`, view);
         setJson(data);
+        if (format === 'pdf') setupPdfPageRender(file);
         log(`✓ ${file.name} 解析完成（${format}，${ms} ms）`);
     } catch (error) {
         setView('');
         log(`✗ 解析失败：${error?.message || error}`);
     }
+}
+
+/** PPTX 每页独立解析后以 DOM 节点插入：若把所有页拼成一个字符串一次性
+ * innerHTML，某页未闭合的标签会被 HTML 解析器自动纠错，把后续页的
+ * 内容与媒体吞进前一页（ppt-parser 官方示例即为逐页解析）。 */
+function buildPptxSlides(rendered) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pptx-slides';
+    const slides = rendered.slides || [];
+    if (!slides.length) {
+        wrap.innerHTML = '<em>无幻灯片</em>';
+        return wrap;
+    }
+    for (const slide of slides) {
+        const holder = document.createElement('div');
+        holder.innerHTML = slide.html;
+        const scaler = document.createElement('div');
+        scaler.className = 'slide-scaler';
+        while (holder.firstChild) scaler.appendChild(holder.firstChild);
+        wrap.appendChild(scaler);
+    }
+    return wrap;
 }
 
 async function render(file, format) {
@@ -147,26 +176,31 @@ async function render(file, format) {
         const standard = await pptxToStandard(file);
         const globalStyle = rendered.styles?.global || '';
         if (pptxStyleEl) pptxStyleEl.textContent = globalStyle;
-        const slides = (rendered.slides || [])
-            .map((slide) => `<div class="slide-scaler">${slide.html}</div>`)
-            .join('') || '<em>无幻灯片</em>';
         return {
-            view: `<div class="pptx-slides">${slides}</div>`,
+            view: buildPptxSlides(rendered),
             data: { slideSize: rendered.slideSize, metadata: rendered.metadata, slides: standard?.slides || [] }
         };
     }
     if (format === 'pdf') {
         const result = await pdfToJson(file);
-        const pages = (result.pages || [])
+        const pages = result.pages || [];
+        // 每页一张卡片：先放等比例占位框（懒渲染成图像），有文本的页折叠展示文本
+        const cards = pages
             .map((page, i) => {
                 const size = page.width ? ` · ${Math.round(page.width)}×${Math.round(page.height)}` : '';
-                const body = page.text
-                    ? escapeHtml(page.text)
-                    : '<em class="empty">（无可提取文本，可能为扫描件）</em>';
-                return `<figure class="page"><figcaption>第 ${i + 1} 页${size}</figcaption><div class="page-body">${body}</div></figure>`;
+                const ratio = page.width && page.height
+                    ? ` style="aspect-ratio:${Math.round(page.width * 100) / 100}/${Math.round(page.height * 100) / 100}"`
+                    : '';
+                const text = page.text
+                    ? `<details class="page-text"><summary>本页文本</summary><pre>${escapeHtml(page.text)}</pre></details>`
+                    : '<em class="empty page-note">（无可提取文本，页面内容以图像展示）</em>';
+                return `<figure class="page" data-page="${i + 1}"><figcaption>第 ${i + 1} 页${size}</figcaption>` +
+                    `<div class="page-canvas"${ratio}><em class="empty">页面渲染中…</em></div>${text}</figure>`;
             })
             .join('') || '<em>无页面</em>';
-        return { view: `<div class="hint">共 ${result.pageCount} 页</div>${pages}`, data: result };
+        const allEmpty = pages.length > 0 && pages.every((p) => !p.text);
+        const hint = `共 ${result.pageCount} 页${allEmpty ? ' · 未提取到文本，已按页面图像渲染' : ''}`;
+        return { view: `<div class="hint">${hint}</div>${cards}`, data: result };
     }
     const { blocks } = await docxToJson(file);
     return { view: '<em>未知格式，无法渲染</em>', data: { blocks } };
@@ -234,6 +268,75 @@ async function toArrayBufferLike(input) {
     if (input instanceof Uint8Array) return input.buffer;
     if (input instanceof Blob) return input.arrayBuffer();
     throw new TypeError('不支持的输入类型');
+}
+
+// ---------- PDF 页面图像渲染（扫描件没有文本，也能按原图看到内容） ----------
+
+let pdfPageRender = null; // { doc, observer }
+
+/** 解析完成后调用：页面卡进入视口时才渲染成 canvas（支持几百页的文档） */
+async function setupPdfPageRender(file) {
+    if (pdfPageRender) {
+        pdfPageRender.observer?.disconnect();
+        pdfPageRender = null;
+    }
+    const holders = Array.from(document.querySelectorAll('#out-view .page-canvas'));
+    if (!holders.length) return;
+
+    let pdfjs;
+    try {
+        pdfjs = await loadPdfjs();
+    } catch (error) {
+        holders.forEach((holder) => {
+            holder.innerHTML = `<em class="empty">无法加载 pdfjs：${escapeHtml(error?.message || error)}</em>`;
+        });
+        return;
+    }
+    // pdfjs 会转移底层 ArrayBuffer，必须传副本，避免影响原文件字节
+    const data = new Uint8Array(await toArrayBufferLike(file));
+    let doc;
+    try {
+        doc = await pdfjs.getDocument({ data }).promise;
+    } catch (error) {
+        holders.forEach((holder) => {
+            holder.innerHTML = `<em class="empty">页面渲染失败：${escapeHtml(error?.message || error)}</em>`;
+        });
+        return;
+    }
+    const state = { doc, observer: null };
+    pdfPageRender = state;
+
+    const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            observer.unobserve(entry.target);
+            renderPdfPage(state, entry.target);
+        }
+    }, { root: $('out-view'), rootMargin: '400px' });
+    state.observer = observer;
+    holders.forEach((holder) => observer.observe(holder));
+}
+
+async function renderPdfPage(state, holder) {
+    const pageNum = Number(holder.closest('.page')?.dataset.page);
+    if (!pageNum) return;
+    try {
+        const page = await state.doc.getPage(pageNum);
+        // 按预览区可用宽度选缩放倍数，限制在 0.5 ~ 2 倍
+        const view = $('out-view');
+        const avail = Math.max(280, (view.clientWidth || 700) - 60);
+        const base = page.getViewport({ scale: 1 });
+        const scale = Math.min(2, Math.max(0.5, avail / base.width));
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.className = 'page-img';
+        await page.render({ canvas, canvasContext: canvas.getContext('2d'), viewport }).promise;
+        holder.replaceChildren(canvas);
+    } catch (error) {
+        holder.innerHTML = `<em class="empty">页面渲染失败：${escapeHtml(error?.message || error)}</em>`;
+    }
 }
 
 // ---------- 生成预设 ----------
@@ -719,6 +822,7 @@ async function previewGenerated(format, bytes, name) {
     </div>`;
 
     let view = '';
+    let node = null;
     let data = {};
     const pptxStyleEl = document.getElementById('pptx-styles');
     if (pptxStyleEl) pptxStyleEl.textContent = '';
@@ -748,13 +852,11 @@ async function previewGenerated(format, bytes, name) {
         const rendered = await pptxToHtml(bytes, { slideMode: false, keyBoardShortCut: false });
         const standard = await pptxToStandard(bytes);
         if (pptxStyleEl) pptxStyleEl.textContent = rendered.styles?.global || '';
-        const slides = (rendered.slides || [])
-            .map((slide) => `<div class="slide-scaler">${slide.html}</div>`)
-            .join('') || '<em>无幻灯片</em>';
-        view = head(`${standard?.slides?.length || 0} 页幻灯片`) + `<div class="pptx-slides">${slides}</div>`;
+        node = buildPptxSlides(rendered);
+        view = head(`${standard?.slides?.length || 0} 页幻灯片`);
         data = { slideSize: rendered.slideSize, slides: standard?.slides || [] };
     }
-    setView(view);
+    setView(view, node);
     setJson(data);
 }
 

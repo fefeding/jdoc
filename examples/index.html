@@ -4,6 +4,11 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>@fefeding/jdoc — 四格式解析与生成</title>
+<!-- ppt-parser 原生加载其浏览器构建（由 vite 配置复制到 public/vendor），
+     不经 bundler 打包，保证渲染行为与 ppt-parser 官方示例一致 -->
+<script type="importmap">
+{"imports":{"@fefeding/ppt-parser":"./vendor/ppt-parser.browser.js"}}
+</script>
 <style>
 :root{--bd:#d0d7de;--fg:#1f2328;--mut:#57606a;--bg:#f6f8fa;--pri:#0969da}
 *{box-sizing:border-box}
@@ -57,6 +62,13 @@ figure.slide figcaption,figure.page figcaption{padding:6px 10px;background:var(-
 .slide-body{position:relative;overflow:auto;background:#fff}
 .page-body{padding:14px;white-space:pre-wrap;font-size:13px;line-height:1.7;max-height:440px;overflow:auto}
 .empty{color:#8b949e}
+/* PDF 页面图像（懒渲染） */
+.page-canvas{width:100%;max-width:640px;margin:0 auto;background:var(--bg);display:flex;align-items:center;justify-content:center;overflow:hidden}
+.page-canvas canvas{display:block;max-width:100%;height:auto}
+.page-text summary{cursor:pointer;padding:6px 10px;font-size:12px;color:var(--mut);background:var(--bg);border-top:1px solid var(--bd);list-style:none}
+.page-text summary:hover{color:var(--pri)}
+.page-text pre{padding:10px 14px;max-height:240px;overflow:auto;white-space:pre-wrap;font-size:12px}
+.page-note{display:block;padding:12px 14px;font-size:13px}
 .zoom-bar{display:flex;align-items:center;gap:6px;margin-bottom:10px}
 .zbtn{padding:4px 10px;border:1px solid var(--bd);background:#fff;color:var(--fg);border-radius:6px;cursor:pointer;font:inherit;margin:0;font-size:13px}
 .zbtn:hover{border-color:var(--pri);color:var(--pri)}
@@ -64,6 +76,12 @@ figure.slide figcaption,figure.page figcaption{padding:6px 10px;background:var(-
 #zoom-layer{zoom:1;width:max-content}
 .slide-scaler{display:inline-block;vertical-align:top;margin:0 0 14px}
 .pptx-slides{background:#fff;border:1px solid var(--bd);border-radius:8px;padding:8px}
+/* 隔离本页全局样式对幻灯片渲染的影响：本页的 *{box-sizing:border-box}、
+   body 的 font/line-height 会穿透进幻灯片 HTML，导致与 ppt-parser 官方示例
+   渲染不一致（文本行高变大、无内联样式的元素盒模型改变）。
+   用 :where() 零优先级提供浏览器默认值——ppt-parser 自身的任何规则
+   （global CSS 类选择器 / 内联样式）都会正常覆盖它。 */
+:where(.pptx-slides, .pptx-slides *){box-sizing:content-box;line-height:normal}
 </style>
 </head>
 <body>
