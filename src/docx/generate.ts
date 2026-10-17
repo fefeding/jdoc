@@ -22,6 +22,7 @@ import {
     TableCell,
     TableRow,
     TextRun,
+    VerticalAlign,
     WidthType,
     type IImageOptions
 } from 'docx';
@@ -30,6 +31,8 @@ import { bytesToBase64, toUint8Array, type DocInput } from '../core/input';
 import type {
     DocxBlock,
     DocxCell,
+    DocxCellBorder,
+    DocxCellDetail,
     DocxDocument,
     DocxGenerateOptions,
     DocxList,
@@ -253,50 +256,138 @@ function buildListParagraphs(block: DocxList, level = 0): Paragraph[] {
     return paragraphs;
 }
 
-/** 表格单元格 -> TableCell */
-function buildTableCell(
+/** 边框样式名 -> docx BorderStyle；nil/none 归为 NONE */
+type BorderStyleValue = (typeof BorderStyle)[keyof typeof BorderStyle];
+
+function toBorderStyle(style: string | undefined, fallback: BorderStyleValue): BorderStyleValue {
+    switch ((style || '').toLowerCase()) {
+        case 'nil':
+        case 'none':
+            return BorderStyle.NONE;
+        case 'double':
+            return BorderStyle.DOUBLE;
+        case 'dashed':
+            return BorderStyle.DASHED;
+        case 'dotted':
+            return BorderStyle.DOTTED;
+        case 'single':
+            return BorderStyle.SINGLE;
+        default:
+            return fallback;
+    }
+}
+
+/** 单边框 -> docx 边框配置 */
+function toBorderSpec(border: DocxCellBorder | undefined, fallbackStyle: BorderStyleValue, fallbackColor: string): {
+    style: BorderStyleValue;
+    size: number;
+    color: string;
+} {
+    if (!border) return { style: fallbackStyle, size: 2, color: fallbackColor };
+    return {
+        style: toBorderStyle(border.style, fallbackStyle),
+        size: Math.max(2, Math.round((border.size !== undefined ? border.size : 1) * 8)),
+        color: bareColor(border.color) || '000000'
+    };
+}
+
+/** 表格单元格 -> TableCell（支持合并、底纹、垂直对齐、多段落） */
+async function buildTableCell(
     cell: DocxCell,
     isHeader: boolean,
     borderSize: number
-): TableCell {
-    // 字符串单元格需要显式包成 run；此前非表头字符串会走到空 run 分支，导致内容丢失
-    const base: DocxRun[] =
-        typeof cell === 'string' ? (cell ? [{ text: cell }] : []) : (cell || []).filter(Boolean);
-    const styled = isHeader ? base.map((run) => ({ ...run, bold: true })) : base;
+): Promise<TableCell> {
+    const fallbackStyle = borderSize > 0 ? BorderStyle.SINGLE : BorderStyle.NONE;
+    const fallbackColor = 'CCCCCC';
+    const fallbackBorder = () => ({
+        style: fallbackStyle,
+        size: Math.max(2, Math.round(borderSize * 8)),
+        color: fallbackColor
+    });
 
-    return new TableCell({
-        children: [
+    const detail: DocxCellDetail | undefined =
+        typeof cell === 'object' && cell !== null && !Array.isArray(cell) ? (cell as DocxCellDetail) : undefined;
+
+    // 内容：对象形态的 blocks / runs / text，或字符串 / 富文本简写
+    let children: DocxChild[];
+    if (detail) {
+        const blocks: DocxBlock[] = detail.blocks?.length
+            ? detail.blocks
+            : detail.runs?.length
+              ? [{ type: 'paragraph', runs: detail.runs }]
+              : detail.text
+                ? [{ type: 'paragraph', text: detail.text }]
+                : [];
+        children = [];
+        for (const block of blocks) children.push(...(await buildBlockParagraphs(block, {})));
+    } else {
+        // 字符串单元格需要显式包成 run；此前非表头字符串会走到空 run 分支，导致内容丢失
+        const base: DocxRun[] = typeof cell === 'string'
+            ? cell
+                ? [{ text: cell }]
+                : []
+            : Array.isArray(cell)
+              ? cell.filter(Boolean)
+              : [];
+        const styled = isHeader ? base.map((run) => ({ ...run, bold: true })) : base;
+        children = [
             new Paragraph({
                 children: styled.length
                     ? styled.map((run) => buildTextRun(run, {}))
                     : [new TextRun({ text: '' } as TextRunOptionsLike)]
             })
-        ],
+        ];
+    }
+
+    const options: Record<string, unknown> = {
+        children: children.length ? children : [new Paragraph({ children: [] })],
         margins: { top: 60, bottom: 60, left: 100, right: 100 },
         borders: {
-            top: { style: borderSize > 0 ? BorderStyle.SINGLE : BorderStyle.NONE, size: Math.max(2, Math.round(borderSize * 8)), color: 'CCCCCC' },
-            bottom: { style: borderSize > 0 ? BorderStyle.SINGLE : BorderStyle.NONE, size: Math.max(2, Math.round(borderSize * 8)), color: 'CCCCCC' },
-            left: { style: borderSize > 0 ? BorderStyle.SINGLE : BorderStyle.NONE, size: Math.max(2, Math.round(borderSize * 8)), color: 'CCCCCC' },
-            right: { style: borderSize > 0 ? BorderStyle.SINGLE : BorderStyle.NONE, size: Math.max(2, Math.round(borderSize * 8)), color: 'CCCCCC' }
+            top: toBorderSpec(detail?.borders?.top, fallbackStyle, fallbackColor),
+            bottom: toBorderSpec(detail?.borders?.bottom, fallbackStyle, fallbackColor),
+            left: toBorderSpec(detail?.borders?.left, fallbackStyle, fallbackColor),
+            right: toBorderSpec(detail?.borders?.right, fallbackStyle, fallbackColor)
         }
-    });
+    };
+    if (!detail) {
+        options.borders = {
+            top: fallbackBorder(),
+            bottom: fallbackBorder(),
+            left: fallbackBorder(),
+            right: fallbackBorder()
+        };
+    }
+    if (detail?.colspan && detail.colspan > 1) options.columnSpan = detail.colspan;
+    if (detail?.rowspan && detail.rowspan > 1) options.rowSpan = detail.rowspan;
+    if (detail?.fill) options.shading = { type: 'clear', fill: bareColor(detail.fill) || 'FFFFFF', color: 'auto' };
+    if (detail?.verticalAlign) {
+        options.verticalAlign =
+            detail.verticalAlign === 'middle'
+                ? VerticalAlign.CENTER
+                : detail.verticalAlign === 'bottom'
+                  ? VerticalAlign.BOTTOM
+                  : VerticalAlign.TOP;
+    }
+    if (detail?.width) options.width = { size: Math.round(detail.width * DXA_PER_PT), type: WidthType.DXA };
+
+    return new TableCell(options as ConstructorParameters<typeof TableCell>[0]);
 }
 
 /** 表格块 -> Table */
-function buildTable(block: DocxTable): Table {
+async function buildTable(block: DocxTable): Promise<Table> {
     const borderSize = block.borderSize === undefined ? 1 : block.borderSize;
     const hasHeader = block.header !== false && block.rows.length > 0;
-    const columnCount = block.rows.reduce((max, row) => Math.max(max, row.length), 0);
 
-    const rows = block.rows.map(
-        (row, rowIndex) =>
-            new TableRow({
+    const rows = await Promise.all(
+        block.rows.map(async (row, rowIndex) => {
+            const isHeaderRow = hasHeader && rowIndex === 0;
+            const cells = await Promise.all(row.map((cell) => buildTableCell(cell ?? '', isHeaderRow, borderSize)));
+            return new TableRow({
                 // 首行作为表头时设置重复标题，打印多页也能带上表头
-                tableHeader: hasHeader && rowIndex === 0,
-                children: Array.from({ length: columnCount }, (_, colIndex) =>
-                    buildTableCell(row[colIndex] ?? '', hasHeader && rowIndex === 0, borderSize)
-                )
-            })
+                tableHeader: isHeaderRow,
+                children: cells
+            });
+        })
     );
 
     return new Table({
@@ -376,7 +467,16 @@ async function buildBlockParagraphs(
             return buildListParagraphs(block);
 
         case 'table':
-            return [buildTable(block)];
+            return [await buildTable(block)];
+
+        case 'textBox': {
+            // 文本框按其内部段落展开生成（外观还原为普通段落）
+            const inner: DocxChild[] = [];
+            for (const paragraph of block.paragraphs) {
+                inner.push(...(await buildBlockParagraphs(paragraph, style)));
+            }
+            return inner.length ? inner : [new Paragraph({ children: [] })];
+        }
 
         case 'image':
             return buildImageParagraphs(block, style);
@@ -465,7 +565,7 @@ export async function generateDocx(
     // 空文档也需要至少一个段落，否则 Word 会判定文件损坏
     if (!children.length) children.push(new Paragraph({ children: [] }));
 
-    const landscape = options.orientation === 'landscape';
+    const landscape = (options.orientation ?? doc.section?.orientation) === 'landscape';
     const sizeKey = typeof options.pageSize === 'string' ? options.pageSize : 'A4';
     const rawSize =
         typeof options.pageSize === 'object' && options.pageSize
@@ -473,7 +573,13 @@ export async function generateDocx(
                   width: Math.round(options.pageSize.width * DXA_PER_PT),
                   height: Math.round(options.pageSize.height * DXA_PER_PT)
               }
-            : PAGE_SIZES[sizeKey] || PAGE_SIZES.A4;
+            : options.pageSize === undefined && doc.section
+              ? // 未显式给纸张时沿用解析出的页面设置（往返保真）
+                {
+                    width: Math.round(doc.section.width * DXA_PER_PT),
+                    height: Math.round(doc.section.height * DXA_PER_PT)
+                }
+              : PAGE_SIZES[sizeKey] || PAGE_SIZES.A4;
     const size = landscape
         ? { width: rawSize.height, height: rawSize.width, orientation: 'landscape' as const }
         : { width: rawSize.width, height: rawSize.height, orientation: 'portrait' as const };
@@ -504,7 +610,17 @@ export async function generateDocx(
                 properties: {
                     page: {
                         size,
-                        margin: buildMargin(options.margin)
+                        margin: buildMargin(
+                            options.margin ??
+                                (doc.section
+                                    ? {
+                                          top: doc.section.marginTop,
+                                          right: doc.section.marginRight,
+                                          bottom: doc.section.marginBottom,
+                                          left: doc.section.marginLeft
+                                      }
+                                    : undefined)
+                        )
                     }
                 },
                 children

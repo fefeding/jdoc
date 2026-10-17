@@ -8,6 +8,27 @@
 
 import { attr, attrNumber, attrTrue, firstChild, type XmlElement } from '../core/xml';
 
+/** 主题字体（theme1.xml 的 majorFont/minorFont） */
+export interface ThemeFontSlot {
+    /** 西文字体（a:latin） */
+    ascii?: string;
+    /** 中文字体（a:ea，缺失时取 Hans script 字体） */
+    eastAsia?: string;
+}
+
+export type ThemeFonts = { major: ThemeFontSlot; minor: ThemeFontSlot };
+
+/** asciiTheme/eastAsiaTheme 值 -> 主题字体名（如 minorEastAsia -> 宋体） */
+export function resolveThemeFont(
+    themeFonts: ThemeFonts | undefined,
+    themeAttr: string | undefined
+): string | undefined {
+    if (!themeFonts || !themeAttr) return undefined;
+    const slot = themeAttr.toLowerCase().startsWith('major') ? themeFonts.major : themeFonts.minor;
+    if (/eastasia|bidi|cs/i.test(themeAttr)) return slot.eastAsia || slot.ascii;
+    return slot.ascii || slot.eastAsia;
+}
+
 /** 合并后的段落属性（w:pPr 子集） */
 export interface StyleParagraphProps {
     align?: 'left' | 'center' | 'right' | 'justify';
@@ -62,7 +83,7 @@ function highlightToHex(value: string): string {
 }
 
 /** 从 w:rPr 读取字符属性 */
-export function readRunProps(rPr: XmlElement | undefined): StyleRunProps {
+export function readRunProps(rPr: XmlElement | undefined, themeFonts?: ThemeFonts): StyleRunProps {
     if (!rPr) return {};
     const props: StyleRunProps = {};
 
@@ -96,8 +117,16 @@ export function readRunProps(rPr: XmlElement | undefined): StyleRunProps {
 
     const fonts = firstChild(rPr, 'rFonts');
     if (fonts) {
+        // 字面属性优先；缺失时还原 asciiTheme/eastAsiaTheme 主题引用
+        const eastAsia =
+            attr(fonts, 'eastAsia') || resolveThemeFont(themeFonts, attr(fonts, 'eastAsiaTheme'));
+        const ascii =
+            attr(fonts, 'ascii') ||
+            attr(fonts, 'hAnsi') ||
+            resolveThemeFont(themeFonts, attr(fonts, 'asciiTheme')) ||
+            resolveThemeFont(themeFonts, attr(fonts, 'hAnsiTheme'));
         // 中文取 eastAsia，西文取 ascii/hAnsi
-        const name = attr(fonts, 'eastAsia') || attr(fonts, 'ascii') || attr(fonts, 'hAnsi') || attr(fonts, 'cs');
+        const name = eastAsia || ascii || attr(fonts, 'cs');
         if (name) props.font = name;
     }
 

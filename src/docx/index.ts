@@ -12,7 +12,14 @@ import type { DocInput } from '../core/input';
 import { blocksToText, parseDocxInternal } from './parse';
 import { generateDocx } from './generate';
 import { docxToHtmlString } from './to-html';
-import type { DocxBlock, DocxDocument, DocxGenerateOptions, DocxMetadata, DocxParseOptions } from './types';
+import type {
+    DocxBlock,
+    DocxDocument,
+    DocxGenerateOptions,
+    DocxMetadata,
+    DocxParseOptions,
+    DocxSection
+} from './types';
 
 export * from './types';
 
@@ -20,6 +27,8 @@ export * from './types';
 export interface DocxParseResult {
     /** 文档元数据 */
     metadata?: DocxMetadata;
+    /** 页面设置（纸张与页边距） */
+    section?: DocxSection;
     /** 内容块序列（可直接回传给 jsonToDocx 实现往返） */
     blocks: DocxBlock[];
     /** 解析提示（缺部件、图片丢失等），不影响主流程 */
@@ -66,8 +75,8 @@ export async function docxToJson(
 ): Promise<DocxParseResult> {
     try {
         const output = await parseDocxInternal(input, options.includeImages !== false);
-        const { metadata, blocks } = output.document;
-        return { metadata, blocks, messages: output.messages, text: output.text };
+        const { metadata, blocks, section } = output.document;
+        return { metadata, section, blocks, messages: output.messages, text: output.text };
     } catch (error) {
         throw wrapError('docx', '解析', error);
     }
@@ -77,7 +86,7 @@ export async function docxToJson(
  * 解析 DOCX 为 HTML
  * @param input - ArrayBuffer / Uint8Array / Buffer / Blob / base64 字符串
  * @param options - 解析选项
- * @returns { html, metadata, blocks, messages, text }
+ * @returns { html, metadata, section, blocks, messages, text }
  *
  * @example
  * ```js
@@ -91,12 +100,12 @@ export async function docxToHtml(
 ): Promise<DocxHtmlResult> {
     try {
         const output = await parseDocxInternal(input, options.includeImages !== false);
-        const { metadata, blocks } = output.document;
+        const { metadata, blocks, section } = output.document;
         const html = docxToHtmlString(
-            { metadata, blocks },
+            { metadata, section, blocks },
             { includeStyle: options.includeStyle !== false }
         );
-        return { html, metadata, blocks, messages: output.messages, text: output.text };
+        return { html, metadata, section, blocks, messages: output.messages, text: output.text };
     } catch (error) {
         throw wrapError('docx', '解析', error);
     }

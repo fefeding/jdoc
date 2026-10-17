@@ -115,7 +115,7 @@ describe('docx：HTML 输出', () => {
         expect(html).toContain('<table');
         expect(html).toContain('<ul>');
         expect(html).toContain('<ol>');
-        expect(html).toContain('<blockquote>');
+        expect(html).toContain('<blockquote');
         expect(html).toContain('docx-body');
     });
 

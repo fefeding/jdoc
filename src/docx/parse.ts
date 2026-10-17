@@ -11,6 +11,7 @@
 import JSZip from 'jszip';
 import {
     attr,
+    attrNumber,
     childElements,
     findAll,
     findFirst,
@@ -32,18 +33,32 @@ import {
     readParagraphProps,
     readRunProps,
     type StyleParagraphProps,
-    type StyleRunProps
+    type StyleRunProps,
+    type ThemeFonts
 } from './style-props';
-import { buildStylesIndex, emptyStylesIndex, type StylesIndex } from './styles';
+import {
+    buildStylesIndex,
+    emptyStylesIndex,
+    parseThemeColors,
+    parseThemeFonts,
+    resolveDrawingColor,
+    type StylesIndex,
+    type ThemeColors
+} from './styles';
 import type {
     DocxBlock,
     DocxCell,
+    DocxCellBorder,
+    DocxCellDetail,
     DocxDocument,
     DocxImage,
     DocxListItem,
     DocxMetadata,
     DocxParagraph,
-    DocxRun
+    DocxRun,
+    DocxSection,
+    DocxTable,
+    DocxTextBox
 } from './types';
 
 /** EMU 转磅：1 磅 = 12700 EMU */
@@ -68,6 +83,10 @@ interface ParseContext {
     /** 图片部件路径 -> data URL */
     imageCache: Map<string, string>;
     includeImages: boolean;
+    /** 主题字体（theme1.xml），用于还原 asciiTheme/eastAsiaTheme */
+    themeFonts?: ThemeFonts;
+    /** 主题色板（theme1.xml），用于还原 schemeClr 引用 */
+    themeColors: ThemeColors;
 }
 
 /** 读取 ZIP 内文本部件，缺失返回空串 */
@@ -308,14 +327,15 @@ function readImageAlt(holder: XmlElement): string | undefined {
     return title || undefined;
 }
 
-/** 解析段落内所有 run / 超链接 / 图片 */
+/** 解析段落内所有 run / 超链接 / 图片 / 文本框 */
 async function parseRuns(
     ctx: ParseContext,
     pEl: XmlElement,
     baseRun: StyleRunProps
-): Promise<{ runs: DocxRun[]; images: DocxImage[] }> {
+): Promise<{ runs: DocxRun[]; images: DocxImage[]; textBoxes: DocxTextBox[] }> {
     const runs: DocxRun[] = [];
     const images: DocxImage[] = [];
+    const textBoxes: DocxTextBox[] = [];
 
     const walk = async (container: XmlElement, inherited: StyleRunProps, link?: string) => {
         for (const child of container.children) {
@@ -326,7 +346,7 @@ async function parseRuns(
                 // run 级属性：run 自身 > 段落样式 > 文档默认
                 const props = mergeRunProps(
                     mergeRunProps(ctx.styles.defaultRun, inherited),
-                    readRunProps(firstChild(child, 'rPr'))
+                    readRunProps(firstChild(child, 'rPr'), ctx.themeFonts)
                 );
 
                 for (const piece of child.children) {
@@ -350,6 +370,21 @@ async function parseRuns(
                     } else if (pieceName === 'drawing' || pieceName === 'pict' || pieceName === 'object') {
                         const image = await extractImage(ctx, piece, readImageAlt(piece));
                         if (image) images.push(image);
+                        // DrawingML/VML 文本框（代码片段、标注框）：内容按段落提取
+                        const textBox = await extractTextBox(ctx, piece);
+                        if (textBox) textBoxes.push(textBox);
+                    } else if (pieceName === 'AlternateContent') {
+                        // mc:Choice 优先（新格式），缺失时回退 mc:Fallback，避免同一内容渲染两次
+                        const branch = firstChild(piece, 'Choice') || firstChild(piece, 'Fallback');
+                        if (branch) {
+                            const holder = firstChild(branch, 'drawing') || firstChild(branch, 'pict');
+                            if (holder) {
+                                const image = await extractImage(ctx, holder, readImageAlt(holder));
+                                if (image) images.push(image);
+                                const textBox = await extractTextBox(ctx, holder);
+                                if (textBox) textBoxes.push(textBox);
+                            }
+                        }
                     }
                 }
             } else if (name === 'hyperlink') {
@@ -358,6 +393,10 @@ async function parseRuns(
                 // w:anchor 为文档内锚点，Hyperlink 样式说明它是外链但缺关系时降级为锚点
                 const href = rel ? rel.target : attr(child, 'anchor');
                 await walk(child, inherited, href || undefined);
+            } else if (name === 'AlternateContent') {
+                // mc:Choice 优先（新格式），缺失时回退 mc:Fallback，避免同一内容渲染两次
+                const branch = firstChild(child, 'Choice') || firstChild(child, 'Fallback');
+                if (branch) await walk(branch, inherited, link);
             } else if (name === 'smartTag' || name === 'sdt' || name === 'sdtContent' || name === 'ins' || name === 'bdo') {
                 // 智能标签/内容控件/修订插入/双向覆盖：透明下钻
                 await walk(child, inherited, link);
@@ -366,7 +405,59 @@ async function parseRuns(
     };
 
     await walk(pEl, baseRun);
-    return { runs, images };
+    return { runs, images, textBoxes };
+}
+
+/** 从 w:drawing / w:pict 中提取文本框内容（w:txbxContent 内的段落） */
+async function extractTextBox(ctx: ParseContext, holder: XmlElement): Promise<DocxTextBox | undefined> {
+    const txbx = findFirst(holder, 'txbxContent');
+    if (!txbx) return undefined;
+
+    const paragraphs: DocxBlock[] = [];
+    for (const child of txbx.children) {
+        if (!isElement(child) || localName(child.tag) !== 'p') continue;
+        paragraphs.push(...(await parseParagraph(ctx, child)));
+    }
+    if (!paragraphs.length) return undefined;
+
+    const box: DocxTextBox = { type: 'textBox', paragraphs };
+
+    // 填充色：wps:spPr 的直接子 a:solidFill（srgbClr 或 schemeClr 主题色），
+    // 或 VML 的 fillcolor（形如 "#222A35 [1615]"）
+    const spPr = findFirst(holder, 'spPr');
+    const fillEl = spPr ? firstChild(spPr, 'solidFill') : undefined;
+    const fillColorEl = fillEl
+        ? firstChild(fillEl, 'srgbClr') || firstChild(fillEl, 'schemeClr')
+        : undefined;
+    const fill = resolveDrawingColor(fillColorEl, ctx.themeColors);
+    if (fill) box.fill = fill;
+    const vmlShape = findFirst(holder, 'shape');
+    const fillcolor = vmlShape ? attr(vmlShape, 'fillcolor') : undefined;
+    if (!box.fill && fillcolor) {
+        const hex = fillcolor.trim().split(/\s+/)[0].replace(/^#/, '');
+        if (/^[0-9a-fA-F]{6}$/.test(hex)) box.fill = `#${hex.toUpperCase()}`;
+    }
+    // 边框色：wps:spPr 的 a:ln > a:solidFill，或 VML strokecolor
+    const lnEl = spPr ? firstChild(spPr, 'ln') : undefined;
+    const lnFill = lnEl ? firstChild(lnEl, 'solidFill') : undefined;
+    const stroke = resolveDrawingColor(
+        lnFill ? firstChild(lnFill, 'srgbClr') || firstChild(lnFill, 'schemeClr') : undefined,
+        ctx.themeColors
+    );
+    if (stroke) box.stroke = stroke;
+    const strokecolor = vmlShape ? attr(vmlShape, 'strokecolor') : undefined;
+    if (!box.stroke && strokecolor && strokecolor.toLowerCase() !== 'none') {
+        const hex = strokecolor.trim().split(/\s+/)[0].replace(/^#/, '');
+        if (/^[0-9a-fA-F]{6}$/.test(hex)) box.stroke = `#${hex.toUpperCase()}`;
+    }
+
+    const extent = findFirst(holder, 'extent');
+    const cx = extent ? Number(attr(extent, 'cx')) : NaN;
+    const cy = extent ? Number(attr(extent, 'cy')) : NaN;
+    if (Number.isFinite(cx) && cx > 0) box.width = Math.round((cx / EMU_PER_PT) * 100) / 100;
+    if (Number.isFinite(cy) && cy > 0) box.height = Math.round((cy / EMU_PER_PT) * 100) / 100;
+
+    return box;
 }
 
 /** 判断段落是否包含分页标记 */
@@ -403,7 +494,10 @@ function resolveParagraphProps(ctx: ParseContext, pEl: XmlElement): {
 } {
     const pPr = firstChild(pEl, 'pPr');
     const pStyleEl = pPr ? firstChild(pPr, 'pStyle') : undefined;
-    const styleId = pStyleEl ? attr(pStyleEl, 'val') : undefined;
+    // 未标 pStyle 的段落使用文档默认段落样式（Word 的 Normal：两端对齐、默认字号等）
+    const styleId = pStyleEl
+        ? attr(pStyleEl, 'val')
+        : ctx.styles.defaultParagraphStyleId;
     const style = styleId ? ctx.styles.byId.get(styleId) : undefined;
 
     let props = mergeParagraphProps(ctx.styles.defaultParagraph, style ? style.paragraph : {});
@@ -432,49 +526,58 @@ interface ListEntry {
     ordered: boolean;
 }
 
-/** 解析单个段落为块（可能产出多个块：图片独立成块） */
+/** 段落属性 -> 块上的可选布局字段（heading/quote 也需要间距对齐） */
+function copyParagraphProps(props: StyleParagraphProps): Partial<DocxParagraph> {
+    const out: Partial<DocxParagraph> = {};
+    if (props.align) out.align = props.align;
+    if (props.indentLeft) out.indentLeft = props.indentLeft;
+    if (props.indentRight) out.indentRight = props.indentRight;
+    if (props.indentFirstLine) out.indentFirstLine = props.indentFirstLine;
+    if (props.spacingBefore) out.spacingBefore = props.spacingBefore;
+    if (props.spacingAfter) out.spacingAfter = props.spacingAfter;
+    if (props.lineSpacing && props.lineSpacing !== 1) out.lineSpacing = props.lineSpacing;
+    return out;
+}
+
+/** 解析单个段落为块（可能产出多个块：图片/文本框独立成块） */
 async function parseParagraph(ctx: ParseContext, pEl: XmlElement): Promise<DocxBlock[]> {
     const { props, styleRun, styleName, headingLevel } = resolveParagraphProps(ctx, pEl);
-    const { runs, images } = await parseRuns(ctx, pEl, styleRun);
+    const { runs, images, textBoxes } = await parseRuns(ctx, pEl, styleRun);
     const blocks: DocxBlock[] = [];
 
     for (const image of images) blocks.push(image);
+    for (const box of textBoxes) blocks.push(box);
 
     const empty = isEmptyParagraph(runs, []);
 
     // 显式分页：w:br[@w:type='page'] 或 w:pageBreakBefore
     if (hasPageBreak(ctx, pEl)) {
         blocks.push({ type: 'pageBreak' });
-        if (empty && !images.length) return blocks;
+        if (empty && !images.length && !textBoxes.length) return blocks;
     }
 
-    // 空段落：仅在没有图片时输出占位段落（保留文档的段落结构）
+    // 空段落：仅在没有图片/文本框时输出占位段落（保留文档的段落结构）
     if (empty) {
-        // 空段落带边框时按分隔线还原（生成端 hr 的形态）
-        if (!images.length && hasParagraphBorder(pEl)) blocks.push({ type: 'hr' });
-        else if (!images.length) blocks.push({ type: 'paragraph', text: '' });
+        if (!images.length && !textBoxes.length) {
+            // 空段落带边框时按分隔线还原（生成端 hr 的形态）
+            if (hasParagraphBorder(pEl)) blocks.push({ type: 'hr' });
+            else blocks.push({ type: 'paragraph', text: '' });
+        }
         return blocks;
     }
 
     if (headingLevel !== undefined) {
-        blocks.push({ type: 'heading', level: headingLevel, runs });
+        blocks.push({ type: 'heading', level: headingLevel, runs, ...copyParagraphProps(props) });
         return blocks;
     }
 
     if (quoteStyleOf(styleName)) {
-        blocks.push({ type: 'quote', runs });
+        blocks.push({ type: 'quote', runs, ...copyParagraphProps(props) });
         return blocks;
     }
 
-    // 段落级格式下沉到 run（对齐、缩进等属段落属性，这里只保留纯文本格式）
-    const paragraph: DocxParagraph = { type: 'paragraph', runs };
-    if (props.align) paragraph.align = props.align;
-    if (props.indentLeft) paragraph.indentLeft = props.indentLeft;
-    if (props.indentRight) paragraph.indentRight = props.indentRight;
-    if (props.indentFirstLine) paragraph.indentFirstLine = props.indentFirstLine;
-    if (props.spacingBefore) paragraph.spacingBefore = props.spacingBefore;
-    if (props.spacingAfter) paragraph.spacingAfter = props.spacingAfter;
-    if (props.lineSpacing && props.lineSpacing !== 1) paragraph.lineSpacing = props.lineSpacing;
+    // 段落级格式（对齐、缩进、间距）附在段落块上
+    const paragraph: DocxParagraph = { type: 'paragraph', runs, ...copyParagraphProps(props) };
     blocks.push(paragraph);
 
     return blocks;
@@ -501,33 +604,204 @@ function readListInfo(
     return { ordered: fmt !== 'bullet', level };
 }
 
-/** 解析表格单元格内容（单元格内可能含多个段落） */
-async function parseCell(ctx: ParseContext, tcEl: XmlElement): Promise<DocxCell> {
-    const runs: DocxRun[] = [];
-    for (const child of tcEl.children) {
-        if (!isElement(child) || localName(child.tag) !== 'p') continue;
-        const { styleRun } = resolveParagraphProps(ctx, child);
-        const parsed = await parseRuns(ctx, child, styleRun);
-        runs.push(...parsed.runs);
-    }
-    return runs;
+/** 读取单元格边框单边（w:tcBorders 的 top/left/bottom/right） */
+function readCellBorder(sideEl: XmlElement | undefined): DocxCellBorder | undefined {
+    if (!sideEl) return undefined;
+    const style = (attr(sideEl, 'val') || '').toLowerCase();
+    if (!style || style === 'none') return undefined;
+    if (style === 'nil') return { style: 'nil' };
+    const color = attr(sideEl, 'color');
+    const size = attrNumber(sideEl, 'sz', 0);
+    const border: DocxCellBorder = { style };
+    if (color && color.toLowerCase() !== 'auto') border.color = `#${color.replace(/^#/, '')}`;
+    // w:sz 单位是 1/8 磅
+    if (size > 0) border.size = Math.round((size / 8) * 100) / 100;
+    return border;
 }
 
-/** 解析表格 */
+/** 解析表格单元格（含 w:tcPr 属性与多段落内容） */
+async function parseCell(
+    ctx: ParseContext,
+    tcEl: XmlElement
+): Promise<{ cell: DocxCell; span: number; vMerge?: 'restart' | 'continue' }> {
+    const tcPr = firstChild(tcEl, 'tcPr');
+
+    // 跨列（w:gridSpan）
+    const spanEl = tcPr ? firstChild(tcPr, 'gridSpan') : undefined;
+    const span = spanEl ? Math.max(1, attrNumber(spanEl, 'val', 1)) : 1;
+
+    // 跨行（w:vMerge；无 val 属性默认为 continue）
+    const vMergeEl = tcPr ? firstChild(tcPr, 'vMerge') : undefined;
+    const vMerge = vMergeEl ? ((attr(vMergeEl, 'val') || 'continue') as 'restart' | 'continue') : undefined;
+
+    // 宽度（w:tcW，dxa -> 磅）
+    const widthEl = tcPr ? firstChild(tcPr, 'tcW') : undefined;
+    let width: number | undefined;
+    if (widthEl && (attr(widthEl, 'type') || 'dxa').toLowerCase() === 'dxa') {
+        const w = attrNumber(widthEl, 'w', 0);
+        if (w > 0) width = Math.round((w / 20) * 100) / 100;
+    }
+
+    // 底纹（w:shd fill）
+    const shdEl = tcPr ? firstChild(tcPr, 'shd') : undefined;
+    let fill: string | undefined;
+    if (shdEl) {
+        const shade = attr(shdEl, 'val');
+        const color = attr(shdEl, 'fill');
+        if (color && color.toLowerCase() !== 'auto' && (!shade || shade.toLowerCase() !== 'nil')) {
+            fill = `#${color.replace(/^#/, '')}`;
+        }
+    }
+
+    // 垂直对齐
+    const vAlignEl = tcPr ? firstChild(tcPr, 'vAlign') : undefined;
+    const vAlignRaw = vAlignEl ? (attr(vAlignEl, 'val') || '').toLowerCase() : '';
+    const verticalAlign =
+        vAlignRaw === 'center' ? 'middle' : vAlignRaw === 'bottom' ? 'bottom' : vAlignRaw === 'top' ? 'top' : undefined;
+
+    // 边框
+    const bordersEl = tcPr ? firstChild(tcPr, 'tcBorders') : undefined;
+    let borders: DocxCellDetail['borders'] | undefined;
+    if (bordersEl) {
+        const sides = ['top', 'left', 'bottom', 'right'] as const;
+        const read: Record<string, DocxCellBorder | undefined> = {};
+        for (const side of sides) {
+            read[side] = readCellBorder(firstChild(bordersEl, side));
+        }
+        if (Object.values(read).some(Boolean)) {
+            borders = {
+                top: read.top,
+                left: read.left,
+                bottom: read.bottom,
+                right: read.right
+            };
+        }
+    }
+
+    // 内容：逐段落解析，保留段落级样式（对齐/缩进）
+    const blocks: DocxBlock[] = [];
+    for (const child of tcEl.children) {
+        if (!isElement(child) || localName(child.tag) !== 'p') continue;
+        blocks.push(...(await parseParagraph(ctx, child)));
+    }
+
+    const hasProps = span > 1 || !!vMerge || width !== undefined || !!fill || !!verticalAlign || !!borders;
+    let cell: DocxCell;
+    if (!hasProps && blocks.length === 1 && blocks[0].type === 'paragraph') {
+        // 简写形态：单段落无属性时保持旧的富文本/字符串形态
+        const para = blocks[0] as DocxParagraph;
+        cell = para.runs && para.runs.length ? para.runs : para.text || '';
+    } else if (!hasProps && blocks.length === 0) {
+        cell = '';
+    } else {
+        const detail: DocxCellDetail = { type: 'cell' };
+        // 内容尽量精简：全部是段落时存 blocks
+        if (blocks.length) detail.blocks = blocks;
+        if (span > 1) detail.colspan = span;
+        if (width !== undefined) detail.width = width;
+        if (fill) detail.fill = fill;
+        if (verticalAlign) detail.verticalAlign = verticalAlign;
+        if (borders) detail.borders = borders;
+        cell = detail;
+    }
+
+    return { cell, span, vMerge };
+}
+
+/** 解析表格（tblGrid 列宽 + gridSpan/vMerge 合并 + 单元格属性） */
 async function parseTable(ctx: ParseContext, tblEl: XmlElement): Promise<DocxBlock> {
+    // 列宽（w:tblGrid/w:gridCol，dxa -> 磅）
+    const gridEl = findFirst(tblEl, 'tblGrid');
+    const columnWidths = gridEl
+        ? childElements(gridEl, 'gridCol')
+              .map((col) => Math.round((attrNumber(col, 'w', 0) / 20) * 100) / 100)
+              .filter((w) => w > 0)
+        : undefined;
+
     const rows: DocxCell[][] = [];
+    // vMerge 向下合并的来源单元格：列下标 -> { cell, span }
+    const rowSpanSources = new Map<number, { cell: DocxCellDetail; span: number }>();
+    let firstRowIsHeader = false;
 
     for (const child of tblEl.children) {
         if (!isElement(child) || localName(child.tag) !== 'tr') continue;
+
+        // 行属性：表头行（w:tblHeader，跨页重复）
+        const trPr = firstChild(child, 'trPr');
+        const isHeaderRow = rows.length === 0 && !!trPr && !!firstChild(trPr, 'tblHeader');
+        if (isHeaderRow) firstRowIsHeader = true;
+
         const cells: DocxCell[] = [];
+        let col = 0;
         for (const cellChild of child.children) {
             if (!isElement(cellChild) || localName(cellChild.tag) !== 'tc') continue;
-            cells.push(await parseCell(ctx, cellChild));
+            const { cell, span, vMerge } = await parseCell(ctx, cellChild);
+
+            if (vMerge === 'continue') {
+                // 延续行：不产新单元格，累加来源单元格的 rowspan
+                const source = rowSpanSources.get(col);
+                if (source && source.cell.rowspan !== undefined) source.cell.rowspan += 1;
+                col += span;
+                continue;
+            }
+
+            const detail = cell !== null && typeof cell === 'object' && !Array.isArray(cell) && cell.type === 'cell'
+                ? cell
+                : undefined;
+            if (vMerge === 'restart' && detail) {
+                detail.rowspan = 1;
+                for (let i = 0; i < span; i++) rowSpanSources.set(col + i, { cell: detail, span });
+            } else if (vMerge === 'restart') {
+                // 简写形态无法承载 rowspan，忽略
+            } else {
+                for (let i = 0; i < span; i++) rowSpanSources.delete(col + i);
+            }
+
+            cells.push(cell);
+            col += span;
         }
+
+        // 整行都是 vMerge 延续时不产出行（HTML 由 rowspan 自动占位）
         if (cells.length) rows.push(cells);
     }
 
-    return { type: 'table', rows, header: rows.length > 0 };
+    const table: DocxTable = { type: 'table', rows, header: firstRowIsHeader };
+    if (columnWidths && columnWidths.length) table.columnWidths = columnWidths;
+    return table;
+}
+
+/** 解析 w:sectPr 页面设置（取 body 级最后一个 sectPr，即文档末尾的节属性） */
+function parseSection(body: XmlElement): DocxSection | undefined {
+    let sectPr: XmlElement | undefined;
+    for (const child of body.children) {
+        if (isElement(child) && localName(child.tag) === 'sectPr') sectPr = child;
+    }
+    if (!sectPr) return undefined;
+
+    const pgSz = firstChild(sectPr, 'pgSz');
+    const pgMar = firstChild(sectPr, 'pgMar');
+    if (!pgSz) return undefined;
+
+    const width = attrNumber(pgSz, 'w', 0) / 20;
+    const height = attrNumber(pgSz, 'h', 0) / 20;
+    if (width <= 0 || height <= 0) return undefined;
+
+    const orientation = (attr(pgSz, 'orient') || '').toLowerCase() === 'landscape' ? 'landscape' : 'portrait';
+    // pgMar 为自闭合元素，边距直接是属性（w:top/w:right/w:bottom/w:left，单位 twips）
+    const mar = (name: string) => {
+        const twips = pgMar ? attrNumber(pgMar, name, 1440) : 1440;
+        return Math.round((twips / 20) * 100) / 100;
+    };
+
+    return {
+        width: Math.round(width * 100) / 100,
+        height: Math.round(height * 100) / 100,
+        orientation,
+        marginTop: mar('top'),
+        marginRight: mar('right'),
+        marginBottom: mar('bottom'),
+        marginLeft: mar('left')
+    };
 }
 
 /**
@@ -551,42 +825,48 @@ async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock
 
         if (name === 'p') {
             const listInfo = readListInfo(ctx, child);
-            const { styleRun } = resolveParagraphProps(ctx, child);
-            const { runs, images } = await parseRuns(ctx, child, styleRun);
 
-            // 列表段落：图片不并入列表项，单独成块并保持列表继续
+            // 非列表段落直接走 parseParagraph（避免 parseRuns 跑两遍导致图片重复产出）
+            if (!listInfo) {
+                flushList();
+                blocks.push(...(await parseParagraph(ctx, child)));
+                continue;
+            }
+
+            const { styleRun } = resolveParagraphProps(ctx, child);
+            const { runs, images, textBoxes } = await parseRuns(ctx, child, styleRun);
+
+            // 列表段落：图片/文本框不并入列表项，单独成块并保持列表继续
             for (const image of images) {
                 flushList();
                 blocks.push(image);
             }
-
-            if (listInfo) {
-                const isSameList =
-                    activeList && activeList.ordered === listInfo.ordered && activeLevel === listInfo.level;
-
-                if (!isSameList) {
-                    flushList();
-                    activeList = { type: 'list', ordered: listInfo.ordered, items: [] };
-                    activeLevel = listInfo.level;
-                }
-
-                const text = runsToText(runs);
-                // 多级列表：把子级列表作为当前项的 children
-                if (listInfo.level > activeLevel && activeList.items.length) {
-                    const last = activeList.items[activeList.items.length - 1];
-                    if (typeof last !== 'string' && Array.isArray(last)) {
-                        (last as DocxListItem & { children?: DocxListItem[] }).children =
-                            (last as DocxListItem & { children?: DocxListItem[] }).children || [];
-                        (last as DocxListItem & { children?: DocxListItem[] }).children!.push(text);
-                    }
-                } else {
-                    activeList.items.push(runs.length > 1 ? runs : text);
-                }
-                continue;
+            for (const box of textBoxes) {
+                flushList();
+                blocks.push(box);
             }
 
-            flushList();
-            blocks.push(...(await parseParagraph(ctx, child)));
+            const isSameList =
+                activeList && activeList.ordered === listInfo.ordered && activeLevel === listInfo.level;
+
+            if (!isSameList) {
+                flushList();
+                activeList = { type: 'list', ordered: listInfo.ordered, items: [] };
+                activeLevel = listInfo.level;
+            }
+
+            const text = runsToText(runs);
+            // 多级列表：把子级列表作为当前项的 children
+            if (listInfo.level > activeLevel && activeList.items.length) {
+                const last = activeList.items[activeList.items.length - 1];
+                if (typeof last !== 'string' && Array.isArray(last)) {
+                    (last as DocxListItem & { children?: DocxListItem[] }).children =
+                        (last as DocxListItem & { children?: DocxListItem[] }).children || [];
+                    (last as DocxListItem & { children?: DocxListItem[] }).children!.push(text);
+                }
+            } else {
+                activeList.items.push(runs.length > 1 ? runs : text);
+            }
             continue;
         }
 
@@ -612,6 +892,16 @@ export interface DocxParseOutput {
     text: string;
 }
 
+/** 单元格 -> 纯文本 */
+function cellToText(cell: DocxCell): string {
+    if (typeof cell === 'string') return cell;
+    if (Array.isArray(cell)) return runsToText(cell);
+    // 对象形态：优先 blocks，其次 runs/text
+    if (cell.blocks && cell.blocks.length) return blocksToText(cell.blocks);
+    if (cell.runs) return runsToText(cell.runs);
+    return cell.text ?? '';
+}
+
 /** 从块序列提取纯文本（表格按行用制表符分隔） */
 export function blocksToText(blocks: DocxBlock[]): string {
     const lines: string[] = [];
@@ -632,15 +922,14 @@ export function blocksToText(blocks: DocxBlock[]): string {
                 break;
             case 'table':
                 for (const row of block.rows) {
-                    lines.push(
-                        row
-                            .map((cell) => (typeof cell === 'string' ? cell : runsToText(cell)))
-                            .join('\t')
-                    );
+                    lines.push(row.map((cell) => cellToText(cell)).join('\t'));
                 }
                 break;
             case 'image':
                 if (block.caption) lines.push(block.caption);
+                break;
+            case 'textBox':
+                lines.push(blocksToText(block.paragraphs));
                 break;
             default:
                 break;
@@ -679,14 +968,29 @@ export async function parseDocxInternal(
         throw new JdocError('docx 结构异常：缺少 word/document.xml', 'docx');
     }
 
+    // 主题字体：优先按关系表定位 theme 部件，退回约定路径
+    const rels = parseRels(relsXml);
+    let themePath = 'word/theme/theme1.xml';
+    for (const rel of rels.values()) {
+        if (rel.type.endsWith('/theme')) {
+            themePath = resolveTargetPath('word', rel.target);
+            break;
+        }
+    }
+    const themeXml = await readText(zip, themePath);
+    const themeFonts = parseThemeFonts(themeXml);
+    const themeColors = parseThemeColors(themeXml);
+
     const ctx: ParseContext = {
         zip,
-        styles: stylesXml ? buildStylesIndex(stylesXml) : emptyStylesIndex(),
-        rels: parseRels(relsXml),
+        styles: stylesXml ? buildStylesIndex(stylesXml, themeFonts) : emptyStylesIndex(),
+        rels,
         numbering: parseNumbering(numberingXml),
         messages,
         imageCache: new Map(),
-        includeImages
+        includeImages,
+        themeFonts,
+        themeColors
     };
 
     const roots = parseXml(documentXml);
@@ -696,6 +1000,7 @@ export async function parseDocxInternal(
     const metadata = { ...parseCoreProps(coreXml), ...parseAppProps(appXml) };
     const document: DocxDocument = {
         metadata: Object.keys(metadata).length ? metadata : undefined,
+        section: body ? parseSection(body) : undefined,
         blocks
     };
 

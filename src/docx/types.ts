@@ -80,13 +80,51 @@ export interface DocxList {
     items: DocxListItem[];
 }
 
-/** 表格单元格：字符串简写或富文本 */
-export type DocxCell = string | DocxRun[];
+/** 单元格边框（w:tcBorders 单边） */
+export interface DocxCellBorder {
+    /** 线型，如 single / double / nil（无边框） */
+    style?: string;
+    /** 颜色 #RRGGBB */
+    color?: string;
+    /** 宽度（磅） */
+    size?: number;
+}
+
+/** 表格单元格对象形态：携带合并、边框、底纹等属性（对应 w:tcPr） */
+export interface DocxCellDetail {
+    type: 'cell';
+    /** 单元格内容块（多个段落） */
+    blocks?: DocxBlock[];
+    /** 富文本简写（单段落时） */
+    runs?: DocxRun[];
+    /** 纯文本简写 */
+    text?: string;
+    /** 跨列数（w:gridSpan） */
+    colspan?: number;
+    /** 跨行数（w:vMerge 向下合并的行数） */
+    rowspan?: number;
+    /** 单元格宽度（磅，w:tcW） */
+    width?: number;
+    /** 底纹填充色（w:shd fill） */
+    fill?: string;
+    /** 垂直对齐（w:vAlign） */
+    verticalAlign?: 'top' | 'middle' | 'bottom';
+    /** 四边边框；缺省沿用表格默认边框 */
+    borders?: {
+        top?: DocxCellBorder;
+        right?: DocxCellBorder;
+        bottom?: DocxCellBorder;
+        left?: DocxCellBorder;
+    };
+}
+
+/** 表格单元格：字符串简写 / 富文本 / 带属性对象 */
+export type DocxCell = string | DocxRun[] | DocxCellDetail;
 
 /** 表格块 */
 export interface DocxTable {
     type: 'table';
-    /** 二维单元格内容，行优先 */
+    /** 二维单元格内容，行优先（被合并覆盖的位置不产单元格） */
     rows: DocxCell[][];
     /** 首行是否为表头（生成时加粗并重复表头） */
     header?: boolean;
@@ -136,6 +174,21 @@ export interface DocxCode {
     language?: string;
 }
 
+/** 文本框块（wps 文本框 / VML 文本框，常用于代码片段、标注框） */
+export interface DocxTextBox {
+    type: 'textBox';
+    /** 文本框内的段落块 */
+    paragraphs: DocxBlock[];
+    /** 填充色 #RRGGBB */
+    fill?: string;
+    /** 边框色 #RRGGBB */
+    stroke?: string;
+    /** 宽度（磅，wp:extent） */
+    width?: number;
+    /** 高度（磅） */
+    height?: number;
+}
+
 /** 所有支持的块类型 */
 export type DocxBlock =
     | DocxHeading
@@ -146,7 +199,8 @@ export type DocxBlock =
     | DocxPageBreak
     | DocxHorizontalRule
     | DocxQuote
-    | DocxCode;
+    | DocxCode
+    | DocxTextBox;
 
 /** 文档元数据 */
 export interface DocxMetadata {
@@ -160,10 +214,29 @@ export interface DocxMetadata {
     company?: string;
 }
 
+/** 页面设置（w:sectPr，单位磅） */
+export interface DocxSection {
+    /** 页宽（磅） */
+    width: number;
+    /** 页高（磅） */
+    height: number;
+    orientation?: 'portrait' | 'landscape';
+    /** 上边距（磅） */
+    marginTop: number;
+    /** 下边距（磅） */
+    marginBottom: number;
+    /** 左边距（磅） */
+    marginLeft: number;
+    /** 右边距（磅） */
+    marginRight: number;
+}
+
 /** 完整 DOCX 文档（JSON 契约） */
 export interface DocxDocument {
     /** 文档元数据 */
     metadata?: DocxMetadata;
+    /** 页面设置（纸张与页边距） */
+    section?: DocxSection;
     /** 内容块序列 */
     blocks: DocxBlock[];
 }
