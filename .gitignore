@@ -7,3 +7,12 @@ coverage/
 .vscode/
 .idea/
 test/fixtures/tmp/
+
+# 临时 / 测试产物（playwright 调试、临时脚本等）
+.playwright-cli/
+test/tmp-dump.mjs
+verify-charts.mjs
+
+# 示例页面用临时样例文件（非源码、体积大，如 105MB 课本 PDF 与测试文档）
+examples/*.pdf
+examples/*.docx
