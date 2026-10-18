@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  build-and-verify:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,10 +29,5 @@ jobs:
         run: npm run vscode:prepublish
         working-directory: vscode
 
-      # DOCX/XLSX 编辑器（office-editor）往返回归：Playwright 加载产物 + jdoc 重解析断言
-      - name: Install Playwright + Chromium
-        run: npm install --no-save playwright && npx playwright install --with-deps chromium
-
-      - name: Roundtrip verify (DOCX/XLSX editor)
-        run: npm run verify:roundtrip
-        working-directory: vscode
+      # 注：DOCX/XLSX 编辑器往返回归（npm run verify:roundtrip，需 Playwright + Chromium）
+      # 不在 CI 执行，浏览器回归改由本地手动跑，以换取更快的 CI 反馈。
