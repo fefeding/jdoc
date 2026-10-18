@@ -160,11 +160,14 @@ export class XlsxEditor extends EditorBase {
         bar.append(this.undoBtn, this.redoBtn, h('span', { class: 'oe-sep' }));
         const tb = (ic: string, title: string, fn: () => void, glyph = '') =>
             h('button', { class: 'oe-tb' + (glyph ? ' oe-glyph' : ''), title, html: glyph || icon(ic), onclick: fn });
+        const sizeSel = h('select', { class: 'oe-select', title: '字号', style: 'width:60px', onchange: (e: Event) => this.setFontSize(parseInt((e.target as HTMLSelectElement).value, 10)) });
+        for (const p of [8, 9, 10, 11, 12, 14, 16, 18, 24, 36]) sizeSel.append(h('option', { value: String(p), text: String(p) }));
         bar.append(
             tb('bold', '加粗', () => this.fontToggle('bold'), 'B'),
             tb('italic', '斜体', () => this.fontToggle('italic'), 'I'),
             tb('underline', '下划线', () => this.fontToggle('underline'), 'U'),
             tb('strike', '删除线', () => this.fontToggle('strike'), 'S'),
+            sizeSel,
             h('span', { class: 'oe-sep' }),
             tb('alignLeft', '左对齐', () => this.setAlign('left')),
             tb('alignCenter', '居中', () => this.setAlign('center')),
@@ -460,6 +463,14 @@ export class XlsxEditor extends EditorBase {
         const on = !(active && active.style?.font && (active.style.font as Record<string, unknown>)[key]);
         this.eachSelected((cell) => {
             fontOf(cell)[key] = on as never;
+        });
+        this.paintGrid();
+        this.markDirty();
+    }
+
+    private setFontSize(size: number): void {
+        this.eachSelected((cell) => {
+            fontOf(cell).size = size;
         });
         this.paintGrid();
         this.markDirty();
