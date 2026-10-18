@@ -114,6 +114,9 @@ body {
 .oe-grid td.active { outline: 2px solid var(--oe-accent); outline-offset: -2px; }
 .oe-grid td .cell[contenteditable="true"] { background: #fff; white-space: normal; overflow: auto; cursor: text; box-shadow: inset 0 0 0 2px var(--oe-accent); }
 .oe-grid .col-res { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 1; }
+.oe-grid .fz { position: sticky; z-index: 2; }
+.oe-grid thead th.fz { z-index: 6; }
+.oe-grid tbody th.oe-rownum.fz { z-index: 4; }
 
 /* ---------- toast ---------- */
 .oe-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #1f2430; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; box-shadow: var(--oe-shadow); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 50; max-width: 80%; }

@@ -124,6 +124,8 @@ function sameFmt(a: DocxRun, b: Partial<DocxRun>): boolean {
     );
 }
 
+const FONTS = ['默认', '宋体', '微软雅黑', '黑体', 'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New', 'PingFang SC'];
+
 /** 取单元格的可编辑文本与 runs（兼容 string / runs[] / cellDetail）。 */
 function cellText(cell: DocxCell | null | undefined): { text: string; runs?: DocxRun[] } {
     if (cell == null) return { text: '' };
@@ -151,6 +153,9 @@ export class DocxEditor extends EditorBase {
     private model: DocxModel = { blocks: [] };
     private sheetEl: HTMLElement | null = null;
     private current = -1; // 选中块索引
+    private fmtBtns: Record<string, HTMLButtonElement> = {};
+    private savedRange: Range | null = null;
+    private selHandler: (() => void) | null = null;
 
     async load(bytes: Uint8Array): Promise<void> {
         const parsed = await docxToJson(bytes, { assets: 'inline' });
@@ -162,6 +167,11 @@ export class DocxEditor extends EditorBase {
         };
         this.buildToolbar();
         this.renderAll();
+        this.selHandler = () => {
+            this.saveSel();
+            this.updateFmtState();
+        };
+        document.addEventListener('selectionchange', this.selHandler);
     }
 
     protected async serialize(): Promise<Uint8Array> {
@@ -175,6 +185,8 @@ export class DocxEditor extends EditorBase {
 
     destroy(): void {
         this.sheetEl = null;
+        if (this.selHandler) document.removeEventListener('selectionchange', this.selHandler);
+        this.selHandler = null;
     }
 
     // ---------- 工具栏 ----------
@@ -190,13 +202,21 @@ export class DocxEditor extends EditorBase {
         for (const [v, label] of opts) sel.append(h('option', { value: v, text: label }));
         bar.append(sel, sep());
 
-        const fmtBtn = (cmd: string, ic: string, title: string) =>
-            h('button', { class: 'oe-tb', title, html: icon(ic), onclick: () => this.exec(cmd) });
+        const fmtBtn = (cmd: string, ic: string, title: string, key: string) => {
+            const b = h('button', { class: 'oe-tb', title, html: icon(ic), onmousedown: (e: Event) => e.preventDefault(), onclick: () => this.exec(cmd) });
+            this.fmtBtns[key] = b as HTMLButtonElement;
+            return b;
+        };
+        const fontSel = h('select', { class: 'oe-select', title: '字体', style: 'width:104px', onchange: (e: Event) => this.execWith('fontName', (e.target as HTMLSelectElement).value) });
+        for (const f of FONTS) fontSel.append(h('option', { value: f, text: f }));
         bar.append(
-            fmtBtn('bold', 'bold', '加粗 (Ctrl+B)'),
-            fmtBtn('italic', 'italic', '斜体 (Ctrl+I)'),
-            fmtBtn('underline', 'underline', '下划线 (Ctrl+U)'),
-            fmtBtn('strikeThrough', 'strike', '删除线'),
+            fmtBtn('bold', 'bold', '加粗 (Ctrl+B)', 'bold'),
+            fmtBtn('italic', 'italic', '斜体 (Ctrl+I)', 'italic'),
+            fmtBtn('underline', 'underline', '下划线 (Ctrl+U)', 'underline'),
+            fmtBtn('strikeThrough', 'strike', '删除线', 'strike'),
+            h('span', { class: 'oe-sep' }),
+            fontSel,
+            h('input', { type: 'color', class: 'oe-color', title: '文字颜色', value: '#111827', oninput: (e: Event) => this.execWith('foreColor', (e.target as HTMLInputElement).value) }),
             sep()
         );
         const alignBtn = (a: string, ic: string, title: string) =>
@@ -417,6 +437,7 @@ export class DocxEditor extends EditorBase {
     }
 
     private bindEditable(ed: HTMLElement, commit: () => void): void {
+        (ed as { __commit?: () => void }).__commit = commit;
         ed.addEventListener('blur', commit);
         ed.addEventListener('input', () => {
             this.syncEmptyState(ed);
@@ -440,11 +461,69 @@ export class DocxEditor extends EditorBase {
     }
 
     private exec(cmd: string): void {
+        this.restoreSel();
+        document.execCommand('styleWithCSS', false, 'true');
         document.execCommand(cmd);
-        const ed = document.activeElement as HTMLElement | null;
-        if (ed && ed.classList.contains('oe-edit')) {
-            this.syncEmptyState(ed);
-            this.markDirty();
+        this.afterFmt();
+    }
+
+    private execWith(cmd: string, value: string): void {
+        this.restoreSel();
+        document.execCommand('styleWithCSS', false, 'true');
+        document.execCommand(cmd, false, value);
+        this.afterFmt();
+    }
+
+    private afterFmt(): void {
+        const ed = this.editingEl();
+        const commit = ed && (ed as { __commit?: () => void }).__commit;
+        if (commit) commit();
+        this.markDirty();
+        this.updateFmtState();
+    }
+
+    private editingEl(): HTMLElement | null {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount) {
+            let node = sel.getRangeAt(0).commonAncestorContainer as Node;
+            if (node.nodeType === Node.TEXT_NODE) node = node.parentNode as Node;
+            const ed = (node as HTMLElement).closest?.('.oe-edit') as HTMLElement | null;
+            if (ed) return ed;
+        }
+        const active = document.activeElement as HTMLElement | null;
+        return active && active.classList.contains('oe-edit') ? active : null;
+    }
+
+    private saveSel(): void {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        const range = sel.getRangeAt(0);
+        let node: Node = range.commonAncestorContainer;
+        if (node.nodeType === Node.TEXT_NODE) node = node.parentNode as Node;
+        if ((node as HTMLElement).closest?.('.oe-edit')) this.savedRange = range.cloneRange();
+    }
+
+    private restoreSel(): void {
+        if (!this.savedRange) return;
+        const sel = window.getSelection();
+        if (sel) {
+            sel.removeAllRanges();
+            sel.addRange(this.savedRange);
+        }
+    }
+
+    private updateFmtState(): void {
+        const map: Record<string, string> = { bold: 'bold', italic: 'italic', underline: 'underline', strike: 'strikeThrough' };
+        for (const [key, cmd] of Object.entries(map)) {
+            const btn = this.fmtBtns[key];
+            if (!btn) continue;
+            let on = false;
+            try {
+                on = document.queryCommandState(cmd);
+            } catch {
+                on = false;
+            }
+            btn.classList.toggle('active', on);
         }
     }
 

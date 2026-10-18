@@ -138,6 +138,10 @@ export class XlsxEditor extends EditorBase {
             tb('trash', '删除列', () => this.deleteCol()),
             h('span', { class: 'oe-sep' }),
             tb('table', '合并单元格', () => this.mergeCells()),
+            h('span', { class: 'oe-sep' }),
+            tb('table', '冻结首行', () => this.setFreeze(1, (this.sheet()?.frozen?.columns) || 0)),
+            tb('table', '冻结首列', () => this.setFreeze((this.sheet()?.frozen?.rows) || 0, 1)),
+            tb('table', '取消冻结', () => this.setFreeze(0, 0)),
             h('span', { class: 'oe-spacer' })
         );
     }
@@ -177,38 +181,68 @@ export class XlsxEditor extends EditorBase {
         const rows = (sheet.rows || []) as XlsxRow[];
         const colCount = Math.max(1, ...rows.map((r) => (r.cells || []).length), (sheet.columns || []).length);
         const merges = this.mergesOf(sheet);
-        const covered = new Map<string, { rs: number; cs: number }>(); // 被覆盖 cell → span（跳过渲染）
+        const covered = new Set<string>(); // 被合并覆盖的 cell（跳过渲染）
         const anchors = new Map<string, { rs: number; cs: number }>(); // 左上角 → span
         for (const m of merges) {
             anchors.set(m.r1 + ':' + m.c1, { rs: m.r2 - m.r1 + 1, cs: m.c2 - m.c1 + 1 });
-            for (let r = m.r1; r <= m.r2; r++) for (let c = m.c1; c <= m.c2; c++) if (!(r === m.r1 && c === m.c1)) covered.set(r + ':' + c, { rs: 0, cs: 0 });
+            for (let r = m.r1; r <= m.r2; r++) for (let c = m.c1; c <= m.c2; c++) if (!(r === m.r1 && c === m.c1)) covered.add(r + ':' + c);
         }
+
+        // 冻结窗格与列宽/行高
+        const fRows = (sheet.frozen && sheet.frozen.rows) || 0;
+        const fCols = (sheet.frozen && sheet.frozen.columns) || 0;
+        const colWidths: number[] = [];
+        for (let c = 0; c < colCount; c++) colWidths.push((sheet.columns && sheet.columns[c] && sheet.columns[c].width) || 96);
+        const rowHeight = (i: number) => (rows[i] && rows[i].height) || 26;
+        const colSpanW = (c: number, cs: number) => Array.from({ length: cs }, (_, k) => colWidths[c + k] || 96).reduce((a, b) => a + b, 0);
 
         const table = h('table', { class: 'oe-grid' });
         const colgroup = h('colgroup');
         colgroup.append(h('col', { style: 'width:48px' }));
-        for (let c = 0; c < colCount; c++) colgroup.append(h('col', { style: `width:${((sheet.columns && sheet.columns[c] && sheet.columns[c].width) || 96)}px` }));
+        for (let c = 0; c < colCount; c++) colgroup.append(h('col', { style: `width:${colWidths[c]}px` }));
         table.append(colgroup);
 
         const thead = h('thead');
         const htr = h('tr');
         htr.append(h('th', { class: 'oe-corner' }));
-        for (let c = 0; c < colCount; c++) htr.append(h('th', { text: colName(c + 1), title: '列 ' + colName(c + 1) }));
+        for (let c = 0; c < colCount; c++) {
+            const th = h('th', { text: colName(c + 1), title: '列 ' + colName(c + 1) + '（拖拽边缘调整宽度）' });
+            th.append(h('span', { class: 'col-res', dataset: { c: String(c) }, onmousedown: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); this.colResize(c, e); } }));
+            htr.append(th);
+        }
         thead.append(htr);
         table.append(thead);
 
         const tbody = h('tbody');
         rows.forEach((row, r) => {
             const tr = h('tr');
-            tr.append(h('th', { class: 'oe-rownum', text: String(r + 1) }));
+            if (row.height) tr.style.height = row.height + 'pt';
+            const frozenRow = r < fRows;
+            const topPx = 26 + Array.from({ length: r }, (_, k) => rowHeight(k)).reduce((a, b) => a + b, 0);
+            const rn = h('th', { class: 'oe-rownum' + (frozenRow ? ' fz' : ''), text: String(r + 1) });
+            if (frozenRow) rn.style.top = topPx + 'px';
+            tr.append(rn);
+            let leftPx = 48;
             for (let c = 0; c < colCount; c++) {
-                if (covered.has(r + ':' + c)) return; // 被合并覆盖，跳过该 td
+                if (covered.has(r + ':' + c)) {
+                    leftPx += colWidths[c];
+                    continue; // 被合并覆盖：占位但不渲染 td
+                }
                 const td = h('td', { dataset: { r: String(r), c: String(c) } });
                 const span = anchors.get(r + ':' + c);
                 if (span) {
                     if (span.rs > 1) td.rowSpan = span.rs;
                     if (span.cs > 1) td.colSpan = span.cs;
                 }
+                if (frozenRow) {
+                    td.classList.add('fz');
+                    td.style.top = topPx + 'px';
+                }
+                if (c < fCols) {
+                    td.classList.add('fz');
+                    td.style.left = leftPx + 'px';
+                }
+                leftPx += span && span.cs > 1 ? colSpanW(c, span.cs) : colWidths[c];
                 this.paintCell(td, sheet, r, c);
                 tr.append(td);
             }
@@ -451,6 +485,40 @@ export class XlsxEditor extends EditorBase {
         if (!sheet) return;
         const count = this.sel.c2 - this.sel.c1 + 1;
         for (const row of sheet.rows as XlsxRow[]) row.cells?.splice(this.sel.c1, count);
+        this.paintGrid();
+        this.markDirty();
+    }
+
+    // ---------- 列宽拖拽 ----------
+    private colResize(c: number, e: MouseEvent): void {
+        const sheet = this.sheet();
+        const host = this.gridWrap;
+        if (!sheet || !host) return;
+        const cols = host.querySelectorAll('colgroup col');
+        const targetCol = cols[c + 1] as HTMLElement | undefined;
+        const w0 = (sheet.columns && sheet.columns[c] && sheet.columns[c].width) || 96;
+        const startX = e.clientX;
+        const onMove = (ev: MouseEvent) => {
+            const w = Math.max(24, w0 + ev.clientX - startX);
+            if (targetCol) targetCol.style.width = w + 'px';
+        };
+        const onUp = (ev: MouseEvent) => {
+            const w = Math.max(24, Math.round(w0 + ev.clientX - startX));
+            if (!sheet.columns) sheet.columns = [];
+            if (!sheet.columns[c]) sheet.columns[c] = {};
+            sheet.columns[c].width = w;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            this.markDirty();
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    }
+
+    private setFreeze(rows: number, columns: number): void {
+        const sheet = this.sheet();
+        if (!sheet) return;
+        sheet.frozen = rows || columns ? { rows, columns } : undefined;
         this.paintGrid();
         this.markDirty();
     }
