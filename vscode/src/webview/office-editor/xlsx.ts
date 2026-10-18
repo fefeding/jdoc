@@ -182,6 +182,7 @@ export class XlsxEditor extends EditorBase {
             h('span', { class: 'oe-sep' }),
             tb('table', '合并单元格', () => this.mergeCells()),
             h('span', { class: 'oe-sep' }),
+            tb('table', '冻结到选区(上方行+左侧列)', () => this.setFreeze(this.sel.r1, this.sel.c1)),
             tb('table', '冻结首行', () => this.setFreeze(1, (this.sheet()?.frozen?.columns) || 0)),
             tb('table', '冻结首列', () => this.setFreeze((this.sheet()?.frozen?.rows) || 0, 1)),
             tb('table', '取消冻结', () => this.setFreeze(0, 0)),
@@ -431,12 +432,13 @@ export class XlsxEditor extends EditorBase {
             } catch {
                 cell.result = null;
             }
-            this.recomputeAllSheets();
         } else if (input !== '' && !isNaN(Number(input)) && /^-?\d*(\.\d+)?$/.test(input)) {
             cell.value = Number(input);
         } else {
             cell.value = input;
         }
+        // 无论改的是值还是公式，都沿依赖图增量重算受影响的公式（含跨表）
+        this.recomputeDependencies([{ sheet: sheet.name, r, c }]);
         this.markDirty();
     }
 
@@ -601,6 +603,85 @@ export class XlsxEditor extends EditorBase {
     /** 重算所有工作表的公式（两遍），支持跨表引用在全部表就绪后求值。 */
     private recomputeAllSheets(): void {
         for (let pass = 0; pass < 2; pass++) for (const s of this.model.sheets) this.recomputeSheet(s);
+    }
+
+    /** 提取公式中的单元格/区域引用（含跨表 Sheet!A1 / 'Sheet'!A1:B2）。 */
+    private extractRefs(formula: string): { sheet?: string; ref: string }[] {
+        const src = String(formula);
+        const out: { sheet?: string; ref: string }[] = [];
+        const cellRe = /^[A-Za-z]{1,3}\d+/;
+        let i = 0;
+        while (i < src.length) {
+            const ch = src[i];
+            if (ch === '"' || ch === "'") { const e = src.indexOf(ch, i + 1); i = e < 0 ? src.length : e + 1; continue; }
+            if (/[A-Za-z]/.test(ch)) {
+                const word = src.slice(i).match(/^[A-Za-z]+[A-Za-z0-9]*/)![0];
+                if (src[i + word.length] === '(') { i += word.length; continue; }
+                const at = src[i + word.length] === '!' ? i + word.length + 1 : -1;
+                if (at >= 0) {
+                    const rm = src.slice(at).match(cellRe);
+                    if (rm) {
+                        let ref = rm[0];
+                        let j = at + rm[0].length;
+                        if (src[j] === ':') { const rm2 = src.slice(j + 1).match(cellRe); if (rm2) { ref += ':' + rm2[0]; j += 1 + rm2[0].length; } }
+                        out.push({ sheet: word, ref: ref.toUpperCase() });
+                        i = j;
+                        continue;
+                    }
+                }
+                if (cellRe.test(word)) {
+                    let ref = word;
+                    let j = i + word.length;
+                    if (src[j] === ':') { const rm2 = src.slice(j + 1).match(cellRe); if (rm2) { ref += ':' + rm2[0]; j += 1 + rm2[0].length; } }
+                    out.push({ ref: ref.toUpperCase() });
+                    i = j;
+                    continue;
+                }
+                i += word.length;
+                continue;
+            }
+            i++;
+        }
+        return out;
+    }
+
+    /** 判断 (r,c)（0-based）是否落在引用（单格或区域）内。 */
+    private refCovers(refStr: string, r: number, c: number): boolean {
+        const parts = refStr.split(':');
+        const a = fromA1(parts[0]);
+        const b = parts[1] ? fromA1(parts[1]) : a;
+        return r >= Math.min(a.r, b.r) && r <= Math.max(a.r, b.r) && c >= Math.min(a.c, b.c) && c <= Math.max(a.c, b.c);
+    }
+
+    /** 依赖图增量重算：从变更单元格出发，BFS 重算所有（跨表）依赖它的公式，直到稳定。 */
+    private recomputeDependencies(changed: { sheet: string; r: number; c: number }[]): void {
+        const formulas: { sheet: XlsxSheet; cell: XlsxCellObject; r: number; c: number }[] = [];
+        for (const s of this.model.sheets)
+            (s.rows as XlsxRow[]).forEach((row, r) => (row.cells || []).forEach((cell, c) => { if (cell && cell.formula != null) formulas.push({ sheet: s, cell, r, c }); }));
+        let frontier = changed.slice();
+        const visited = new Set<string>();
+        let guard = 0;
+        while (frontier.length && guard++ < 100) {
+            const next: { sheet: string; r: number; c: number }[] = [];
+            for (const ch of frontier) {
+                for (const f of formulas) {
+                    const key = f.sheet.name + '!' + f.r + ':' + f.c;
+                    if (visited.has(key)) continue;
+                    const refs = this.extractRefs(f.cell.formula!);
+                    const hit = refs.some((rf) => (rf.sheet || f.sheet.name) === ch.sheet && this.refCovers(rf.ref, ch.r, ch.c));
+                    if (!hit) continue;
+                    visited.add(key);
+                    const old = f.cell.result;
+                    try {
+                        f.cell.result = this.evaluateFormula(f.cell.formula!, f.sheet);
+                    } catch {
+                        f.cell.result = null;
+                    }
+                    if (old !== f.cell.result) next.push({ sheet: f.sheet.name, r: f.r, c: f.c });
+                }
+            }
+            frontier = next;
+        }
     }
 
     /** 求值公式（不含前导 =）：支持 + - * / ^ %、括号、单元格/区域引用、比较与常用函数。 */

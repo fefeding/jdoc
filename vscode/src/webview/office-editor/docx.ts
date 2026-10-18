@@ -92,6 +92,14 @@ function readEditable(el: HTMLElement): { text: string; runs?: DocxRun[] } {
                 else if (tag === 'i' || tag === 'em') f.italic = true;
                 else if (tag === 'u') f.underline = true;
                 else if (tag === 's' || tag === 'strike' || tag === 'del') f.strike = true;
+                else if (tag === 'font') {
+                    const sz = e.getAttribute('size');
+                    if (sz && FONT_SIZE_MAP[sz]) f.size = FONT_SIZE_MAP[sz];
+                    const col = e.getAttribute('color');
+                    if (col) f.color = normalizeColor(col);
+                    const face = e.getAttribute('face');
+                    if (face) f.font = face;
+                }
                 const st = e.style;
                 if (st) {
                     if (st.color) f.color = normalizeColor(st.color);
@@ -125,6 +133,12 @@ function sameFmt(a: DocxRun, b: Partial<DocxRun>): boolean {
 }
 
 const FONTS = ['默认', '宋体', '微软雅黑', '黑体', 'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New', 'PingFang SC'];
+// execCommand fontSize 的 1-7 档 → 磅值（用于 <font size> 与磅值互转）
+const FONT_SIZE_MAP: Record<string, number> = { '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36 };
+function ptToN(pt: number): string {
+    for (const [n, p] of Object.entries(FONT_SIZE_MAP)) if (p === pt) return n;
+    return '3';
+}
 
 /** 取单元格的可编辑文本与 runs（兼容 string / runs[] / cellDetail）。 */
 function cellText(cell: DocxCell | null | undefined): { text: string; runs?: DocxRun[] } {
@@ -216,6 +230,8 @@ export class DocxEditor extends EditorBase {
         };
         const fontSel = h('select', { class: 'oe-select', title: '字体', style: 'width:104px', onchange: (e: Event) => this.execWith('fontName', (e.target as HTMLSelectElement).value) });
         for (const f of FONTS) fontSel.append(h('option', { value: f, text: f }));
+        const sizeSel = h('select', { class: 'oe-select', title: '字号', style: 'width:62px', onchange: (e: Event) => this.execFontSize(parseInt((e.target as HTMLSelectElement).value, 10)) });
+        for (const p of [8, 9, 10, 12, 14, 16, 18, 24, 36]) sizeSel.append(h('option', { value: String(p), text: String(p) }));
         bar.append(
             fmtBtn('bold', 'bold', '加粗 (Ctrl+B)', 'bold'),
             fmtBtn('italic', 'italic', '斜体 (Ctrl+I)', 'italic'),
@@ -223,6 +239,7 @@ export class DocxEditor extends EditorBase {
             fmtBtn('strikeThrough', 'strike', '删除线', 'strike'),
             h('span', { class: 'oe-sep' }),
             fontSel,
+            sizeSel,
             h('input', { type: 'color', class: 'oe-color', title: '文字颜色', value: '#111827', oninput: (e: Event) => this.execWith('foreColor', (e.target as HTMLInputElement).value) }),
             sep()
         );
@@ -518,6 +535,14 @@ export class DocxEditor extends EditorBase {
         this.restoreSel();
         document.execCommand('styleWithCSS', false, 'true');
         document.execCommand(cmd, false, value);
+        this.afterFmt();
+    }
+
+    /** 字符级字号（磅）：execCommand fontSize 产生 <font size>，readEditable 再解析回磅值。 */
+    private execFontSize(pt: number): void {
+        this.restoreSel();
+        document.execCommand('styleWithCSS', false, 'false');
+        document.execCommand('fontSize', false, ptToN(pt));
         this.afterFmt();
     }
 
