@@ -13,3 +13,4 @@ esbuild.js
 README.zh-CN.md
 examples/**
 scripts/**
+_icon_gen/**

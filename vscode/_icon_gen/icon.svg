@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4C63E8"/>
+      <stop offset="1" stop-color="#2A3CB8"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D8DEF5"/>
+      <stop offset="1" stop-color="#B9C2EC"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="512" height="512" fill="url(#bg)"/>
+
+  <!-- document sheet with folded corner (top-right) -->
+  <path d="M136 76 h160 l80 80 v280 a20 20 0 0 1 -20 20 H136 a20 20 0 0 1 -20 -20 V96 a20 20 0 0 1 20 -20 Z" fill="#FFFFFF"/>
+  <path d="M296 76 l80 80 h-64 a16 16 0 0 1 -16 -16 Z" fill="url(#fold)"/>
+
+  <!-- four format badges -->
+  <g font-family="Helvetica, Arial, sans-serif" font-weight="bold" text-anchor="middle">
+    <rect x="150" y="150" width="212" height="44" rx="10" fill="#D24726"/>
+    <text x="256" y="181" font-size="28" fill="#FFFFFF">PPT</text>
+
+    <rect x="150" y="212" width="212" height="44" rx="10" fill="#E5252A"/>
+    <text x="256" y="243" font-size="28" fill="#FFFFFF">PDF</text>
+
+    <rect x="150" y="274" width="212" height="44" rx="10" fill="#2B579A"/>
+    <text x="256" y="305" font-size="28" fill="#FFFFFF">DOC</text>
+
+    <rect x="150" y="336" width="212" height="44" rx="10" fill="#217346"/>
+    <text x="256" y="367" font-size="28" fill="#FFFFFF">XLS</text>
+  </g>
+</svg>
