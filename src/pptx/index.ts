@@ -27,6 +27,23 @@ import { resolvePptxAssetRefs } from './asset-refs';
 export type { PptxDocument } from '@fefeding/ppt-parser';
 export { PPTXShapeUtils, presetShapePath, createStore, createActions, renderChartSVG } from '@fefeding/ppt-parser';
 export { normalizeDoc, normalizeElement } from '@fefeding/ppt-parser';
+// 编辑核心与编辑器 UI 常量：供 VS Code 插件（及任何需要直接编辑 PPTX 的消费者）
+// 复用 ppt-parser 的编辑器能力。docFromPptx/docToPptx 是编辑器文档模型的序列化入口，
+// 其余为 ribbon/dialogs 所需的展示常量。
+export {
+  docFromPptx,
+  docToPptx,
+  SHAPES,
+  FONT_LIST,
+  THEMES,
+  LAYOUTS,
+  SLIDE_SIZES,
+  TRANSITIONS,
+  ANIM_CLASSES,
+  ANIM_TYPES,
+  ANIM_DIRECTIONS,
+  CHART_TYPES
+} from '@fefeding/ppt-parser';
 
 /** 底层库可能返回多种类型，这里统一收敛为 Uint8Array */
 function toUint8(result: unknown): Uint8Array {
