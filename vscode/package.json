@@ -14,7 +14,7 @@
   },
   "categories": [
     "Visualization",
-    "Editing"
+    "Other"
   ],
   "main": "./dist/extension.js",
   "icon": "icon.png",
