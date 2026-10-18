@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # jdoc 浏览器构建提供 dist/jdoc.browser.js（插件 esbuild 别名指向它）
+      - name: Build jdoc library
+        run: npm install && npm run build
+
+      - name: Install extension dependencies
+        run: npm install
+        working-directory: vscode
+
+      - name: Compile extension (esbuild)
+        run: npm run vscode:prepublish
+        working-directory: vscode
+
+      # DOCX/XLSX 编辑器（office-editor）往返回归：Playwright 加载产物 + jdoc 重解析断言
+      - name: Install Playwright + Chromium
+        run: npm install --no-save playwright && npx playwright install --with-deps chromium
+
+      - name: Roundtrip verify (DOCX/XLSX editor)
+        run: npm run verify:roundtrip
+        working-directory: vscode
