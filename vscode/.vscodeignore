@@ -12,3 +12,4 @@ esbuild.js
 .github/**
 README.zh-CN.md
 examples/**
+scripts/**
