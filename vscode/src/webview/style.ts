@@ -26,4 +26,11 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); fon
 /* PDF 页面 */
 .pdf-page { background: #fff; border: 1px solid var(--bd); border-radius: 4px; margin: 0 auto 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 16px; }
 .pdf-page .page-text { white-space: pre-wrap; word-break: break-word; }
+/* PDF 栅格化页面（canvas 渲染，兼容纯图片/扫描件） */
+.pdf-pages { display: flex; flex-direction: column; align-items: center; }
+.pdf-canvas-page { padding: 0; overflow: hidden; position: relative; line-height: 0; }
+.pdf-canvas-page canvas { display: block; width: 100%; height: 100%; }
+.pdf-canvas-page.pending { display: flex; align-items: center; justify-content: center; color: var(--mut); font-size: 12px; line-height: 1.6; }
+.pdf-canvas-page .pdf-text-layer { position: absolute; inset: 0; color: transparent; }
+.pdf-canvas-page .pdf-text-layer span { position: absolute; white-space: pre; line-height: 1; font-family: sans-serif; transform-origin: 0 0; }
 `;

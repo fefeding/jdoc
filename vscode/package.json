@@ -66,6 +66,7 @@
     "watch": "node esbuild.js --watch",
     "dev": "node esbuild.js --watch",
     "verify:roundtrip": "node scripts/verify-roundtrip.mjs",
+    "sync:pdf-worker": "node -e \"const fs=require('fs'),p=require('path');fs.copyFileSync(p.resolve(__dirname,'..','node_modules','pdfjs-dist','legacy','build','pdf.worker.min.mjs'),p.resolve(__dirname,'media','pdf.worker.min.mjs'))\"",
     "install:jdoc": "npm install file:..",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies",
