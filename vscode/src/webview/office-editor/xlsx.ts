@@ -148,7 +148,8 @@ export class XlsxEditor extends EditorBase {
     }
 
     protected async serialize(): Promise<Uint8Array> {
-        const wb: XlsxWorkbook = { metadata: this.model.metadata, sheets: this.model.sheets };
+        // 深拷贝快照：避免 jsonToXlsx(async) 序列化期间模型被再次修改而产出中间态。
+        const wb: XlsxWorkbook = { metadata: this.model.metadata, sheets: this.cloneSheets() };
         return jsonToXlsx(wb, this.model.assets ? { assets: this.model.assets as never } : {});
     }
 
@@ -470,7 +471,6 @@ export class XlsxEditor extends EditorBase {
     private writeCell(sheet: XlsxSheet, r: number, c: number, raw: string): void {
         const input = raw.trim();
         const cell = ensureCell(sheet, r, c);
-        const prev = { ...cell };
         delete cell.value;
         delete cell.text;
         delete cell.formula;

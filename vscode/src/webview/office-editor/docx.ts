@@ -193,10 +193,12 @@ export class DocxEditor extends EditorBase {
     }
 
     protected async serialize(): Promise<Uint8Array> {
+        // 深拷贝快照：jsonToDocx 为 async，序列化期间模型可能被再次修改，
+        // 直接传 this.model.blocks 引用会产出中间态字节。
         const doc: DocxDocument = {
             metadata: this.model.metadata,
             section: this.model.section,
-            blocks: this.model.blocks
+            blocks: this.cloneBlocks()
         };
         return jsonToDocx(doc, this.model.assets ? { assets: this.model.assets as never } : {});
     }

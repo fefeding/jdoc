@@ -14,6 +14,8 @@ export interface EditorHooks {
  */
 export abstract class EditorBase {
     protected dirty = false;
+    private syncing = false;
+    private syncQueued = false;
     protected toolbarEl: HTMLElement | null = null;
     protected contentEl: HTMLElement | null = null;
 
@@ -50,14 +52,30 @@ export abstract class EditorBase {
         this.syncDebounced();
     }
 
-    /** 立即序列化并回传字节（切模式 / 保存前调用）。 */
+    /**
+     * 立即序列化并回传字节（切模式 / 保存前调用）。
+     * 带并发锁：序列化进行中到来的再次同步只排队一次；成功回传后清零 dirty
+     * （dirty 表示「有未同步到 host 的编辑」，而非「文档未保存」——后者由 host 记账）。
+     */
     async syncNow(): Promise<void> {
+        if (this.syncing) {
+            this.syncQueued = true;
+            return;
+        }
         if (!this.dirty) return;
+        this.syncing = true;
         try {
             const bytes = await this.serialize();
+            this.dirty = false;
             this.hooks.onSync(bytes);
         } catch (e: unknown) {
             this.hooks.onToast('保存失败：' + errMsg(e), 'error');
+        } finally {
+            this.syncing = false;
+            if (this.syncQueued) {
+                this.syncQueued = false;
+                void this.syncNow();
+            }
         }
     }
 
