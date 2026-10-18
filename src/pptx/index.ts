@@ -44,6 +44,19 @@ export {
   ANIM_DIRECTIONS,
   CHART_TYPES
 } from '@fefeding/ppt-parser';
+// 渲染辅助（pptx-editor 的 render.ts/geometry 用到）
+export {
+  FONT_SIZES,
+  getTheme,
+  ptToPx,
+  normalizeColor,
+  withAlpha,
+  hexToRgb,
+  absoluteElementRect,
+  effectMargin,
+  elementRect,
+  rotatedRect
+} from '@fefeding/ppt-parser';
 
 /** 底层库可能返回多种类型，这里统一收敛为 Uint8Array */
 function toUint8(result: unknown): Uint8Array {

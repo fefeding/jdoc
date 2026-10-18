@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { JdocDocument } from './document';
-import type { HostToWebview, WebviewToHost } from './protocol';
+import type { DocFormat, HostToWebview, WebviewToHost } from './protocol';
 
 const VIEW_TYPE = 'jdoc.documentEditor';
 
@@ -53,7 +53,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             enableCommandUris: false,
             localResourceRoots: [this.context.extensionUri]
         };
-        webviewPanel.webview.html = this.getWebviewHtml(webviewPanel.webview);
+        webviewPanel.webview.html = this.getWebviewHtml(webviewPanel.webview, document.format);
 
         webviewPanel.onDidChangeViewState((e) => {
             if (e.webviewPanel.active) this._activeDoc = document;
@@ -179,9 +179,10 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         if (this._activeDoc) await this.saveAs(this._activeDoc);
     }
 
-    private getWebviewHtml(webview: vscode.Webview): string {
+    private getWebviewHtml(webview: vscode.Webview, format: DocFormat): string {
+        const scriptFile = format === 'pptx' ? 'pptx-editor.js' : 'webview.js';
         const scriptUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
+            vscode.Uri.joinPath(this.context.extensionUri, 'dist', scriptFile)
         );
         // 图表依赖：echarts / echarts-gl 作为全局脚本按序加载（必须先于 webview.js）
         const echartsUri = webview.asWebviewUri(
