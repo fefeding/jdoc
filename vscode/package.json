@@ -65,6 +65,7 @@
     "compile": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "dev": "node esbuild.js --watch",
+    "verify:roundtrip": "node scripts/verify-roundtrip.mjs",
     "install:jdoc": "npm install file:..",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies",

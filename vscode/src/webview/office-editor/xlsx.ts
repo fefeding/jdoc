@@ -42,13 +42,59 @@ function toA1(r: number, c: number): string {
     return colName(c + 1) + (r + 1);
 }
 
+/** Excel 日期序列号(1899-12-30 起的天数) → Date（本地时区近似） */
+function serialToDate(serial: number): Date | null {
+    if (!isFinite(serial) || serial < 0) return null;
+    return new Date(Math.round((serial - 25569) * 86400 * 1000));
+}
+function pad(n: number, w = 2): string {
+    return String(Math.abs(n)).padStart(w, '0');
+}
+/** 按 numFmt 格式化数值显示（百分比/千分位/小数位/货币/日期）。 */
+function formatNum(value: unknown, fmt: string): string {
+    if (!fmt || fmt === 'General' || fmt === '常规') return value == null ? '' : String(value);
+    const n = typeof value === 'number' ? value : parseFloat(String(value));
+    if (isNaN(n)) return String(value ?? '');
+    if (/yyyy|yy|mm|dd|hh|ss/i.test(fmt)) {
+        const d = serialToDate(n);
+        if (d) {
+            return fmt
+                .replace(/yyyy/i, String(d.getFullYear()))
+                .replace(/yy/i, pad(d.getFullYear() % 100))
+                .replace(/mm/i, pad(d.getMonth() + 1))
+                .replace(/dd/i, pad(d.getDate()))
+                .replace(/hh/i, pad(d.getHours()))
+                .replace(/ss/i, pad(d.getSeconds()));
+        }
+        return String(value);
+    }
+    const pct = fmt.includes('%');
+    const v = pct ? n * 100 : n;
+    const decMatch = fmt.match(/\.(0+)/);
+    const dec = decMatch ? decMatch[1].length : 0;
+    const thousands = fmt.includes(',');
+    let s = Math.abs(v).toFixed(dec);
+    if (thousands) s = s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const cur = fmt.match(/[¥$€£]/);
+    if (cur) s = cur[0] + s;
+    s = (v < 0 ? '-' : '') + s;
+    return pct ? s + '%' : s;
+}
+
 function cellDisplay(cell: XlsxCellObject | null): string {
     if (!cell) return '';
-    if (cell.formula) return cell.result != null ? String(cell.result) : '=' + cell.formula;
-    if (cell.text != null) return cell.text;
-    if (cell.richText && cell.richText.length) return cell.richText.map((r) => r.text || '').join('');
-    if (cell.value != null) return String(cell.value);
-    return '';
+    let raw: string;
+    if (cell.formula) raw = cell.result != null ? String(cell.result) : '=' + cell.formula;
+    else if (cell.text != null) raw = cell.text;
+    else if (cell.richText && cell.richText.length) raw = cell.richText.map((r) => r.text || '').join('');
+    else if (cell.value != null) raw = String(cell.value);
+    else raw = '';
+    const fmt = cell.style?.numFmt;
+    if (fmt) {
+        if (!cell.formula && cell.value != null && typeof cell.value !== 'string') raw = formatNum(cell.value, fmt);
+        else if (cell.formula && cell.result != null && typeof cell.result !== 'string') raw = formatNum(cell.result, fmt);
+    }
+    return raw;
 }
 
 function ensureCell(sheet: XlsxSheet, r: number, c: number): XlsxCellObject {
@@ -162,12 +208,15 @@ export class XlsxEditor extends EditorBase {
             h('button', { class: 'oe-tb' + (glyph ? ' oe-glyph' : ''), title, html: glyph || icon(ic), onclick: fn });
         const sizeSel = h('select', { class: 'oe-select', title: '字号', style: 'width:60px', onchange: (e: Event) => this.setFontSize(parseInt((e.target as HTMLSelectElement).value, 10)) });
         for (const p of [8, 9, 10, 11, 12, 14, 16, 18, 24, 36]) sizeSel.append(h('option', { value: String(p), text: String(p) }));
+        const fmtSel = h('select', { class: 'oe-select', title: '数字格式', style: 'width:104px', onchange: (e: Event) => this.setNumFmt((e.target as HTMLSelectElement).value) });
+        for (const [v, l] of [['', '常规'], ['0', '整数'], ['0.00', '两位小数'], ['0.00%', '百分比'], ['#,##0', '千分位'], ['#,##0.00', '千分位.两位'], ['¥#,##0.00', '货币'], ['yyyy-mm-dd', '日期']] as [string, string][]) fmtSel.append(h('option', { value: v, text: l }));
         bar.append(
             tb('bold', '加粗', () => this.fontToggle('bold'), 'B'),
             tb('italic', '斜体', () => this.fontToggle('italic'), 'I'),
             tb('underline', '下划线', () => this.fontToggle('underline'), 'U'),
             tb('strike', '删除线', () => this.fontToggle('strike'), 'S'),
             sizeSel,
+            fmtSel,
             h('span', { class: 'oe-sep' }),
             tb('alignLeft', '左对齐', () => this.setAlign('left')),
             tb('alignCenter', '居中', () => this.setAlign('center')),
@@ -476,6 +525,16 @@ export class XlsxEditor extends EditorBase {
         this.markDirty();
     }
 
+    private setNumFmt(fmt: string): void {
+        this.eachSelected((cell) => {
+            if (!cell.style) cell.style = {};
+            if (fmt) cell.style.numFmt = fmt;
+            else delete cell.style.numFmt;
+        });
+        this.paintGrid();
+        this.markDirty();
+    }
+
     private selActiveCell(): XlsxCellObject | null {
         const sheet = this.sheet();
         const row = sheet?.rows[this.sel.r1] as XlsxRow | undefined;
@@ -761,8 +820,28 @@ export class XlsxEditor extends EditorBase {
                 for (let c = Math.min(pa.c, pb.c); c <= Math.max(pa.c, pb.c); c++) out.push(num(refVal(colName(c + 1) + (r + 1), sheetName)));
             return out;
         };
+        const matchCrit = (crit: unknown) => {
+            const s = String(crit);
+            const m = s.match(/^\s*(>=|<=|<>|>|<|=)?\s*(.*)$/);
+            const op = m && m[1] ? m[1] : '=';
+            const rest = m ? m[2].trim() : s;
+            const rhs = parseFloat(rest);
+            const numeric = rest !== '' && !isNaN(rhs);
+            return (v: number): boolean => {
+                if (numeric) {
+                    if (op === '>') return v > rhs;
+                    if (op === '<') return v < rhs;
+                    if (op === '>=') return v >= rhs;
+                    if (op === '<=') return v <= rhs;
+                    if (op === '<>') return v !== rhs;
+                    return v === rhs;
+                }
+                return String(v) === s.trim();
+            };
+        };
         const callFunc = (name: string, args: (number | string | number[])[]): number | string => {
             const nums: number[] = args.flatMap((x) => (Array.isArray(x) ? x : [num(x)]));
+            const arr = (i: number): number[] => (Array.isArray(args[i]) ? (args[i] as number[]) : [num(args[i])]);
             switch (name) {
                 case 'SUM': return nums.reduce((s, n) => s + n, 0);
                 case 'AVERAGE': return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : 0;
@@ -774,9 +853,28 @@ export class XlsxEditor extends EditorBase {
                 case 'SQRT': return Math.sqrt(num(args[0]));
                 case 'INT': return Math.floor(num(args[0]));
                 case 'ROUND': { const d = args.length > 1 ? num(args[1]) : 0; const f = Math.pow(10, d); return Math.round(num(args[0]) * f) / f; }
+                case 'ROUNDUP': { const d = args.length > 1 ? num(args[1]) : 0; const f = Math.pow(10, d); return Math.ceil(num(args[0]) * f) / f; }
+                case 'ROUNDDOWN': { const d = args.length > 1 ? num(args[1]) : 0; const f = Math.pow(10, d); return Math.floor(num(args[0]) * f) / f; }
+                case 'MOD': { const b = num(args[1]); return b === 0 ? NaN : num(args[0]) % b; }
                 case 'POWER': return Math.pow(num(args[0]), num(args[1]));
                 case 'IF': return num(args[0]) !== 0 ? (args[1] ?? 0) : (args[2] ?? 0);
+                case 'IFERROR': { const v = num(args[0]); return isNaN(v) ? (args[1] ?? 0) : v; }
+                case 'AND': return args.every((x) => num(x) !== 0) ? 1 : 0;
+                case 'OR': return args.some((x) => num(x) !== 0) ? 1 : 0;
+                case 'NOT': return num(args[0]) === 0 ? 1 : 0;
+                case 'COUNTIF': { const m = matchCrit(args[1]); return arr(0).filter(m).length; }
+                case 'SUMIF': { const m = matchCrit(args[1]); const src = arr(0); const sum = args.length > 2 ? arr(2) : src; return src.reduce((s, v, i) => s + (m(v) ? (sum[i] ?? 0) : 0), 0); }
+                case 'AVERAGEIF': { const m = matchCrit(args[1]); const hit = arr(0).filter(m); return hit.length ? hit.reduce((s, n) => s + n, 0) / hit.length : 0; }
+                case 'LEN': return String(args[0] ?? '').length;
+                case 'LEFT': return String(args[0] ?? '').slice(0, Math.max(0, num(args[1])));
+                case 'RIGHT': { const s = String(args[0] ?? ''); const n = Math.max(0, num(args[1])); return n ? s.slice(-n) : ''; }
+                case 'MID': { const s = String(args[0] ?? ''); const st = Math.max(1, num(args[1])); const ln = Math.max(0, num(args[2])); return s.slice(st - 1, st - 1 + ln); }
+                case 'UPPER': return String(args[0] ?? '').toUpperCase();
+                case 'LOWER': return String(args[0] ?? '').toLowerCase();
+                case 'TRIM': return String(args[0] ?? '').trim();
                 case 'CONCATENATE': return args.map((x) => (Array.isArray(x) ? x.join('') : String(x))).join('');
+                case 'TODAY': return Math.floor(Date.now() / 86400000 + 25569);
+                case 'NOW': return Date.now() / 86400000 + 25569;
                 default: return 0;
             }
         };
