@@ -26,7 +26,11 @@ function check(name, cond, extra = '') {
 }
 
 async function genDocx() {
-    return jdoc.jsonToDocx({ blocks: [{ type: 'heading', level: 1, text: '季度报告' }, { type: 'paragraph', text: '正文内容。' }] });
+    return jdoc.jsonToDocx({ blocks: [
+        { type: 'heading', level: 1, text: '季度报告' },
+        { type: 'paragraph', text: '正文内容。' },
+        { type: 'table', header: true, rows: [[{ type: 'cell', colspan: 2, text: 'X' }, 'c'], ['', '', '']] }
+    ] });
 }
 async function genXlsx() {
     return jdoc.jsonToXlsx({ sheets: [{ name: 'S', rows: [
@@ -75,6 +79,16 @@ async function run(fmt) {
     await init('edit'); await page.waitForTimeout(1300);
     const ui = await page.evaluate(() => ({ editables: document.querySelectorAll('.oe-doc .oe-edit').length, grid: document.querySelectorAll('.oe-grid td').length }));
     check('edit UI', fmt === 'docx' ? ui.editables > 0 : ui.grid > 0);
+
+    if (fmt === 'docx') {
+        // 合并表格渲染：jdoc 为压缩表示(数组下标≠列号)，需列号追踪正确显示 colspan
+        const tbl = await page.evaluate(() => {
+            const trs = document.querySelectorAll('.oe-doc .oe-tbl tr');
+            if (trs.length < 2) return { r0: -1, r1: -1, span: 0 };
+            return { r0: trs[0].children.length, r1: trs[1].children.length, span: trs[0].children[0].colSpan };
+        });
+        check('DOCX 合并表格渲染', tbl.r0 === 2 && tbl.r1 === 3 && tbl.span === 2, `r0=${tbl.r0} r1=${tbl.r1} span=${tbl.span}`);
+    }
 
     if (fmt === 'docx') {
         await page.evaluate(() => { const ed = document.querySelector('.oe-doc .oe-edit'); ed.textContent = 'JDOC_PROBE'; ed.dispatchEvent(new Event('input', { bubbles: true })); ed.dispatchEvent(new Event('blur', { bubbles: true })); });

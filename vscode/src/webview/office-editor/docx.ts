@@ -389,25 +389,38 @@ export class DocxEditor extends EditorBase {
         const box = h('div', { dataset: { table: '1' } });
         const tbl = h('table', { class: 'oe-tbl' });
         const rows = table.rows || [];
+        // jdoc 的表格是「压缩表示」：被 colspan/rowspan 覆盖的位置不产 cell，数组下标≠列号。
+        // 因此渲染必须按列号追踪：跳过被上方 rowspan 占用的列，再按 colspan 占列。
+        const occupied = new Set<string>(); // 'row:col' 被上方 rowspan 占用
         rows.forEach((row, ri) => {
             const tr = h('tr');
+            let col = 0;
             (row || []).forEach((cell, ci) => {
+                while (occupied.has(ri + ':' + col)) col++;
                 const isHead = !!table.header && ri === 0;
                 const cellEl = isHead ? h('th') : h('td');
                 const detail = isCellDetail(cell) ? cell : null;
-                if (detail?.colspan) cellEl.colSpan = detail.colspan;
-                if (detail?.rowspan) cellEl.rowSpan = detail.rowspan;
+                const cs = detail?.colspan || 1;
+                const rs = detail?.rowspan || 1;
+                if (cs > 1) cellEl.colSpan = cs;
+                if (rs > 1) {
+                    cellEl.rowSpan = rs;
+                    for (let k = 1; k < rs; k++) for (let c2 = 0; c2 < cs; c2++) occupied.add(ri + k + ':' + (col + c2));
+                }
                 if (detail?.fill) cellEl.style.background = detail.fill;
+                cellEl.dataset.r = String(ri);
+                cellEl.dataset.c = String(ci);
                 const { text, runs } = cellText(cell);
                 const ed = h('div', { class: 'oe-edit', contenteditable: 'true', html: runsToInner(runs, text) });
                 this.bindEditable(ed, () => this.writeCell(table, ri, ci, cell, ed));
                 cellEl.append(ed);
                 tr.append(cellEl);
+                col += cs;
             });
             tbl.append(tr);
         });
         box.append(tbl);
-        // 表格结构工具
+        // 表格结构工具（增删行列）
         const ops = h('div', { style: 'display:flex;gap:6px;margin:4px 0;' });
         ops.append(
             h('button', { class: 'oe-tb', title: '在下方添加行', html: icon('plus'), onclick: () => this.tableAddRow(table, index) }),
