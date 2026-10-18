@@ -198,6 +198,11 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pdf.worker.min.mjs')
         );
         const nonce = getNonce();
+        const oeTheme =
+            vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Dark ||
+            vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.HighContrast
+                ? 'dark'
+                : 'light';
         const csp = [
             `default-src 'none';`,
             `img-src ${webview.cspSource} data: blob:;`,
@@ -209,7 +214,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             `worker-src ${webview.cspSource} blob: data:;`
         ].join(' ');
         return `<!DOCTYPE html>
-<html lang="${vscode.env.language}">
+<html lang="${vscode.env.language}" data-oe-theme="${oeTheme}">
 <head>
 <meta charset="utf-8" />
 <meta http-equiv="Content-Security-Policy" content="${csp}" />

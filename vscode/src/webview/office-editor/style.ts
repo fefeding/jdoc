@@ -122,4 +122,23 @@ body {
 .oe-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #1f2430; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; box-shadow: var(--oe-shadow); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 50; max-width: 80%; }
 .oe-toast.show { opacity: .96; }
 .oe-toast.err { background: var(--oe-danger); }
+
+/* ---------- 深色主题（VS Code 注入 data-oe-theme，或跟随系统偏好） ---------- */
+[data-oe-theme="dark"] {
+  --oe-bg:#1b1d23; --oe-surface:#23262d; --oe-border:#343841; --oe-text:#e6e8ec; --oe-muted:#9aa1ac;
+  --oe-accent:#5b9cf5; --oe-accent-soft:#2a3b52; --oe-toolbar:#1f2228; --oe-danger:#e07a7a;
+  --oe-shadow:0 1px 2px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+}
+[data-oe-theme="dark"] .oe-edit:focus { background:#2c3340; }
+[data-oe-theme="dark"] .oe-doc table.oe-tbl th { background:#2a2e36; }
+[data-oe-theme="dark"] .oe-grid thead th,
+[data-oe-theme="dark"] .oe-grid tbody th.oe-rownum { background:#2a2e36; }
+[data-oe-theme="dark"] .oe-grid td .cell[contenteditable="true"] { background:#1f2430; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-oe-theme="light"]) {
+    --oe-bg:#1b1d23; --oe-surface:#23262d; --oe-border:#343841; --oe-text:#e6e8ec; --oe-muted:#9aa1ac;
+    --oe-accent:#5b9cf5; --oe-accent-soft:#2a3b52; --oe-toolbar:#1f2228; --oe-danger:#e07a7a;
+    --oe-shadow:0 1px 2px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.4);
+  }
+}
 `;

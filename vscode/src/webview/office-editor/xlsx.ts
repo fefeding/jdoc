@@ -91,6 +91,7 @@ export class XlsxEditor extends EditorBase {
             assets: parsed.assets as unknown[] | undefined
         };
         this.activeSheet = 0;
+        for (const s of this.model.sheets) this.recomputeSheet(s);
         this.buildToolbar();
         this.renderTabs();
         this.renderGrid();
@@ -381,7 +382,12 @@ export class XlsxEditor extends EditorBase {
             // 清空
         } else if (input.startsWith('=')) {
             cell.formula = input.slice(1);
-            cell.result = prev.result ?? null;
+            try {
+                cell.result = this.evaluateFormula(input.slice(1), sheet);
+            } catch {
+                cell.result = null;
+            }
+            this.recomputeSheet(sheet);
         } else if (input !== '' && !isNaN(Number(input)) && /^-?\d*(\.\d+)?$/.test(input)) {
             cell.value = Number(input);
         } else {
@@ -521,6 +527,159 @@ export class XlsxEditor extends EditorBase {
         sheet.frozen = rows || columns ? { rows, columns } : undefined;
         this.paintGrid();
         this.markDirty();
+    }
+
+    // ---------- 轻量公式求值 ----------
+    /** 重算一张表内所有公式单元格的 result（按行序两遍以尽量满足依赖）。 */
+    private recomputeSheet(sheet: XlsxSheet): void {
+        for (let pass = 0; pass < 2; pass++) {
+            for (const row of sheet.rows as XlsxRow[]) {
+                for (const cell of row.cells || []) {
+                    if (cell && cell.formula != null) {
+                        try {
+                            cell.result = this.evaluateFormula(cell.formula, sheet);
+                        } catch {
+                            cell.result = null;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** 求值公式（不含前导 =）：支持 + - * / ^ %、括号、单元格/区域引用、比较与常用函数。 */
+    private evaluateFormula(formula: string, sheet: XlsxSheet): number | string {
+        const src = String(formula).replace(/^=/, '');
+        const num = (v: unknown): number => {
+            const n = typeof v === 'number' ? v : parseFloat(String(v));
+            return isNaN(n) ? 0 : n;
+        };
+        type Tok = { t: 'num' | 'ref' | 'func' | 'str' | 'op'; v?: string; n?: number };
+        const toks: Tok[] = [];
+        let i = 0;
+        while (i < src.length) {
+            const ch = src[i];
+            if (ch === ' ') { i++; continue; }
+            if (/[\d.]/.test(ch)) { const m = src.slice(i).match(/^\d*\.?\d+/)!; toks.push({ t: 'num', n: parseFloat(m[0]) }); i += m[0].length; continue; }
+            if (/[A-Za-z]/.test(ch)) {
+                const word = src.slice(i).match(/^[A-Za-z]+/)![0];
+                if (src[i + word.length] === '(') { toks.push({ t: 'func', v: word.toUpperCase() }); i += word.length; continue; }
+                const dm = src.slice(i + word.length).match(/^\d+/);
+                if (dm) { toks.push({ t: 'ref', v: word.toUpperCase() + dm[0] }); i += word.length + dm[0].length; continue; }
+                toks.push({ t: 'ref', v: word.toUpperCase() }); i += word.length; continue;
+            }
+            if (ch === '"') { const end = src.indexOf('"', i + 1); toks.push({ t: 'str', v: src.slice(i + 1, end < 0 ? src.length : end) }); i = end < 0 ? src.length : end + 1; continue; }
+            if ((ch === '<' || ch === '>') && src[i + 1] === '=') { toks.push({ t: 'op', v: ch + '=' }); i += 2; continue; }
+            if (ch === '<' && src[i + 1] === '>') { toks.push({ t: 'op', v: '<>' }); i += 2; continue; }
+            if ('+-*/^%(),:='.includes(ch)) { toks.push({ t: 'op', v: ch }); i++; continue; }
+            i++;
+        }
+        let p = 0;
+        const cur = (): Tok | undefined => toks[p];
+        const eat = (v: string): boolean => { const t = cur(); if (t && t.t === 'op' && t.v === v) { p++; return true; } return false; };
+        const refVal = (ref: string): number | string => {
+            const { r, c } = fromA1(ref);
+            const row = sheet.rows[r] as XlsxRow | undefined;
+            const cell = row?.cells ? row.cells[c] : null;
+            if (!cell) return 0;
+            if (cell.value != null) return typeof cell.value === 'number' ? cell.value : String(cell.value);
+            if (cell.result != null) return cell.result as number;
+            return 0;
+        };
+        const rangeVals = (a: string, b: string): number[] => {
+            const pa = fromA1(a);
+            const pb = fromA1(b);
+            const out: number[] = [];
+            for (let r = Math.min(pa.r, pb.r); r <= Math.max(pa.r, pb.r); r++)
+                for (let c = Math.min(pa.c, pb.c); c <= Math.max(pa.c, pb.c); c++) out.push(num(refVal(colName(c + 1) + (r + 1))));
+            return out;
+        };
+        const callFunc = (name: string, args: (number | string | number[])[]): number | string => {
+            const nums: number[] = args.flatMap((x) => (Array.isArray(x) ? x : [num(x)]));
+            switch (name) {
+                case 'SUM': return nums.reduce((s, n) => s + n, 0);
+                case 'AVERAGE': return nums.length ? nums.reduce((s, n) => s + n, 0) / nums.length : 0;
+                case 'COUNT': return nums.length;
+                case 'MAX': return nums.length ? Math.max(...nums) : 0;
+                case 'MIN': return nums.length ? Math.min(...nums) : 0;
+                case 'PRODUCT': return nums.length ? nums.reduce((s, n) => s * n, 1) : 0;
+                case 'ABS': return Math.abs(num(args[0]));
+                case 'SQRT': return Math.sqrt(num(args[0]));
+                case 'INT': return Math.floor(num(args[0]));
+                case 'ROUND': { const d = args.length > 1 ? num(args[1]) : 0; const f = Math.pow(10, d); return Math.round(num(args[0]) * f) / f; }
+                case 'POWER': return Math.pow(num(args[0]), num(args[1]));
+                case 'IF': return num(args[0]) !== 0 ? (args[1] ?? 0) : (args[2] ?? 0);
+                case 'CONCATENATE': return args.map((x) => (Array.isArray(x) ? x.join('') : String(x))).join('');
+                default: return 0;
+            }
+        };
+        const expr = (): number | string | number[] => {
+            let v: number | string | number[] = addsub();
+            while (cur() && cur().t === 'op' && ['=', '<>', '<', '>', '<=', '>='].includes(cur().v!)) {
+                const op = cur().v!; p++; const r = addsub();
+                let res = false;
+                if (op === '=') res = num(v) === num(r); else if (op === '<>') res = num(v) !== num(r);
+                else if (op === '<') res = num(v) < num(r); else if (op === '>') res = num(v) > num(r);
+                else if (op === '<=') res = num(v) <= num(r); else res = num(v) >= num(r);
+                v = res ? 1 : 0;
+            }
+            return v;
+        };
+        const addsub = (): number | string | number[] => {
+            let v = muldiv();
+            while (cur() && cur().t === 'op' && (cur().v === '+' || cur().v === '-')) {
+                const op = cur().v!; p++; const r = muldiv();
+                if (op === '+') v = typeof v === 'string' || typeof r === 'string' ? String(v) + String(r) : num(v) + num(r);
+                else v = num(v) - num(r);
+            }
+            return v;
+        };
+        const muldiv = (): number | string | number[] => {
+            let v = power();
+            while (cur() && cur().t === 'op' && (cur().v === '*' || cur().v === '/')) {
+                const op = cur().v!; p++; const r = num(power());
+                v = op === '*' ? num(v) * r : r === 0 ? NaN : num(v) / r;
+            }
+            return v;
+        };
+        const power = (): number | string | number[] => {
+            let v = unary();
+            while (cur() && cur().t === 'op' && cur().v === '^') { p++; v = Math.pow(num(v), num(unary())); }
+            return v;
+        };
+        const unary = (): number | string | number[] => {
+            const t = cur();
+            if (t && t.t === 'op' && t.v === '-') { p++; return -num(unary()); }
+            if (t && t.t === 'op' && t.v === '+') { p++; return unary(); }
+            return primary();
+        };
+        const primary = (): number | string | number[] => {
+            const t = cur();
+            if (!t) return 0;
+            if (t.t === 'num') { p++; return t.n!; }
+            if (t.t === 'str') { p++; return t.v!; }
+            if (t.t === 'func') {
+                const name = t.v!; p++; eat('(');
+                const args: (number | string | number[])[] = [];
+                if (!(cur() && cur().t === 'op' && cur().v === ')')) { args.push(expr()); while (eat(',')) args.push(expr()); }
+                eat(')');
+                return callFunc(name, args);
+            }
+            if (t.t === 'ref') {
+                p++;
+                if (cur() && cur().t === 'op' && cur().v === ':') { p++; const t2 = cur(); if (t2 && t2.t === 'ref') { p++; return rangeVals(t.v!, t2.v!); } }
+                return refVal(t.v!);
+            }
+            if (t.t === 'op' && t.v === '(') { p++; const v = expr(); eat(')'); return v; }
+            p++;
+            return 0;
+        };
+        try {
+            const r = expr();
+            return Array.isArray(r) ? num(r[0]) : r;
+        } catch {
+            return 0;
+        }
     }
 
     // ---------- 合并 ----------
