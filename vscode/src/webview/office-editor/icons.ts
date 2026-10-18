@@ -38,3 +38,11 @@ const ICONS: Record<string, string> = {
 export function icon(name: string): string {
     return ICONS[name] ? S(ICONS[name]) : '';
 }
+
+/** 取图标为真实 DOM 节点（h() 的字符串子节点会按文本渲染，SVG 需走此方法）。 */
+export function iconNode(name: string): Node {
+    const t = document.createElement('template');
+    t.innerHTML = icon(name);
+    return t.content;
+}
+

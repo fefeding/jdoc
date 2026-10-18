@@ -9,7 +9,7 @@ import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
 import { createXlsxEditor, type XlsxEditor } from './xlsx';
 import { b64ToBytes, bytesToB64, h, escapeHtml } from './util';
-import { icon } from './icons';
+import { icon, iconNode } from './icons';
 import type { DocFormat, EditorMode, HostToWebview, WebviewToHost } from '../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -60,8 +60,8 @@ function buildShell(): void {
     const app = h('div', { class: 'oe' });
 
     titleEl = h('span', { class: 'oe-title' });
-    segView = h('button', { type: 'button', onclick: () => setMode('view') }, [icon('eye'), h('span', { text: '查看' })]) as HTMLButtonElement;
-    segEdit = h('button', { type: 'button', onclick: () => setMode('edit') }, [icon('pencil'), h('span', { text: '编辑' })]) as HTMLButtonElement;
+    segView = h('button', { type: 'button', onclick: () => setMode('view') }, [iconNode('eye'), h('span', { text: '查看' })]) as HTMLButtonElement;
+    segEdit = h('button', { type: 'button', onclick: () => setMode('edit') }, [iconNode('pencil'), h('span', { text: '编辑' })]) as HTMLButtonElement;
     const seg = h('div', { class: 'oe-seg' }, [segView, segEdit]);
     const top = h('div', { class: 'oe-top' }, [titleEl, h('span', { class: 'oe-spacer' }), seg]);
 
