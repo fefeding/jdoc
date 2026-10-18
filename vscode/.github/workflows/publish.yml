@@ -20,11 +20,11 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Build jdoc library (provides dist/jdoc.browser.js)
-        run: npm ci && npm run build
+        run: npm install && npm run build
         working-directory: .
 
       - name: Install extension dependencies
-        run: npm ci
+        run: npm install
         working-directory: vscode
 
       - name: Compile extension (esbuild)
