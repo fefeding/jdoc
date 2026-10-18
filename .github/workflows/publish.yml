@@ -39,7 +39,11 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT || secrets.VSCODE_TOKEN }}
 
       - name: Publish to Open VSX
-        run: npx ovsx publish --no-dependencies
+        run: npx ovsx publish --no-dependencies --skip-duplicate --pat "$OVSX_PAT"
         working-directory: vscode
         env:
-          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+          # ovsx 读取 OVSX_PAT 环境变量（不是 OVSX_TOKEN）；兼容仓库里两种 secret 命名
+          OVSX_PAT: ${{ secrets.OVSX_TOKEN || secrets.OVSX_PAT }}
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN || secrets.OVSX_PAT }}
+          # 禁止交互式提问，缺少 token 时直接失败而不是挂起
+          CI: 'true'
