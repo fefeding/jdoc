@@ -1,7 +1,7 @@
 {
   "name": "jdoc-viewer",
   "displayName": "jdoc Document Viewer",
-  "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档（由 @fefeding/jdoc 驱动）",
+  "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档，并预览 Markdown / 纯文本（由 @fefeding/jdoc 驱动）",
   "version": "0.1.1",
   "publisher": "fefeding",
   "license": "MIT",
@@ -19,7 +19,8 @@
   "main": "./dist/extension.js",
   "icon": "icon.png",
   "activationEvents": [
-    "onCustomEditor:jdoc.documentEditor"
+    "onCustomEditor:jdoc.documentEditor",
+    "onCommand:jdoc.preview"
   ],
   "contributes": {
     "customEditors": [
@@ -30,7 +31,10 @@
           { "filenamePattern": "*.pptx" },
           { "filenamePattern": "*.docx" },
           { "filenamePattern": "*.xlsx" },
-          { "filenamePattern": "*.pdf" }
+          { "filenamePattern": "*.pdf" },
+          { "filenamePattern": "*.md" },
+          { "filenamePattern": "*.markdown" },
+          { "filenamePattern": "*.txt" }
         ],
         "priority": "default"
       }
@@ -43,18 +47,36 @@
       {
         "command": "jdoc.exportCopy",
         "title": "Export Copy"
+      },
+      {
+        "command": "jdoc.preview",
+        "title": "jdoc: 用 jdoc 打开预览"
       }
     ],
     "menus": {
       "editor/title": [
         {
           "command": "jdoc.revert",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf)$/",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
           "group": "navigation"
         },
         {
           "command": "jdoc.exportCopy",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf)$/",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "jdoc.preview",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "jdoc.preview",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
           "group": "navigation"
         }
       ]

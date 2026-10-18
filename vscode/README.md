@@ -5,9 +5,14 @@ VS Code 扩展，基于 [`@fefeding/jdoc`](https://github.com/fefeding/jdoc) 在
 - **PPTX** — 幻灯片渲染（含图表），可编辑
 - **DOCX** — 文档渲染，可编辑
 - **XLSX** — 表格渲染，可编辑
-- **PDF** — 页面渲染（只读）
+- **PDF** — 页面栅格化渲染（只读，支持扫描件）
+- **Markdown**（`.md` / `.markdown`）— 排版预览（只读）
+- **纯文本**（`.txt`）— 等宽预览（只读）
 
-打开上述任意文件即自动以本扩展打开（作为默认编辑器）。支持编辑后保存到原文件（`Ctrl/Cmd+S`）、`Revert`（还原）、`Export Copy`（另存副本）。
+打开 PPTX / DOCX / XLSX / PDF 会自动以本扩展打开（作为默认编辑器）。
+Markdown / TXT 因 VS Code 内置编辑器优先级更高，需在文件上右键选择 **“jdoc: 用 jdoc 打开预览”**（命令 `jdoc.preview`），或经“打开方式”选择 `jdoc Document Editor`。
+
+支持编辑后保存到原文件（`Ctrl/Cmd+S`）、`Revert`（还原）、`Export Copy`（另存副本）。
 
 ## 开发
 

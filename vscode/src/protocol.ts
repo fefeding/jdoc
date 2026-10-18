@@ -5,7 +5,7 @@
 // VS Code 自定义编辑器里 typed-array 传输无法在 webview 端还原为 Uint8Array，
 // 直接传二进制会导致解析失败。
 
-export type DocFormat = 'pptx' | 'docx' | 'xlsx' | 'pdf';
+export type DocFormat = 'pptx' | 'docx' | 'xlsx' | 'pdf' | 'md' | 'txt';
 export type EditorMode = 'view' | 'edit';
 
 /** Webview → Host */

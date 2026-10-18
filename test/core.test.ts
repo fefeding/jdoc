@@ -108,7 +108,12 @@ describe('detectFormat：格式识别', () => {
         expect(await detectFormat(new TextEncoder().encode('PK\u0003\u0004ppt/presentation.xml'))).toBe('pptx');
     });
 
-    it('无法识别时返回 null', async () => {
-        expect(await detectFormat(new TextEncoder().encode('random bytes here'))).toBeNull();
+    it('普通文本识别为 txt（文本类格式已被支持）', async () => {
+        expect(await detectFormat(new TextEncoder().encode('random bytes here'))).toBe('txt');
+    });
+
+    it('无法识别时返回 null（含 NUL 字节且无已知魔数）', async () => {
+        const binary = new Uint8Array([0x01, 0x00, 0x02, 0x03, 0x00, 0xff]);
+        expect(await detectFormat(binary)).toBeNull();
     });
 });

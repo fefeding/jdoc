@@ -23,6 +23,19 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); fon
 .docx-body, .xlsx-body { background: #fff; border: 1px solid var(--bd); border-radius: 8px; padding: 24px; max-width: 960px; }
 .xlsx-body { padding: 8px; overflow: auto; }
 
+/* Markdown / 纯文本预览 */
+:root {
+  --jdoc-md-fg: var(--fg);
+  --jdoc-md-bd: var(--bd);
+  --jdoc-md-mut: var(--mut);
+  --jdoc-md-link: var(--pri);
+  --jdoc-md-code-bg: #f6f8fa;
+  --jdoc-md-th-bg: #f6f8fa;
+  --jdoc-md-row-bg: rgba(246,248,250,.6);
+}
+.md-body, .txt-body { background: #fff; border: 1px solid var(--bd); border-radius: 8px; padding: 28px 32px; max-width: 960px; margin: 0 auto; }
+.txt-body { padding: 16px 20px; overflow: auto; }
+
 /* PDF 页面 */
 .pdf-page { background: #fff; border: 1px solid var(--bd); border-radius: 4px; margin: 0 auto 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 16px; }
 .pdf-page .page-text { white-space: pre-wrap; word-break: break-word; }

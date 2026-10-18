@@ -1,6 +1,6 @@
 # @fefeding/jdoc
 
-文档解析与生成统一库：**PPTX / DOCX / XLSX / PDF** 四种格式一套 API，浏览器与 Node.js 双端可用。
+文档解析与生成统一库：**PPTX / DOCX / XLSX / PDF / Markdown / TXT** 多格式一套 API，浏览器与 Node.js 双端可用。
 
 ## 特性
 
@@ -235,6 +235,24 @@ rows: [
 | `jsonToPptx(doc, options?)` | `Uint8Array` |
 | `PPTXComposer` | 链式构建，`save()` 返回 `Uint8Array` |
 | `editPptx(input)` | 增删页 / 改元数据 |
+
+### Markdown / 纯文本
+
+| 函数 | 返回 |
+| --- | --- |
+| `markdownToHtml(input, options?)` | `{ html, text, metadata, messages }`，HTML 已按白名单清洗 |
+| `markdownToText(input, options?)` | 去标记后的纯文本 |
+| `textToHtml(input, options?)` | `{ html, text, messages }`，纯文本转义后包在 `<pre>` 里 |
+| `textToText(input)` | 原文（UTF-8 解码，去 BOM） |
+
+```javascript
+const { html, metadata } = await markdownToHtml(bytes);
+container.innerHTML = html;              // 自带 .jdoc-md 作用域样式，可用 includeStyle: false 关闭
+console.log(metadata?.headings);          // 标题大纲
+```
+
+`markdownToHtml` 默认允许 Markdown 内嵌的原始 HTML，但会移除 script / iframe / 事件属性与
+`javascript:` 等危险协议；传 `{ allowHtml: false }` 可让原始 HTML 全部按纯文本转义。
 
 ## 环境要求
 

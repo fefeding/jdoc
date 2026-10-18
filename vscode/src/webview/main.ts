@@ -1,4 +1,4 @@
-import { pptxToHtml, docxToHtml, xlsxToHtml } from '@fefeding/jdoc';
+import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml } from '@fefeding/jdoc';
 import { chartRenderer } from './chart-renderer';
 import { b64ToBytes, escapeHtml } from './util';
 import { baseCss } from './style';
@@ -66,13 +66,14 @@ async function renderContent(): Promise<void> {
     const content = document.getElementById('content')!;
     if (mode === 'edit') {
         // PPTX / DOCX / XLSX 已各自使用独立编辑器入口（pptx-editor.js / office-editor.js）；
-        // 能走到这里的仅 PDF，按只读处理。切走时作废进行中的 PDF 渲染任务。
+        // 能走到这里的仅 PDF / MD / TXT，按只读处理。切走时作废进行中的 PDF 渲染任务。
         pdfToken += 1;
         if (pdfDoc) {
             void pdfDoc.destroy?.();
             pdfDoc = null;
         }
-        content.innerHTML = '<div class="hint">PDF 为只读查看，暂不支持编辑。</div>';
+        const name = format === 'md' ? 'Markdown' : format === 'txt' ? '纯文本' : 'PDF';
+        content.innerHTML = `<div class="hint">${name}为只读查看，暂不支持编辑。</div>`;
         return;
     }
     try {
@@ -80,6 +81,8 @@ async function renderContent(): Promise<void> {
         else if (format === 'docx') await renderDocx(content, currentBytes);
         else if (format === 'xlsx') await renderXlsx(content, currentBytes);
         else if (format === 'pdf') await renderPdf(content, currentBytes);
+        else if (format === 'md') await renderMarkdown(content, currentBytes);
+        else if (format === 'txt') await renderText(content, currentBytes);
     } catch (err: any) {
         content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
         vscode.postMessage({ type: 'error', message: String(err?.message || err) });
@@ -118,6 +121,33 @@ async function renderXlsx(content: HTMLElement, bytes: Uint8Array): Promise<void
     const { html } = await xlsxToHtml(bytes);
     const body = document.createElement('div');
     body.className = 'xlsx-body';
+    body.innerHTML = html;
+    content.appendChild(body);
+}
+
+async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<void> {
+    const { html, messages } = await markdownToHtml(bytes);
+    const body = document.createElement('div');
+    body.className = 'md-body';
+    body.innerHTML = html;
+    content.appendChild(body);
+    // 外部环境链接在新标签页打开（webview 内无法跳转）
+    body.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach((a) => {
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+    });
+    if (messages?.length) {
+        const note = document.createElement('div');
+        note.className = 'hint';
+        note.textContent = messages.join('；');
+        content.appendChild(note);
+    }
+}
+
+async function renderText(content: HTMLElement, bytes: Uint8Array): Promise<void> {
+    const { html } = await textToHtml(bytes);
+    const body = document.createElement('div');
+    body.className = 'txt-body';
     body.innerHTML = html;
     content.appendChild(body);
 }

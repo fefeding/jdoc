@@ -159,7 +159,9 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             PowerPoint: ['pptx'],
             Word: ['docx'],
             Excel: ['xlsx'],
-            PDF: ['pdf']
+            PDF: ['pdf'],
+            Markdown: ['md', 'markdown'],
+            Text: ['txt', 'log']
         };
         const uri = await vscode.window.showSaveDialog({
             defaultUri: document.uri,
@@ -180,8 +182,13 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
     }
 
     private getWebviewHtml(webview: vscode.Webview, format: DocFormat): string {
+        // pptx -> 幻灯片编辑器；docx/xlsx -> office 编辑器；pdf/md/txt -> 只读查看器
         const scriptFile =
-            format === 'pptx' ? 'pptx-editor.js' : format === 'pdf' ? 'webview.js' : 'office-editor.js';
+            format === 'pptx'
+                ? 'pptx-editor.js'
+                : format === 'docx' || format === 'xlsx'
+                    ? 'office-editor.js'
+                    : 'webview.js';
         const scriptUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'dist', scriptFile)
         );
@@ -243,7 +250,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('jdoc.revert', () => provider.revertActive()),
-        vscode.commands.registerCommand('jdoc.exportCopy', () => provider.exportActive())
+        vscode.commands.registerCommand('jdoc.exportCopy', () => provider.exportActive()),
+        // Markdown / TXT 等文件 VS Code 有内置编辑器（内置优先级更高），
+        // 因此提供显式入口，用 jdoc 预览当前文件或资源管理器里选中的文件。
+        vscode.commands.registerCommand('jdoc.preview', async (uri?: vscode.Uri) => {
+            const target = uri || vscode.window.activeTextEditor?.document.uri;
+            if (!target) {
+                vscode.window.showInformationMessage(loc('extension.pickFile', 'Select a file to preview with jdoc.'));
+                return;
+            }
+            await vscode.commands.executeCommand('vscode.openWith', target, VIEW_TYPE);
+        })
     );
 }
 

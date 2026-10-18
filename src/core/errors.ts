@@ -7,8 +7,8 @@
  * @module core/errors
  */
 
-/** 四种支持的文件格式 */
-export type DocFormat = 'pptx' | 'docx' | 'xlsx' | 'pdf';
+/** 支持的文件格式（四类二进制 OOXML/PDF + Markdown + 纯文本） */
+export type DocFormat = 'pptx' | 'docx' | 'xlsx' | 'pdf' | 'md' | 'txt';
 
 /** 统一错误类型 */
 export class JdocError extends Error {

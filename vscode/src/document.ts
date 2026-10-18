@@ -7,6 +7,8 @@ export function formatOfUri(uri: vscode.Uri): DocFormat {
     if (ext === 'docx') return 'docx';
     if (ext === 'xlsx') return 'xlsx';
     if (ext === 'pdf') return 'pdf';
+    if (ext === 'md' || ext === 'markdown' || ext === 'mdown' || ext === 'mkd') return 'md';
+    if (ext === 'txt' || ext === 'text' || ext === 'log') return 'txt';
     return 'pptx'; // 默认按 pptx 处理未知 OOXML
 }
 
