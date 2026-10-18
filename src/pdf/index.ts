@@ -6,6 +6,7 @@
 
 import { toArrayBuffer, type DocInput } from '../core/input';
 import { wrapError } from '../core/errors';
+import type { DocAsset } from '../core/asset';
 import { parsePdf } from './parse';
 import { generatePdf } from './generate';
 import type {
@@ -27,6 +28,12 @@ export interface PdfResult {
     pageCount: number;
     /** 页面详情（取决于解析选项） */
     pages?: PdfPage[];
+    /**
+     * 内嵌资源（附件 / 页面图像），仅当 `assets` 选项非 `ignore` 时返回
+     *
+     * 附件锚点为 `kind: 'other'`，页面图像为 `kind: 'page'` 并记录页码。
+     */
+    assets?: DocAsset[];
     /** 解析提示 */
     messages: string[];
 }
@@ -49,6 +56,7 @@ export async function pdfToJson(input: DocInput, options: PdfParseOptions = {}):
             metadata: document.metadata,
             pageCount: document.pageCount,
             pages: document.pages,
+            assets: document.assets,
             messages
         };
     } catch (error) {

@@ -6,6 +6,7 @@
 
 import { wrapError } from '../core/errors';
 import type { DocInput } from '../core/input';
+import type { DocAsset } from '../core/asset';
 import { parseXlsx } from './parse';
 import { generateXlsx } from './generate';
 import { xlsxToHtmlString } from './to-html';
@@ -19,6 +20,12 @@ export interface XlsxResult {
     metadata?: XlsxMetadata;
     /** 所有工作表 */
     sheets: XlsxSheet[];
+    /**
+     * 工作簿内的二进制资源（单元格图片），仅在 `assets` 选项非 `ignore` 时返回
+     *
+     * 每项带 `anchor` 指明它落在哪张表的哪个单元格。
+     */
+    assets?: DocAsset[];
     /** 解析提示 */
     messages: string[];
 }
@@ -46,7 +53,12 @@ export async function xlsxToJson(
 ): Promise<XlsxResult> {
     try {
         const { workbook, messages } = await parseXlsx(input, options);
-        return { metadata: workbook.metadata, sheets: workbook.sheets, messages };
+        return {
+            metadata: workbook.metadata,
+            sheets: workbook.sheets,
+            assets: workbook.assets,
+            messages
+        };
     } catch (error) {
         throw wrapError('xlsx', '解析', error);
     }
@@ -69,7 +81,8 @@ export async function xlsxToHtml(
 ): Promise<XlsxHtmlResult> {
     const result = await xlsxToJson(input, options);
     const html = xlsxToHtmlString(
-        { metadata: result.metadata, sheets: result.sheets },
+        // 带上资源表，extract 模式下才能把 { assetId } 还原成 <img> 可用的地址
+        { metadata: result.metadata, sheets: result.sheets, assets: result.assets },
         { includeStyle: options.includeStyle !== false }
     );
     return { ...result, html };

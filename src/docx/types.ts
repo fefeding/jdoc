@@ -7,6 +7,8 @@
  * @module docx/types
  */
 
+import type { AssetSource, DocAsset, DocAssetMode } from '../core/asset';
+
 /** 文本级样式（对应一次 run） */
 export interface DocxRun {
     /** 文本内容 */
@@ -137,8 +139,18 @@ export interface DocxTable {
 /** 图片块 */
 export interface DocxImage {
     type: 'image';
-    /** 图片数据：data URL / base64 / 二进制 */
-    src: string | ArrayBuffer | Uint8Array;
+    /**
+     * 图片数据：data URL / base64 / 二进制，或资源引用 `{ assetId }`
+     *
+     * 解析时若 `assets` 选项为 `extract` / `both`，这里会是资源引用，
+     * 字节在 `document.assets` 中按 id 取；`inline` 模式则为内联 data URL。
+     */
+    src: string | ArrayBuffer | Uint8Array | AssetSource;
+    /**
+     * 资源 ID：当图片存放在文档资源表（`document.assets`）中时给出，
+     * 配合 `jsonToDocx` 的 `assets` 选项即可按引用写回，字节不必重复传递
+     */
+    assetId?: string;
     /** 宽度（磅） */
     width?: number;
     /** 高度（磅） */
@@ -239,6 +251,14 @@ export interface DocxDocument {
     section?: DocxSection;
     /** 内容块序列 */
     blocks: DocxBlock[];
+    /**
+     * 文档内二进制资源（图片等）
+     *
+     * 仅在解析时 `assets` 选项为 `extract` / `both` 时填充。
+     * 块上通过 `assetId` 引用这里，生成时把同一份 `assets` 传给 `jsonToDocx` 即可还原，
+     * 避免把 base64 在 JSON 里搬来搬去。
+     */
+    assets?: DocAsset[];
 }
 
 /** 解析选项 */
@@ -252,6 +272,16 @@ export interface DocxParseOptions {
     includeDefaultStyleMap?: boolean;
     /** 图片转换策略：'data-url'（内联 base64）或 'ignore'（丢弃） */
     convertImage?: 'data-url' | 'ignore';
+    /**
+     * 二进制资源（图片等）处理方式，默认 `inline`（保持既有行为，块里是 data URL）
+     *
+     * - `inline`：块上是 data URL，浏览器直接能显示，但 JSON 体积膨胀
+     * - `extract`：块上只留 `assetId`，字节进 `document.assets`，
+     *              适合后台/服务端存储与另存为（可用 `assetToNodeStream` 直接落盘）
+     * - `both`：两者都给——前端直接显示 `src`，后台按 `assetId` 拿原始字节
+     * - `ignore`：完全丢弃
+     */
+    assets?: DocAssetMode;
 }
 
 /** 解析结果（含警告信息） */
@@ -276,4 +306,17 @@ export interface DocxGenerateOptions {
     defaultFont?: string;
     /** 默认字号（磅） */
     defaultSize?: number;
+    /**
+     * 可用资源表：用于解析块上的资源引用（`{ assetId }`）
+     *
+     * 典型用法是「解析 → 改 → 生成」时把 `docxToJson` 返回的 `assets` 原样传回，
+     * 图片字节便不必转成 data URL 再从 JSON 里取回来。
+     *
+     * @example
+     * ```js
+     * const parsed = await docxToJson(file, { assets: 'extract' });
+     * const bytes  = await jsonToDocx(parsed, { assets: parsed.assets });
+     * ```
+     */
+    assets?: DocAsset[] | Record<string, DocAsset>;
 }

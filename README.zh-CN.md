@@ -79,11 +79,106 @@ URL.revokeObjectURL(url);
 | `toUint8Array(input)` / `toArrayBuffer(input)` / `bytesToBase64(bytes)` | 入参与编码工具 |
 | `parseXml(xml)` / `findAll` / `findFirst` / `attr` / `textOf` | 零依赖 XML 解析工具 |
 
+### 二进制资源（图片等）
+
+文档里的图片等二进制内容统一抽象为**资源（asset）**：一份字节 + 位置锚点。
+解析时用 `assets` 选项决定给不给独立资源表，生成时用引用写回。
+
+| 模式 | 文档结构里 | `assets` | 适用场景 |
+| --- | --- | --- | --- |
+| `inline`（DOCX/XLSX/PPTX 默认） | data URL | 无 | 浏览器直接显示，保持既有行为 |
+| `extract` | `{ assetId }` 引用 | 有 | 后台存储 / 另存为，JSON 体积小 |
+| `both`（PPTX 默认） | data URL + `assetId` | 有 | 前端显示与后端取字节并行 |
+| `ignore`（PDF 默认） | — | 无 | 完全丢弃 |
+
+各格式的默认与能力：
+
+| 格式 | 默认 | 可提取 | 锚点 `kind` |
+| --- | --- | --- | --- |
+| DOCX | `inline` | 块内图片 | `block`（表格内为 `cells[r][c]` 路径） |
+| XLSX | `ignore` | 单元格锚定图片 | `cell`（如 `Sheet1!B3`） |
+| PPTX | `both` | 元素图片（含形状填充） | `slide`（第几张幻灯片） |
+| PDF | `ignore` | 附件 + 页面图像 | `other`（附件）、`page`（页码） |
+
+> PDF 的页面图像需走一遍渲染指令，代价较高（上百页文档明显变慢），因此默认不提取；
+> 附件提取很廉价，显式开启 `assets: 'extract'` 即可一并拿到。
+
+```js
+// 解析：抽出资源，块上只留引用（DOCX / XLSX / PPTX 同理）
+const parsed = await docxToJson(file, { assets: 'extract' });
+// const sheet   = await xlsxToJson(file, { assets: 'extract' });  // 单元格图片
+// const deck    = await pptxToStandard(file, { assets: 'extract' }); // 幻灯片图片
+// const pdf     = await pdfToJson(file, { assets: 'extract' });    // 附件 + 页面图像
+parsed.assets[0];
+// {
+//   id: 'docx-0001',
+//   name: 'docx-0001.png',
+//   mime: 'image/png',
+//   data: Uint8Array,
+//   part: 'word/media/image1.png',   // 容器内原始部件路径
+//   anchor: { scope: 'docx', kind: 'block', index: 1, path: 'blocks[1]', label: '第 2 个块' }
+// }
+
+// 同一份字节，按端取最合适的形式
+assetToDataUrl(asset)      // data:image/png;base64,…      浏览器直接 <img src>
+assetToBlob(asset)         // Blob                         浏览器预览 / 下载
+assetToBase64(asset)       // base64                       存库字段
+assetToArrayBuffer(asset)  // ArrayBuffer                  底层库 / postMessage
+assetToNodeStream(asset)   // Node Readable                后台直接 pipe 落盘或转存对象存储
+assetToWebStream(asset)    // ReadableStream               fetch / Response
+
+// 生成：按引用写回，往返不必搬运 base64
+const bytes = await jsonToDocx(parsed, { assets: parsed.assets });
+```
+
+**四种格式的引用写法一致**，图片字段给 `{ assetId }` 或直接给资源对象即可：
+
+```js
+jsonToDocx({ blocks: [{ type: 'image', src: { assetId: 'docx-0001' } }] }, { assets });
+jsonToXlsx({ sheets: [{ name: 'S', rows: [['x', { image: { assetId: 'xlsx-0001' } }]] }] }, { assets });
+jsonToPptx({ slides: [{ elements: [{ type: 'image', data: { assetId: 'pptx-0001' } }] }] }, { assets });
+jsonToPdf({ elements: [{ type: 'image', src: { assetId: 'pdf-0001' } }] }, { assets });
+```
+
+- 资源表也可直接挂在文档规格上（`{ assets, blocks/elements/slides }`），无需再传选项
+- 资源缺失时 DOCX 降级为占位段落、PDF 跳过该图，均不中断整篇生成
+- PPTX 的 `extract` 模式元素上只留 `assetId`，生成时自动还原成 data URL
+
+资源是**纯数据**（不含方法），可直接 `JSON.stringify` 落库；字节单独取用。
+同一张图在文档里出现多次只存一份字节，块共享同一个 `assetId`。
+`anchor` 让「资源 ↔ 文档位置」双向可查——既能由块找图片，也能由图片反查它在第几个块 / 哪张表哪格。
+
+### 文档一体保存
+
+解析结果与资源可打成自包含的 bundle（ZIP），解压即可还原，任意机器可编辑：
+
+```js
+const zip = await packDocument({
+    format: 'docx',
+    name: '技术协议',
+    document: parsed,
+    assets: parsed.assets,
+    original: file   // 可选：一并保留原始文件
+});
+// 技术协议.jdbundle
+// ├── manifest.json      格式、名称、资源清单（含位置锚点）
+// ├── 技术协议.docx        原始文档
+// ├── document.json      解析出的结构，可回传给 jsonToDocx
+// └── assets/docx-0001.png
+
+const restored = await unpackDocument(zip);      // 解包还原结构与字节
+await listBundleAssets(zip);                     // 只列资源与其在文档中的位置
+await isDocumentBundle(bytes);                   // 判断是否为 bundle，避免误判普通文档
+
+// Node 端也能直接落成一个文件夹（便于人工查看与二次加工）
+await writeDocumentBundle(bundle, 'out/技术协议');
+```
+
 ### DOCX
 
 | 函数 | 返回 |
 | --- | --- |
-| `docxToJson(input, options?)` | `{ metadata, blocks, messages, text }` |
+| `docxToJson(input, options?)` | `{ metadata, blocks, messages, text }`，`assets: 'extract'` 时另含 `assets` |
 | `docxToHtml(input, options?)` | 上述字段 + `html`（含默认样式表） |
 | `docxToText(input)` | `string` |
 | `jsonToDocx(doc \| blocks, options?)` | `Uint8Array` |
@@ -96,7 +191,7 @@ URL.revokeObjectURL(url);
 
 | 函数 | 返回 |
 | --- | --- |
-| `xlsxToJson(input, options?)` | `{ metadata, sheets, messages }` |
+| `xlsxToJson(input, options?)` | `{ metadata, sheets, messages }`，`assets: 'extract'` 时另含 `assets` |
 | `xlsxToHtml(input, options?)` | 上述字段 + `html` |
 | `xlsxToMatrix(input, sheetName?)` | `{ headers, rows }`，适合直接喂图表库 |
 | `jsonToXlsx(workbook \| sheets, options?)` | `Uint8Array` |
@@ -120,7 +215,7 @@ rows: [
 
 | 函数 | 返回 |
 | --- | --- |
-| `pdfToJson(input, options?)` | `{ metadata, pageCount, pages, messages }` |
+| `pdfToJson(input, options?)` | `{ metadata, pageCount, pages, messages }`，`assets` 选项开启时另含 `assets` |
 | `pdfToText(input, options?)` | `string`（按页用空行分隔） |
 | `pdfInfo(input)` | `{ metadata, pageCount, pages, messages }`，不提取正文，最快 |
 | `jsonToPdf(spec, options?)` | `Uint8Array` |

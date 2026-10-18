@@ -20,6 +20,9 @@ import {
 } from '@fefeding/ppt-parser';
 import { wrapError } from '../core/errors';
 import { toArrayBuffer, type DocInput } from '../core/input';
+import type { DocAsset, DocAssetMode } from '../core/asset';
+import { extractPptxAssets } from './assets';
+import { resolvePptxAssetRefs } from './asset-refs';
 
 export type { PptxDocument } from '@fefeding/ppt-parser';
 export { PPTXShapeUtils, presetShapePath, createStore, createActions, renderChartSVG } from '@fefeding/ppt-parser';
@@ -44,6 +47,19 @@ function toUint8(result: unknown): Uint8Array {
 /** PPTX 生成选项 */
 export interface PptxGenerateOptions {
     [key: string]: unknown;
+    /**
+     * 可用资源表：用于把文档里的 `{ assetId }` 图片引用还原成 data URL
+     *
+     * ppt-parser 只认 data URL / 远程 URL，这里在调用底层库前完成解析，
+     * 因此「解析 → 改 → 生成」时可以直接复用资源表，字节不必再转成字符串搬运。
+     *
+     * @example
+     * ```js
+     * const deck = await pptxToStandard(file, { assets: 'extract' });
+     * const bytes = await jsonToPptx(deck, { assets: deck.assets });
+     * ```
+     */
+    assets?: DocAsset[] | Record<string, DocAsset>;
 }
 
 /**
@@ -86,17 +102,43 @@ export async function pptxToJson(
     }
 }
 
+/** PPTX 解析选项（在 ppt-parser 选项基础上补充资源控制） */
+export interface PptxParseOptions extends Record<string, unknown> {
+    /**
+     * 图片资源处理方式，默认 `both`
+     *
+     * ppt-parser 本身把内嵌图片以 data URL 放在元素上，这里做后处理：
+     * - `both`（默认）：保留元素上的 data URL 供直接显示，同时抽出资源表
+     * - `extract`：元素上只留 `assetId`，字节进资源表（JSON 体积小，适合后台）
+     * - `ignore`：不抽取资源
+     */
+    assets?: DocAssetMode;
+}
+
 /**
  * 解析 PPTX 为标准文档结构（与 jsonToPptx 同源，可直接往返）
  * @param input - ArrayBuffer / Uint8Array / Buffer / Blob / base64 字符串
- * @param options - 透传 ppt-parser 的解析选项
+ * @param options - 透传 ppt-parser 的解析选项，另支持 `assets` 控制图片资源
+ * @returns 标准文档结构；当 `assets` 非 `ignore` 时附带 `assets` 资源表
+ *
+ * @example
+ * ```js
+ * const doc = await pptxToStandard(file, { assets: 'extract' });
+ * doc.assets[0].anchor; // 第几张幻灯片
+ * ```
  */
 export async function pptxToStandard(
     input: DocInput,
-    options: Record<string, unknown> = {}
+    options: PptxParseOptions = {}
 ): Promise<PptxLooseResult> {
     try {
-        return await basePptxToStandard(await toArrayBuffer(input), options as never);
+        const { assets: assetOption, ...parserOptions } = options;
+        const document = await basePptxToStandard(await toArrayBuffer(input), parserOptions as never);
+        if (assetOption === 'ignore') return document;
+
+        const assets: DocAsset[] = extractPptxAssets(document, assetOption ?? 'both');
+        if (assets.length) (document as { assets?: DocAsset[] }).assets = assets;
+        return document;
     } catch (error) {
         throw wrapError('pptx', '解析', error);
     }
@@ -121,7 +163,12 @@ export async function jsonToPptx(
     options: PptxGenerateOptions = {}
 ): Promise<Uint8Array> {
     try {
-        const result = await baseJsonToPptx(presentation, { ...options, outputType: 'uint8array' });
+        // assets 不是底层库的选项，取出后不往下传
+        const { assets, ...rest } = options;
+        const { document } = resolvePptxAssetRefs(presentation, {
+            assets: assets ?? (presentation as { assets?: DocAsset[] })?.assets
+        });
+        const result = await baseJsonToPptx(document, { ...rest, outputType: 'uint8array' });
         return toUint8(result);
     } catch (error) {
         throw wrapError('pptx', '生成', error);

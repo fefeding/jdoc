@@ -28,6 +28,14 @@ import {
 } from 'docx';
 import { JdocError } from '../core/errors';
 import { bytesToBase64, toUint8Array, type DocInput } from '../core/input';
+import {
+    getAsset,
+    isAssetRef,
+    sniffMime,
+    toAssetTable,
+    type AssetTable,
+    type DocAsset
+} from '../core/asset';
 import type {
     DocxBlock,
     DocxCell,
@@ -37,7 +45,8 @@ import type {
     DocxGenerateOptions,
     DocxList,
     DocxRun,
-    DocxTable
+    DocxTable,
+    DocxImage
 } from './types';
 
 /** 磅转 dxa（1 磅 = 20 dxa） */
@@ -144,10 +153,27 @@ function buildParagraphLayout(block: DocxBlock): Record<string, unknown> {
 
 /** data URL / base64 字符串 -> { bytes, mime } */
 async function decodeImageSource(
-    src: string | ArrayBuffer | Uint8Array
+    src: DocxImage['src'],
+    assets?: AssetTable
 ): Promise<{ bytes: Uint8Array; mime: string }> {
+    // 资源引用 { assetId } / DocAsset：字节从资源表取，避免 JSON 里搬 base64
+    if (isAssetRef(src)) {
+        const ref = src as { assetId?: string; asset?: DocAsset };
+        const asset = ref.asset ?? getAsset(assets, ref.assetId);
+        if (!asset) throw new JdocError('生成 DOCX 失败：资源引用无法解析（未提供对应的 assets）', 'docx');
+        return { bytes: asset.data, mime: asset.mime || 'png' };
+    }
     if (typeof src !== 'string') {
-        return { bytes: await toUint8Array(src), mime: 'png' };
+        if (src instanceof Uint8Array || src instanceof ArrayBuffer) {
+            const bytes = await toUint8Array(src);
+            return { bytes, mime: sniffMime(bytes) };
+        }
+        // Blob / File
+        if (src && typeof (src as Blob).arrayBuffer === 'function') {
+            const bytes = new Uint8Array(await (src as Blob).arrayBuffer());
+            return { bytes, mime: (src as Blob).type || sniffMime(bytes) };
+        }
+        throw new TypeError('不支持的图片数据类型');
     }
 
     const match = /^data:([^;,]+)(;base64)?,([\s\S]*)$/.exec(src.trim());
@@ -190,11 +216,12 @@ function ptToPx(pt: number | undefined, fallback: number): number {
 /** 图片块 -> 段落数组（图片 + 可选图注） */
 async function buildImageParagraphs(
     block: Extract<DocxBlock, { type: 'image' }>,
-    style: { font?: string; size?: number }
+    style: { font?: string; size?: number },
+    assets?: AssetTable
 ): Promise<Paragraph[]> {
     const paragraphs: Paragraph[] = [];
     try {
-        const { bytes, mime } = await decodeImageSource(block.src);
+        const { bytes, mime } = await decodeImageSource(block.src, assets);
         // 未指定尺寸时用 300x150 的常见默认，避免 docx 库因 0 尺寸报错
         const width = ptToPx(block.width, 300);
         const height = ptToPx(block.height, Math.round((300 / 4) * 3));
@@ -295,7 +322,8 @@ function toBorderSpec(border: DocxCellBorder | undefined, fallbackStyle: BorderS
 async function buildTableCell(
     cell: DocxCell,
     isHeader: boolean,
-    borderSize: number
+    borderSize: number,
+    assets?: AssetTable
 ): Promise<TableCell> {
     const fallbackStyle = borderSize > 0 ? BorderStyle.SINGLE : BorderStyle.NONE;
     const fallbackColor = 'CCCCCC';
@@ -319,7 +347,7 @@ async function buildTableCell(
                 ? [{ type: 'paragraph', text: detail.text }]
                 : [];
         children = [];
-        for (const block of blocks) children.push(...(await buildBlockParagraphs(block, {})));
+        for (const block of blocks) children.push(...(await buildBlockParagraphs(block, {}, assets)));
     } else {
         // 字符串单元格需要显式包成 run；此前非表头字符串会走到空 run 分支，导致内容丢失
         const base: DocxRun[] = typeof cell === 'string'
@@ -374,14 +402,16 @@ async function buildTableCell(
 }
 
 /** 表格块 -> Table */
-async function buildTable(block: DocxTable): Promise<Table> {
+async function buildTable(block: DocxTable, assets?: AssetTable): Promise<Table> {
     const borderSize = block.borderSize === undefined ? 1 : block.borderSize;
     const hasHeader = block.header !== false && block.rows.length > 0;
 
     const rows = await Promise.all(
         block.rows.map(async (row, rowIndex) => {
             const isHeaderRow = hasHeader && rowIndex === 0;
-            const cells = await Promise.all(row.map((cell) => buildTableCell(cell ?? '', isHeaderRow, borderSize)));
+            const cells = await Promise.all(
+                row.map((cell) => buildTableCell(cell ?? '', isHeaderRow, borderSize, assets))
+            );
             return new TableRow({
                 // 首行作为表头时设置重复标题，打印多页也能带上表头
                 tableHeader: isHeaderRow,
@@ -414,7 +444,8 @@ type DocxChild = Paragraph | Table;
 /** 单个块 -> 子节点数组（部分块会展开为多段，如图片+图注） */
 async function buildBlockParagraphs(
     block: DocxBlock,
-    style: { font?: string; size?: number }
+    style: { font?: string; size?: number },
+    assets?: AssetTable
 ): Promise<DocxChild[]> {
     switch (block.type) {
         case 'heading': {
@@ -467,19 +498,19 @@ async function buildBlockParagraphs(
             return buildListParagraphs(block);
 
         case 'table':
-            return [await buildTable(block)];
+            return [await buildTable(block, assets)];
 
         case 'textBox': {
             // 文本框按其内部段落展开生成（外观还原为普通段落）
             const inner: DocxChild[] = [];
             for (const paragraph of block.paragraphs) {
-                inner.push(...(await buildBlockParagraphs(paragraph, style)));
+                inner.push(...(await buildBlockParagraphs(paragraph, style, assets)));
             }
             return inner.length ? inner : [new Paragraph({ children: [] })];
         }
 
         case 'image':
-            return buildImageParagraphs(block, style);
+            return buildImageParagraphs(block, style, assets);
 
         case 'pageBreak':
             return [new Paragraph({ children: [new PageBreak()] })];
@@ -551,6 +582,10 @@ export async function generateDocx(
         throw new JdocError('生成 DOCX 失败：缺少 blocks 内容', 'docx');
     }
 
+    // 资源表：显式传入优先，否则沿用文档自带的 assets（解析 -> 改 -> 生成零搬运）
+    const rawAssets = options.assets ?? doc.assets;
+    const assets: AssetTable = Array.isArray(rawAssets) ? toAssetTable(rawAssets) : (rawAssets || {});
+
     const style = {
         font: options.defaultFont,
         size: options.defaultSize !== undefined ? Math.round(options.defaultSize * HALF_PT_PER_PT) : undefined
@@ -559,7 +594,7 @@ export async function generateDocx(
     const children: DocxChild[] = [];
     for (const block of doc.blocks) {
         if (!block || typeof block !== 'object') continue;
-        children.push(...(await buildBlockParagraphs(block, style)));
+        children.push(...(await buildBlockParagraphs(block, style, assets)));
     }
 
     // 空文档也需要至少一个段落，否则 Word 会判定文件损坏

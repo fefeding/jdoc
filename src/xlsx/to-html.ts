@@ -6,6 +6,16 @@
  * @module xlsx/to-html
  */
 
+import {
+    assetToDataUrl,
+    getAsset,
+    isAssetRef,
+    isDocAsset,
+    sniffMime,
+    toAssetTable,
+    type AssetTable,
+    type DocAsset
+} from '../core/asset';
 import type { XlsxCell, XlsxCellObject, XlsxRow, XlsxSheet, XlsxWorkbook } from './types';
 
 /** HTML 转义 */
@@ -53,6 +63,53 @@ export function cellText(cell: XlsxCell | null | undefined): string {
     return String(obj.value);
 }
 
+/**
+ * 单元格内容 -> HTML：图片走 <img>，其余按显示文本
+ *
+ * 图片可能是内联 data URL，也可能是资源引用（回查工作簿资源表）。
+ */
+export function cellContentToHtml(cell: XlsxCell | null | undefined, assets?: AssetTable): string {
+    if (cell && typeof cell === 'object' && !Array.isArray(cell) && !(cell instanceof Date)) {
+        const obj = cell as XlsxCellObject;
+        if (obj.image) {
+            const src = resolveImageSrc(obj.image, assets);
+            const dims = [
+                obj.imageWidth ? `width="${Math.round(obj.imageWidth * (96 / 72))}"` : '',
+                obj.imageHeight ? `height="${Math.round(obj.imageHeight * (96 / 72))}"` : ''
+            ]
+                .filter(Boolean)
+                .join(' ');
+            return src ? `<img src="${escapeHtml(src)}" ${dims} alt="" style="max-width:100%"/>` : '';
+        }
+    }
+    return escapeHtml(cellText(cell));
+}
+
+/** 单元格图片 src -> 可放进 <img> 的地址 */
+function resolveImageSrc(image: NonNullable<XlsxCellObject['image']>, assets?: AssetTable): string | undefined {
+    if (typeof image === 'string') return image;
+    const resolved = resolveAssetBytesSync(image, assets);
+    return resolved;
+}
+
+/** 同步解析图片字节（HTML 渲染路径要求同步） */
+function resolveAssetBytesSync(
+    value: unknown,
+    assets?: AssetTable
+): string | undefined {
+    if (isAssetRef(value)) {
+        const ref = value as { assetId?: string; asset?: DocAsset };
+        const asset = ref.asset ?? getAsset(assets, ref.assetId);
+        return asset ? assetToDataUrl(asset) : undefined;
+    }
+    if (isDocAsset(value)) return assetToDataUrl(value);
+    if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+        const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+        return assetToDataUrl(bytes, sniffMime(bytes));
+    }
+    return undefined;
+}
+
 /** 单元格 -> inline style */
 function cellStyle(cell: XlsxCell | null | undefined): string {
     if (!cell || typeof cell !== 'object' || cell instanceof Date || Array.isArray(cell)) return '';
@@ -72,7 +129,7 @@ function cellStyle(cell: XlsxCell | null | undefined): string {
 }
 
 /** 工作表 -> HTML table */
-export function sheetToHtml(sheet: XlsxSheet): string {
+export function sheetToHtml(sheet: XlsxSheet, assets?: AssetTable): string {
     // 解析结果形式：rows 是 XlsxRow；输入形式：XlsxRowInput
     const normalized: XlsxRow[] = sheet.rows.map((row, index) => {
         if (Array.isArray(row)) {
@@ -127,7 +184,7 @@ export function sheetToHtml(sheet: XlsxSheet): string {
                     span ? ` rowspan="${span.rowspan}"` : '',
                     span && span.colspan > 1 ? ` colspan="${span.colspan}"` : ''
                 ].join('');
-                cells.push(`<td${attrs}${cellStyle(cell)}>${escapeHtml(cellText(cell))}</td>`);
+                cells.push(`<td${attrs}${cellStyle(cell)}>${cellContentToHtml(cell, assets)}</td>`);
             });
             return `<tr>${cells.join('')}</tr>`;
         })
@@ -153,8 +210,12 @@ export function xlsxToHtmlString(
     options: { includeStyle?: boolean } = {}
 ): string {
     const sheets = Array.isArray(input) ? input : input?.sheets || [];
+    const assets = Array.isArray(input) || !input?.assets?.length ? undefined : toAssetTable(input.assets);
     const body = sheets
-        .map((sheet) => `<div class="xlsx-sheet"><div class="xlsx-title">${escapeHtml(sheet.name)}</div>${sheetToHtml(sheet)}</div>`)
+        .map(
+            (sheet) =>
+                `<div class="xlsx-sheet"><div class="xlsx-title">${escapeHtml(sheet.name)}</div>${sheetToHtml(sheet, assets)}</div>`
+        )
         .join('');
     const style = options.includeStyle === false ? '' : `<style>${XLSX_HTML_STYLE}</style>`;
     return `${style}<div class="xlsx-wrap">${body}</div>`;

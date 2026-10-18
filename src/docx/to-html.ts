@@ -6,12 +6,22 @@
  * @module docx/to-html
  */
 
+import {
+    assetToDataUrl,
+    getAsset,
+    isAssetRef,
+    sniffMime,
+    toAssetTable,
+    type AssetTable,
+    type DocAsset
+} from '../core/asset';
 import type {
     DocxBlock,
     DocxCell,
     DocxCellBorder,
     DocxCellDetail,
     DocxDocument,
+    DocxImage,
     DocxListItem,
     DocxRun,
     DocxTable
@@ -84,19 +94,21 @@ function borderSideToCss(side: string, border: DocxCellBorder | undefined, fallb
 }
 
 /** 单元格内容 -> HTML（字符串 / 富文本 / 多段落对象） */
-function cellContentToHtml(cell: DocxCell): string {
+function cellContentToHtml(cell: DocxCell, assets?: AssetTable): string {
     if (typeof cell === 'string') return escapeWithBreaks(cell);
     if (Array.isArray(cell)) return cell.map(runToHtml).join('');
     const detail = cell as DocxCellDetail;
-    if (detail.blocks && detail.blocks.length) return detail.blocks.map(blockToHtml).join('');
+    if (detail.blocks && detail.blocks.length) {
+        return detail.blocks.map((block) => blockToHtml(block, assets)).join('');
+    }
     if (detail.runs && detail.runs.length) return detail.runs.map(runToHtml).join('');
     return escapeWithBreaks(detail.text || '');
 }
 
 /** 单元格 -> td/th（含合并、边框、底纹、对齐、列宽） */
-function cellToHtml(cell: DocxCell, isHeader: boolean, defaultBorder: string): string {
+function cellToHtml(cell: DocxCell, isHeader: boolean, defaultBorder: string, assets?: AssetTable): string {
     const tag = isHeader ? 'th' : 'td';
-    const content = cellContentToHtml(cell);
+    const content = cellContentToHtml(cell, assets);
     const styles: string[] = [];
 
     const detail = typeof cell === 'object' && cell !== null && !Array.isArray(cell)
@@ -132,7 +144,7 @@ function cellToHtml(cell: DocxCell, isHeader: boolean, defaultBorder: string): s
 }
 
 /** 表格 -> HTML */
-function tableToHtml(block: DocxTable): string {
+function tableToHtml(block: DocxTable, assets?: AssetTable): string {
     const hasHeader = block.header !== false && block.rows.length > 0;
     const columnCount = block.rows.reduce((max, row) => Math.max(max, row.length), 0);
     const defaultBorder = block.borderSize === 0 ? 'none' : '1pt solid #cccccc';
@@ -147,7 +159,9 @@ function tableToHtml(block: DocxTable): string {
     const body = block.rows
         .map((row, rowIndex) => {
             const header = hasHeader && rowIndex === 0;
-            const cells = row.map((cell) => cellToHtml(cell ?? '', header, defaultBorder)).join('');
+            const cells = row
+                .map((cell) => cellToHtml(cell ?? '', header, defaultBorder, assets))
+                .join('');
             return `<tr>${cells}</tr>`;
         })
         .join('');
@@ -186,7 +200,22 @@ function paragraphStyle(block: DocxBlock): string {
 }
 
 /** 单块 -> HTML */
-export function blockToHtml(block: DocxBlock): string {
+/** 图片 src -> 可放进 <img src> 的地址：内联字符串直用，资源引用回查资源表转 data URL */
+function resolveImageHtmlSrc(src: DocxImage['src'], assets?: AssetTable): string | undefined {
+    if (typeof src === 'string') return src;
+    if (isAssetRef(src)) {
+        const ref = src as { assetId?: string; asset?: DocAsset };
+        const asset = ref.asset ?? getAsset(assets, ref.assetId);
+        return asset ? assetToDataUrl(asset) : undefined;
+    }
+    if (src instanceof Uint8Array || src instanceof ArrayBuffer) {
+        const bytes = src instanceof Uint8Array ? src : new Uint8Array(src);
+        return assetToDataUrl(bytes, sniffMime(bytes));
+    }
+    return undefined;
+}
+
+export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
     switch (block.type) {
         case 'heading': {
             const level = block.level >= 1 && block.level <= 6 ? block.level : 3;
@@ -203,9 +232,11 @@ export function blockToHtml(block: DocxBlock): string {
             return `<${tag}>${block.items.map((item) => listItemToHtml(item, block.ordered)).join('')}</${tag}>`;
         }
         case 'table':
-            return tableToHtml(block);
+            return tableToHtml(block, assets);
         case 'image': {
-            if (typeof block.src !== 'string') return '';
+            // 资源引用（{ assetId }）需回查资源表取字节，转成 data URL 才能在 <img> 里显示
+            const resolved = resolveImageHtmlSrc(block.src, assets);
+            if (!resolved) return '';
             const attrs = [
                 block.width ? `width="${Math.round(block.width * (96 / 72))}"` : '',
                 block.height ? `height="${Math.round(block.height * (96 / 72))}"` : '',
@@ -213,7 +244,7 @@ export function blockToHtml(block: DocxBlock): string {
             ]
                 .filter(Boolean)
                 .join(' ');
-            const img = `<img src="${escapeHtml(block.src)}" ${attrs} style="max-width:100%"/>`;
+            const img = `<img src="${escapeHtml(resolved)}" ${attrs} style="max-width:100%"/>`;
             const caption = block.caption
                 ? `<figcaption style="text-align:center;font-size:11px;color:#666">${escapeHtml(block.caption)}</figcaption>`
                 : '';
@@ -234,7 +265,7 @@ export function blockToHtml(block: DocxBlock): string {
             }
             if (block.stroke) styles.push(`border:1px solid ${block.stroke}`);
             if (block.width) styles.push(`width:${block.width}pt`);
-            const inner = block.paragraphs.map(blockToHtml).join('');
+            const inner = block.paragraphs.map((item) => blockToHtml(item, assets)).join('');
             return `<figure class="docx-textbox" style="${escapeHtml(styles.join(';'))}">${inner}</figure>`;
         }
         case 'pageBreak':
@@ -274,7 +305,8 @@ export function docxToHtmlString(
 ): string {
     const doc = Array.isArray(input) ? undefined : input;
     const blocks = Array.isArray(input) ? input : input?.blocks || [];
-    const body = blocks.map(blockToHtml).filter(Boolean).join('\n');
+    const assets = doc?.assets?.length ? toAssetTable(doc.assets) : undefined;
+    const body = blocks.map((block) => blockToHtml(block, assets)).filter(Boolean).join('\n');
 
     // 有页面设置时还原纸张：固定页宽 + 页边距，接近 Word 的版面
     let pageOpen = '<div class="docx-body">';

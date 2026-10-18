@@ -27,8 +27,11 @@ function isNodeBuffer(value: unknown): boolean {
     return typeof Buffer !== 'undefined' && Buffer.isBuffer(value);
 }
 
-/** base64 字符串 -> Uint8Array（双端可用，不依赖 atob / Buffer） */
-function base64ToBytes(base64: string): Uint8Array {
+/**
+ * base64 字符串 -> Uint8Array（双端可用，不依赖 atob / Buffer）
+ * @param base64 - base64 字符串，允许含换行与空白
+ */
+export function base64ToBytes(base64: string): Uint8Array {
     const clean = base64.replace(/\s+/g, '');
     if (!clean) return new Uint8Array(0);
 

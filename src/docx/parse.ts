@@ -24,6 +24,12 @@ import {
     type XmlNode
 } from '../core/xml';
 import { bytesToBase64, toUint8Array, type DocInput } from '../core/input';
+import {
+    createAsset,
+    createAssetId,
+    type DocAsset,
+    type DocAssetMode
+} from '../core/asset';
 import { JdocError } from '../core/errors';
 import {
     headingLevelOf,
@@ -83,6 +89,12 @@ interface ParseContext {
     /** 图片部件路径 -> data URL */
     imageCache: Map<string, string>;
     includeImages: boolean;
+    /** 二进制资源处理方式 */
+    assetMode: DocAssetMode;
+    /** 已提取的资源（按部件路径去重，同一张图只存一份） */
+    assets: DocAsset[];
+    /** 部件路径 -> 资源 ID */
+    assetIds: Map<string, string>;
     /** 主题字体（theme1.xml），用于还原 asciiTheme/eastAsiaTheme */
     themeFonts?: ThemeFonts;
     /** 主题色板（theme1.xml），用于还原 schemeClr 引用 */
@@ -302,19 +314,119 @@ async function extractImage(
     if (!ctx.includeImages) return undefined;
 
     const path = resolveTargetPath('word', rel.target);
-    const src = await loadImageDataUrl(ctx, path);
-    if (!src) return undefined;
 
     // wp:extent 以 EMU 记录显示尺寸
     const extent = findFirst(holder, 'extent');
     const cx = extent ? Number(attr(extent, 'cx')) : NaN;
     const cy = extent ? Number(attr(extent, 'cy')) : NaN;
+    const width = Number.isFinite(cx) && cx > 0 ? Math.round((cx / EMU_PER_PT) * 100) / 100 : undefined;
+    const height = Number.isFinite(cy) && cy > 0 ? Math.round((cy / EMU_PER_PT) * 100) / 100 : undefined;
 
-    const image: DocxImage = { type: 'image', src };
-    if (Number.isFinite(cx) && cx > 0) image.width = Math.round((cx / EMU_PER_PT) * 100) / 100;
-    if (Number.isFinite(cy) && cy > 0) image.height = Math.round((cy / EMU_PER_PT) * 100) / 100;
+    const extract = ctx.assetMode === 'extract' || ctx.assetMode === 'both';
+    const image: DocxImage = { type: 'image', src: '' };
+
+    // 提取模式：字节进资源表，块上留引用（同一张图多处引用只存一份）
+    if (extract) {
+        const assetId = await registerAsset(ctx, path, { width, height, alt: altText });
+        if (!assetId) return undefined;
+        image.assetId = assetId;
+        image.src = { assetId };
+        if (ctx.assetMode === 'extract') return finishImage(image, width, height, altText);
+    }
+
+    // 内联模式（inline，或 both 的显示侧）：data URL 直接可用
+    const src = await loadImageDataUrl(ctx, path);
+    if (!src) return undefined;
+    image.src = src;
+    return finishImage(image, width, height, altText);
+}
+
+/** 统一补齐图片块的尺寸与 alt */
+function finishImage(
+    image: DocxImage,
+    width: number | undefined,
+    height: number | undefined,
+    altText: string | undefined
+): DocxImage {
+    if (width != null) image.width = width;
+    if (height != null) image.height = height;
     if (altText) image.alt = altText;
     return image;
+}
+
+/**
+ * 把 ZIP 内的图片部件注册为文档资源，返回资源 ID
+ *
+ * 按部件路径去重：同一张图在文档里出现多次时共享一个资源 ID 与一份字节。
+ */
+async function registerAsset(
+    ctx: ParseContext,
+    path: string,
+    info: { width?: number; height?: number; alt?: string }
+): Promise<string | undefined> {
+    const cached = ctx.assetIds.get(path);
+    if (cached) return cached;
+
+    const file = ctx.zip.file(path);
+    if (!file) {
+        ctx.messages.push(`图片部件缺失：${path}`);
+        return undefined;
+    }
+
+    try {
+        const data = new Uint8Array(await file.async('uint8array'));
+        const id = createAssetId('docx', ctx.assets.length + 1);
+        const asset = createAsset({
+            id,
+            data,
+            part: path,
+            anchor: { scope: 'docx', kind: 'block', index: -1 },
+            width: info.width,
+            height: info.height,
+            alt: info.alt
+        });
+        ctx.assets.push(asset);
+        ctx.assetIds.set(path, id);
+        return id;
+    } catch (error) {
+        ctx.messages.push(`图片读取失败：${path}`);
+        return undefined;
+    }
+}
+
+/**
+ * 回填资源的位置锚点：遍历块序列，为每个被引用的资源标出它属于哪个块 / 单元格
+ *
+ * 这样「资源 ↔ 文档位置」是双向可查的：既能由块找到图片字节，
+ * 也能由图片反查它在文档中的落点（例如「第 12 块 / Sheet1!B3」）。
+ */
+function assignAssetAnchors(blocks: DocxBlock[], assets: DocAsset[]): void {
+    if (!assets.length) return;
+    const index = new Map(assets.map((asset) => [asset.id, asset]));
+
+    const walk = (list: DocxBlock[], prefix: string) => {
+        list.forEach((block, i) => {
+            const path = `${prefix}[${i}]`;
+            if (block.type === 'image' && block.assetId) {
+                const asset = index.get(block.assetId);
+                if (asset) {
+                    asset.anchor = { scope: 'docx', kind: 'block', index: i, path, label: `第 ${i + 1} 个块` };
+                    if (block.width != null) asset.width ??= block.width;
+                    if (block.height != null) asset.height ??= block.height;
+                }
+            }
+            if (block.type === 'table') {
+                const rows = block.rows || [];
+                rows.forEach((row, r) => {
+                    row.forEach((cell, c) => {
+                        const detail = (cell as { detail?: { blocks?: DocxBlock[] } })?.detail;
+                        if (detail?.blocks) walk(detail.blocks, `${path}.rows[${r}].cells[${c}]`);
+                    });
+                });
+            }
+        });
+    };
+    walk(blocks, 'blocks');
 }
 
 /** 提取 wp:docPr 的 descr/title 作为 alt 文本 */
@@ -945,7 +1057,8 @@ export function blocksToText(blocks: DocxBlock[]): string {
  */
 export async function parseDocxInternal(
     input: DocInput,
-    includeImages = true
+    includeImages = true,
+    assets: DocAssetMode = 'inline'
 ): Promise<DocxParseOutput> {
     const bytes = await toUint8Array(input);
     if (bytes.byteLength < 4) {
@@ -989,6 +1102,9 @@ export async function parseDocxInternal(
         messages,
         imageCache: new Map(),
         includeImages,
+        assetMode: assets,
+        assets: [],
+        assetIds: new Map(),
         themeFonts,
         themeColors
     };
@@ -997,12 +1113,16 @@ export async function parseDocxInternal(
     const body = findFirst(roots, 'body');
     const blocks = body ? await parseBody(ctx, body) : [];
 
+    // 块解析完成后统一回填资源位置（表格单元格里的图也要能定位）
+    assignAssetAnchors(blocks, ctx.assets);
+
     const metadata = { ...parseCoreProps(coreXml), ...parseAppProps(appXml) };
     const document: DocxDocument = {
         metadata: Object.keys(metadata).length ? metadata : undefined,
         section: body ? parseSection(body) : undefined,
         blocks
     };
+    if (ctx.assets.length) document.assets = ctx.assets;
 
     return { document, messages, text: blocksToText(blocks) };
 }

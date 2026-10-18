@@ -10,6 +10,8 @@
 
 import { JdocError, wrapError } from '../core/errors';
 import { toUint8Array, type DocInput } from '../core/input';
+import type { DocAsset } from '../core/asset';
+import { extractPdfAssets } from './assets';
 import type { PdfDocument, PdfMetadata, PdfPage, PdfParseOptions, PdfTextItem } from './types';
 
 /** pdfjs 的文本项结构（避免直接依赖 pdfjs-dist 的类型声明） */
@@ -27,11 +29,16 @@ interface PdfjsPage {
     getViewport(options: { scale: number }): { width: number; height: number };
     getTextContent(): Promise<{ items: (PdfjsTextItem | unknown)[] }>;
     rotate: number;
+    getOperatorList?(): Promise<{ fnArray: number | string[]; argsArray?: unknown[][] }>;
+    objs?: { get(name: string): unknown };
+    commonObjs?: { get(name: string): unknown };
 }
 
 interface PdfjsDocument {
     numPages: number;
     getPage(pageNumber: number): Promise<PdfjsPage>;
+    getAttachments?(): Promise<unknown>;
+    getAttachmentContent?(filename: string): Promise<Uint8Array>;
     getMetadata(): Promise<{ info: Record<string, unknown> }>;
     cleanup?(): Promise<void>;
     destroy?(): Promise<void>;
@@ -239,6 +246,20 @@ export async function parsePdf(
             metadata,
             pageCount: pdf.numPages
         };
+
+        // 内嵌资源（附件 / 页面图像）：默认关闭，开启后按资源表返回
+        if (options.assets && options.assets !== 'ignore') {
+            try {
+                const assets: DocAsset[] = await extractPdfAssets(pdf as never, {
+                    mode: options.assets,
+                    maxPages: options.maxPages,
+                    pages: options.pages
+                });
+                if (assets.length) document.assets = assets;
+            } catch (error) {
+                messages.push(`内嵌资源提取失败：${(error as Error)?.message || error}`);
+            }
+        }
 
         // 仅在需要页面内容时才逐页加载，避免大文件无谓开销
         const wantsContent = options.text !== false || options.items === true;

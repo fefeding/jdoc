@@ -12,12 +12,20 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type RGB } from 'pdf-lib';
 import { JdocError, wrapError } from '../core/errors';
+import {
+    getAsset,
+    isAssetRef,
+    toAssetTable,
+    type AssetTable,
+    type DocAsset
+} from '../core/asset';
 import { toUint8Array } from '../core/input';
 import type {
     PdfDocumentSpec,
     PdfElement,
     PdfFontSet,
     PdfGenerateOptions,
+    PdfImageElement,
     PdfPageSize,
     PdfTableElement,
     PdfTextElement
@@ -230,8 +238,22 @@ function detectImageType(bytes: Uint8Array): 'png' | 'jpg' | undefined {
     return undefined;
 }
 
-/** 图片源归一化为字节 */
-async function readImageBytes(src: string | ArrayBuffer | Uint8Array): Promise<Uint8Array> {
+/**
+ * 图片源归一化为字节
+ *
+ * 支持内联 data URL / base64 / 二进制，以及资源引用 `{ assetId }`
+ * （引用需在 `jsonToPdf` 的 `assets` 里给出）。
+ */
+async function readImageBytes(
+    src: PdfImageElement['src'],
+    assets?: AssetTable
+): Promise<Uint8Array> {
+    if (isAssetRef(src)) {
+        const ref = src as { assetId?: string; asset?: DocAsset };
+        const asset = ref.asset ?? getAsset(assets, ref.assetId);
+        if (!asset) throw new TypeError('图片引用无法解析：未提供对应的 assets');
+        return asset.data;
+    }
     return toUint8Array(src as string);
 }
 
@@ -239,6 +261,8 @@ async function readImageBytes(src: string | ArrayBuffer | Uint8Array): Promise<U
 interface DrawContext {
     doc: PDFDocument;
     fonts: FontBundle;
+    /** 可用资源表：用于解析图片元素的 { assetId } 引用 */
+    assets: AssetTable;
     page: ReturnType<PDFDocument['addPage']>;
     pageHeight: number;
     contentWidth: number;
@@ -445,7 +469,7 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
 
         case 'image': {
             try {
-                const bytes = await readImageBytes(element.src);
+                const bytes = await readImageBytes(element.src, ctx.assets);
                 const kind = detectImageType(bytes);
                 if (!kind) throw new TypeError('仅支持 PNG / JPEG 图片');
                 const image: PDFImage = kind === 'png' ? await ctx.doc.embedPng(bytes) : await ctx.doc.embedJpg(bytes);
@@ -489,6 +513,10 @@ export async function generatePdf(
         const doc = await PDFDocument.create();
         const fonts = await buildFonts(doc, { ...(spec.fonts || {}), ...(options.fonts || {}) });
 
+        // 资源表：显式传入优先，否则沿用规格自带的 assets（往返零搬运）
+        const rawAssets = options.assets ?? spec.assets;
+        const assets: AssetTable = Array.isArray(rawAssets) ? toAssetTable(rawAssets) : (rawAssets || {});
+
         // 未内嵌字体时提前拦下中文，避免输出空白方块
         if (!fonts.embedded) {
             for (const element of collectElements(spec)) {
@@ -530,6 +558,7 @@ export async function generatePdf(
             const ctx: DrawContext = {
                 doc,
                 fonts,
+                assets,
                 page,
                 pageHeight,
                 contentWidth: pageWidth - margin.left - margin.right,
@@ -565,6 +594,7 @@ export async function generatePdf(
             let ctx: DrawContext = {
                 doc,
                 fonts,
+                assets,
                 page,
                 pageHeight,
                 contentWidth: pageWidth - margin.left - margin.right,

@@ -9,6 +9,7 @@
 
 import { wrapError } from '../core/errors';
 import type { DocInput } from '../core/input';
+import type { DocAsset, DocAssetMode } from '../core/asset';
 import { blocksToText, parseDocxInternal } from './parse';
 import { generateDocx } from './generate';
 import { docxToHtmlString } from './to-html';
@@ -35,6 +36,12 @@ export interface DocxParseResult {
     messages: string[];
     /** 全文纯文本 */
     text: string;
+    /**
+     * 文档内二进制资源（图片等），仅在 `assets` 选项为 `extract` / `both` 时返回
+     *
+     * 每项带 `anchor` 指明它在文档中的位置，块上通过 `assetId` 引用。
+     */
+    assets?: DocAsset[];
 }
 
 /** HTML 解析结果 */
@@ -50,6 +57,22 @@ export interface DocxToJsonOptions extends DocxParseOptions {
      * 默认 true；显式关闭可显著减小返回体积。
      */
     includeImages?: boolean;
+    /**
+     * 二进制资源处理方式，默认 `inline`（块里是 data URL）
+     *
+     * - `inline`：内联 data URL，浏览器直接显示
+     * - `extract`：字节进 `assets`，块上只留 `assetId`（JSON 体积小，适合后台存储）
+     * - `both`：两者都给
+     * - `ignore`：丢弃
+     *
+     * @example
+     * ```js
+     * const { blocks, assets } = await docxToJson(file, { assets: 'extract' });
+     * // 后台落盘
+     * for (const a of assets) await writeFile(a.name, assetToNodeStream(a));
+     * ```
+     */
+    assets?: DocAssetMode;
 }
 
 /** docxToHtml 的可选项 */
@@ -74,9 +97,13 @@ export async function docxToJson(
     options: DocxToJsonOptions = {}
 ): Promise<DocxParseResult> {
     try {
-        const output = await parseDocxInternal(input, options.includeImages !== false);
-        const { metadata, blocks, section } = output.document;
-        return { metadata, section, blocks, messages: output.messages, text: output.text };
+        const output = await parseDocxInternal(
+            input,
+            options.includeImages !== false,
+            options.assets ?? 'inline'
+        );
+        const { metadata, blocks, section, assets } = output.document;
+        return { metadata, section, blocks, assets, messages: output.messages, text: output.text };
     } catch (error) {
         throw wrapError('docx', '解析', error);
     }
@@ -99,13 +126,18 @@ export async function docxToHtml(
     options: DocxToHtmlOptions = {}
 ): Promise<DocxHtmlResult> {
     try {
-        const output = await parseDocxInternal(input, options.includeImages !== false);
-        const { metadata, blocks, section } = output.document;
+        const output = await parseDocxInternal(
+            input,
+            options.includeImages !== false,
+            options.assets ?? 'inline'
+        );
+        const { metadata, blocks, section, assets } = output.document;
+        // HTML 预览一律用内联 data URL，否则 <img> 没有可加载的地址
         const html = docxToHtmlString(
-            { metadata, section, blocks },
+            assets?.length ? { metadata, section, blocks, assets } : { metadata, section, blocks },
             { includeStyle: options.includeStyle !== false }
         );
-        return { html, metadata, section, blocks, messages: output.messages, text: output.text };
+        return { html, metadata, section, blocks, assets, messages: output.messages, text: output.text };
     } catch (error) {
         throw wrapError('docx', '解析', error);
     }

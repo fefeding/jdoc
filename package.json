@@ -31,6 +31,7 @@
     "test:run": "vitest run --no-cache",
     "test:coverage": "vitest run --coverage --no-cache",
     "prepublishOnly": "npm run build",
+    "dev": "concurrently -n build,examples -c blue,green \"rollup -c rollup.config.mjs -w --environment development\" \"vite --config vite.examples.config.ts\"",
     "examples": "vite --config vite.examples.config.ts",
     "examples:build": "vite build --config vite.examples.config.ts"
   },
@@ -47,7 +48,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@fefeding/ppt-parser": "^1.0.27",
+    "@fefeding/ppt-parser": "1.0.28",
     "docx": "^9.12.0",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
@@ -58,6 +59,7 @@
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^25.0.8",
+    "concurrently": "^9.1.0",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^15.3.1",
     "@rollup/plugin-terser": "^0.4.4",

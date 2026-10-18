@@ -14,6 +14,8 @@ import { toUint8Array, type DocInput } from './core/input';
 export * from './core/errors';
 export * from './core/input';
 export * from './core/xml';
+export * from './core/asset';
+export * from './core/bundle';
 
 export * from './pptx/index';
 export * from './docx/index';

@@ -10,6 +10,15 @@
 import ExcelJS from 'exceljs';
 import { wrapError } from '../core/errors';
 import { toUint8Array, type DocInput } from '../core/input';
+import {
+    assetToDataUrl,
+    createAsset,
+    createAssetId,
+    mimeOf,
+    sniffMime,
+    type DocAsset,
+    type DocAssetMode
+} from '../core/asset';
 import type {
     XlsxBorderStyle,
     XlsxCellObject,
@@ -211,7 +220,85 @@ function readMetadata(workbook: ExcelJS.Workbook): XlsxMetadata {
 }
 
 /** 读取单个工作表 */
-function readSheet(worksheet: ExcelJS.Worksheet, options: XlsxParseOptions): XlsxSheet {
+/**
+ * 读取工作表内嵌图片，挂到对应单元格并收集为资源
+ *
+ * exceljs 的 `worksheet.getImages()` 给出每张图的左上角锚点，
+ * 资源表按媒体 id 去重，锚点记录「哪张表的哪个单元格」。
+ */
+function readSheetImages(
+    worksheet: ExcelJS.Worksheet,
+    sheet: XlsxSheet,
+    ctx: { assets: DocAsset[]; byId: Map<string, string>; mode: DocAssetMode }
+): void {
+    if (ctx.mode === 'ignore') return;
+    const images = worksheet.getImages();
+    if (!images?.length) return;
+
+    // exceljs 的 workbook.media 是数组，下标即 imageId（旧版本可能是 Map，这里兼容两种）
+    const rawMedia = (worksheet.workbook as unknown as {
+        media?: Array<{ type?: string; extension?: string; buffer?: Uint8Array }> | Map<number, { type?: string; extension?: string; buffer?: Uint8Array }>;
+    }).media;
+    const lookupMedia = (id: number) =>
+        Array.isArray(rawMedia)
+            ? rawMedia[id]
+            : (rawMedia as Map<number, { type?: string; extension?: string; buffer?: Uint8Array }>)?.get(id);
+
+    for (const image of images) {
+        // exceljs 的类型把 imageId 声明为 string，而 media 表以 number 为键
+        const mediaId = Number(image.imageId);
+        const entry = lookupMedia(mediaId);
+        const bytes = entry?.buffer ? new Uint8Array(entry.buffer) : undefined;
+        if (!bytes || bytes.byteLength === 0) continue;
+
+        const tl = image.range?.tl;
+        // exceljs 的 tl.col / tl.row 为 0 基，这里转成 1 基的行列号
+        const rowNo = (tl?.row ?? 0) + 1;
+        const colNo = (tl?.col ?? 0) + 1;
+        // exceljs 的 type 只是 'image' 这类粗粒度标记，需补全为完整 MIME
+        const rawType = entry?.type && entry.type.includes('/') ? entry.type : '';
+        const mime =
+            rawType ||
+            mimeOf(entry?.extension ? `x.${entry.extension}` : '', '') ||
+            sniffMime(bytes);
+        const id = createAssetId('xlsx', ctx.assets.length + 1);
+        const asset = createAsset({
+            id,
+            data: bytes,
+            mime,
+            part: `xl/media/${mediaId}.${entry?.extension || 'png'}`,
+            anchor: {
+                scope: 'xlsx',
+                kind: 'cell',
+                index: rowNo,
+                path: `${sheet.name}!${columnLetter(colNo)}${rowNo}`,
+                label: `${sheet.name}!${columnLetter(colNo)}${rowNo}`
+            }
+        });
+        ctx.assets.push(asset);
+        ctx.byId.set(String(mediaId), id);
+
+        // 挂到锚定单元格：单元格内容为空时才用图片占位，已有值则保留文字
+        const target = sheet.rows[rowNo - 1] as XlsxRow | undefined;
+        if (!target) continue;
+        const cells = (target.cells ||= []);
+        const cell = (cells[colNo - 1] ||= {});
+        const dataUrl = ctx.mode === 'extract' ? { assetId: id } : assetToDataUrl(asset);
+        cell.image = dataUrl as never;
+        cell.assetId = id;
+        // exceljs 的 ImageRange 类型只声明 tl/br，ext（像素尺寸）为可选扩展信息
+        const ext = (image.range as { ext?: { width?: number; height?: number } } | undefined)?.ext;
+        // 像素 -> 磅（96dpi）
+        if (ext?.width) cell.imageWidth = Math.round(ext.width * 0.75);
+        if (ext?.height) cell.imageHeight = Math.round(ext.height * 0.75);
+    }
+}
+
+function readSheet(worksheet: ExcelJS.Worksheet, options: XlsxParseOptions, ctx?: {
+    assets: DocAsset[];
+    byId: Map<string, string>;
+    mode: DocAssetMode;
+}): XlsxSheet {
     const rows: XlsxRow[] = [];
 
     worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
@@ -256,6 +343,8 @@ function readSheet(worksheet: ExcelJS.Worksheet, options: XlsxParseOptions): Xls
     if (worksheet.state === 'hidden' || worksheet.state === 'veryHidden') sheet.hidden = true;
     if (worksheet.pageSetup?.orientation === 'landscape') sheet.orientation = 'landscape';
 
+    if (ctx) readSheetImages(worksheet, sheet, ctx);
+
     return sheet;
 }
 
@@ -277,11 +366,16 @@ export async function parseXlsx(
         // exceljs 需要 ArrayBuffer 或其视图，不能直接传 Blob
         await workbook.xlsx.load(bytes as unknown as ArrayBuffer);
 
+        const assetCtx = {
+            assets: [] as DocAsset[],
+            byId: new Map<string, string>(),
+            mode: (options.assets ?? 'ignore') as DocAssetMode
+        };
         const wanted = options.sheets?.length ? new Set(options.sheets) : undefined;
         const sheets: XlsxSheet[] = [];
         for (const worksheet of workbook.worksheets) {
             if (wanted && !wanted.has(worksheet.name)) continue;
-            sheets.push(readSheet(worksheet, options));
+            sheets.push(readSheet(worksheet, options, assetCtx));
         }
         if (wanted) {
             for (const name of wanted) {
@@ -290,7 +384,9 @@ export async function parseXlsx(
         }
 
         const metadata = readMetadata(workbook);
-        return { workbook: { metadata, sheets }, messages };
+        const result: XlsxWorkbook = { metadata, sheets };
+        if (assetCtx.assets.length) result.assets = assetCtx.assets;
+        return { workbook: result, messages };
     } catch (error) {
         throw wrapError('xlsx', '解析', error);
     }

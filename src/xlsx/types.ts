@@ -1,3 +1,5 @@
+import type { AssetSource, DocAsset, DocAssetMode } from '../core/asset';
+
 /**
  * XLSX 工作簿结构类型定义
  *
@@ -72,6 +74,19 @@ export interface XlsxCellObject {
     style?: XlsxCellStyle;
     /** 注释 */
     note?: string;
+    /**
+     * 单元格内嵌图片
+     *
+     * 可给 data URL / base64 / 二进制，或资源引用 `{ assetId }`（配合工作簿的 `assets`）。
+     * 图片会按单元格锚定，与 Excel 中的浮动图片一致。
+     */
+    image?: AssetSource;
+    /** 图片资源 ID（存放在工作簿 `assets` 中时给出） */
+    assetId?: string;
+    /** 图片显示宽度（磅） */
+    imageWidth?: number;
+    /** 图片显示高度（磅） */
+    imageHeight?: number;
 }
 
 /** 单元格：值简写或对象形式 */
@@ -143,10 +158,26 @@ export interface XlsxMetadata {
 export interface XlsxWorkbook {
     metadata?: XlsxMetadata;
     sheets: XlsxSheet[];
+    /**
+     * 工作簿内的二进制资源（图片等）
+     *
+     * 单元格通过 `image` 字段引用（`{ assetId }` 或内联数据），
+     * 每项带 `anchor` 指明它落在哪张表的哪个单元格。
+     */
+    assets?: DocAsset[];
 }
 
 /** 解析选项 */
 export interface XlsxParseOptions {
+    /**
+     * 二进制资源（单元格图片）处理方式，默认 `inline`
+     *
+     * - `inline`：单元格里放 data URL
+     * - `extract`：字节进 `workbook.assets`，单元格只留 `{ assetId }` 引用
+     * - `both`：两者都给
+     * - `ignore`：丢弃（默认不解析图片时保持原有行为）
+     */
+    assets?: DocAssetMode;
     /** 指定要解析的表名；缺省解析全部 */
     sheets?: string[];
     /** 是否把超链接作为单元格属性返回，默认 true */
@@ -175,4 +206,10 @@ export interface XlsxGenerateOptions {
     created?: string;
     /** 是否压缩输出，默认 true */
     zip?: boolean;
+    /**
+     * 可用资源表：用于解析单元格上的 `{ assetId }` 图片引用
+     *
+     * 「解析 → 改 → 生成」时把 `xlsxToJson` 返回的 `assets` 原样传回即可。
+     */
+    assets?: DocAsset[] | Record<string, DocAsset>;
 }

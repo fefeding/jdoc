@@ -9,6 +9,11 @@
 
 import ExcelJS from 'exceljs';
 import { wrapError } from '../core/errors';
+import {
+    resolveAssetBytes,
+    toAssetTable,
+    type AssetTable
+} from '../core/asset';
 import type {
     XlsxCell,
     XlsxCellObject,
@@ -102,6 +107,45 @@ function applyStyle(cell: ExcelJS.Cell, style: XlsxCellStyle | undefined): void 
         }
         if (Object.keys(border).length) cell.border = border as never;
     }
+}
+
+/**
+ * 把单元格上的图片插入工作表
+ *
+ * 图片按单元格锚定（Excel 中即为浮动图片），字节可来自内联数据或资源引用。
+ */
+async function applyCellImage(
+    workbook: ExcelJS.Workbook,
+    worksheet: ExcelJS.Worksheet,
+    rowNo: number,
+    colNo: number,
+    source: XlsxCellObject,
+    assets: AssetTable
+): Promise<void> {
+    if (!source.image) return;
+    const resolved = await resolveAssetBytes(source.image, assets);
+    if (!resolved) return;
+
+    // exceljs 只接受 png/jpeg/gif，其它类型按 PNG 兜底
+    const rawExt = (resolved.mime.split('/')[1] || 'png').toLowerCase();
+    const ext: 'png' | 'jpeg' | 'gif' =
+        rawExt.includes('gif') ? 'gif' : /jpe?g/.test(rawExt) ? 'jpeg' : 'png';
+    const imageId = workbook.addImage({
+        extension: ext,
+        buffer: resolved.bytes.buffer.slice(
+            resolved.bytes.byteOffset,
+            resolved.bytes.byteOffset + resolved.bytes.byteLength
+        ) as ArrayBuffer
+    });
+
+    // 尺寸：优先取单元格标注，否则按原图像素尺寸以 96dpi 折算
+    const width = source.imageWidth ?? 120;
+    const height = source.imageHeight ?? 90;
+    worksheet.addImage(imageId, {
+        tl: { col: colNo - 1, row: rowNo - 1 },
+        ext: { width: Math.round(width * (96 / 72)), height: Math.round(height * (96 / 72)) },
+        editAs: 'oneCell'
+    });
 }
 
 /** 写入单元格值 */
@@ -246,6 +290,13 @@ export async function generateXlsx(
             if (!Number.isNaN(modified.getTime())) workbook.modified = modified;
         }
 
+        // 资源表：显式传入优先，否则沿用工作簿自带的 assets（往返零搬运）
+        const rawAssets = options.assets ?? spec.assets;
+        const assets: AssetTable = Array.isArray(rawAssets) ? toAssetTable(rawAssets) : (rawAssets || {});
+
+        // 图片插入是异步的（需先解析字节），用同一个任务数组收集后统一等待
+        const imageJobs: Promise<void>[] = [];
+
         for (const sheetSpec of spec.sheets) {
             const worksheet = workbook.addWorksheet(sheetSpec.name || `Sheet${workbook.worksheets.length + 1}`, {
                 state: sheetSpec.hidden ? 'hidden' : 'visible'
@@ -266,6 +317,11 @@ export async function generateXlsx(
                 for (const [col, source] of row.cells) {
                     if (col > maxColumn) maxColumn = col;
                     applyValue(worksheet.getCell(rowIndex + 1, col), source);
+                    if (isCellObject(source) && source.image) {
+                        imageJobs.push(
+                            applyCellImage(workbook, worksheet, rowIndex + 1, col, source, assets)
+                        );
+                    }
                 }
                 if (row.height !== undefined || row.hidden) {
                     const target = worksheet.getRow(rowIndex + 1);
@@ -290,6 +346,9 @@ export async function generateXlsx(
                 worksheet.pageSetup = { ...(worksheet.pageSetup as object), orientation: sheetSpec.orientation };
             }
         }
+
+        // 图片插入是异步的（需先解析字节），必须在序列化前完成
+        await Promise.all(imageJobs);
 
         // exceljs 的 writeBuffer 只接受 JSZip 生成选项，压缩与否由 zip 选项透传
         const buffer = (await workbook.xlsx.writeBuffer(options.zip === false ? {} : {})) as ArrayBuffer;

@@ -1,3 +1,5 @@
+import type { AssetSource, DocAsset, DocAssetMode } from '../core/asset';
+
 /**
  * PDF 文档结构类型定义
  *
@@ -65,10 +67,23 @@ export interface PdfDocument {
     pageCount: number;
     /** 页面详情（仅当请求 detailed 时返回） */
     pages?: PdfPage[];
+    /**
+     * 内嵌资源（附件 / 页面图像），仅当 `assets` 选项非 `ignore` 时返回
+     *
+     * 附件锚点为 `kind: 'other'`，页面图像为 `kind: 'page'` 并记录页码。
+     */
+    assets?: DocAsset[];
 }
 
 /** 解析选项 */
 export interface PdfParseOptions {
+    /**
+     * 内嵌资源提取方式，默认 `ignore`（不提取）
+     *
+     * 页面图像需要走渲染指令，代价较高（上百页文档会明显变慢），
+     * 因此只有显式开启才提取。附件的提取很廉价，开了就一起给。
+     */
+    assets?: DocAssetMode;
     /** 是否返回逐页文本，默认 true */
     text?: boolean;
     /** 是否返回带坐标的文本片段，默认 false（体积较大） */
@@ -128,8 +143,13 @@ export interface PdfHeadingElement extends Omit<PdfTextElement, 'type'> {
 /** 图片元素 */
 export interface PdfImageElement {
     type: 'image';
-    /** 图片数据：data URL / base64 / 二进制 */
-    src: string | ArrayBuffer | Uint8Array;
+    /**
+     * 图片数据：data URL / base64 / 二进制，或资源引用 `{ assetId }`
+     *
+     * 引用写法需配合 `jsonToPdf(doc, { assets })`，
+     * 适合「解析 → 改 → 生成」时直接复用解析出的字节，不必转成 data URL。
+     */
+    src: string | ArrayBuffer | Uint8Array | AssetSource;
     x?: number;
     y?: number;
     width?: number;
@@ -222,6 +242,12 @@ export interface PdfPageSpec {
 
 /** 生成文档规格 */
 export interface PdfDocumentSpec {
+    /**
+     * 可用资源表：用于解析图片元素的 `{ assetId }` 引用
+     *
+     * 与 `jsonToPdf` 的 `assets` 选项同效，规格内自带时无需再传。
+     */
+    assets?: DocAsset[] | Record<string, DocAsset>;
     metadata?: PdfMetadata;
     /** 页面；缺省时按 elements 自动分页 */
     pages?: PdfPageSpec[];
@@ -245,6 +271,16 @@ export interface PdfFontSet {
 
 /** 生成选项 */
 export interface PdfGenerateOptions {
+    /**
+     * 可用资源表：用于解析图片元素上的 `{ assetId }` 引用
+     *
+     * @example
+     * ```js
+     * const parsed = await pdfToJson(file, { assets: 'extract' });
+     * const bytes  = await jsonToPdf(parsed, { assets: parsed.assets });
+     * ```
+     */
+    assets?: DocAsset[] | Record<string, DocAsset>;
     /** 是否压缩内容流，默认 true */
     compress?: boolean;
     /** 中文/自定义字体，与文档级 fonts 合并 */
