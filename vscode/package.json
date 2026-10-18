@@ -2,7 +2,7 @@
   "name": "jdoc-viewer",
   "displayName": "jdoc Document Viewer",
   "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档（由 @fefeding/jdoc 驱动）",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "fefeding",
   "license": "MIT",
   "repository": {
