@@ -97,8 +97,8 @@ async function run(fmt) {
         let hText = (bb) => { const x = p.blocks.find((b) => b.type === 'heading'); return x ? (x.text ?? (x.runs || []).map((r) => r.text || '').join('')) : ''; };
         check('DOCX 文本编辑往返', hText() === 'JDOC_PROBE', `heading="${hText()}"`);
         await page.click('.oe-toolbar .oe-tb[title*="撤销"]'); await page.waitForTimeout(700);
-        p = await jdoc.docxToJson(Buffer.from(await lastSync(), 'base64'));
-        check('DOCX 撤销恢复', hText() === '季度报告', `heading="${hText()}"`);
+        const usd = await page.evaluate(() => { const s = (window.__POSTS__ || []).filter((m) => m && m.type === 'sync'); const l = s[s.length - 1]; return l ? { bytes: l.bytes, dirty: l.dirty } : null; });
+        check('DOCX 撤销回最初(放弃编辑 sync null)', !!usd && usd.bytes === null && usd.dirty === false, JSON.stringify(usd));
     } else {
         // 单元格编辑 + 公式求值
         await page.evaluate(() => { const td = document.querySelector('.oe-grid td[data-r="1"][data-c="1"]'); td.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); const c = document.querySelector('.oe-grid td[data-r="1"][data-c="1"] .cell'); if (c) { c.textContent = '500'; c.dispatchEvent(new Event('blur', { bubbles: true })); } });
@@ -106,11 +106,10 @@ async function run(fmt) {
         let p = await jdoc.xlsxToJson(Buffer.from(await lastSync(), 'base64'));
         const b2 = (p.sheets[0].rows[1]?.cells || [])[1];
         check('XLSX 单元格编辑往返', (b2?.value ?? b2?.text) === 500, `B2=${b2?.value}`);
-        // 撤销恢复
+        // 撤销恢复（一次编辑后 undo 即回最初态 → 放弃编辑 sync bytes:null）
         await page.click('.oe-toolbar .oe-tb[title*="撤销"]'); await page.waitForTimeout(700);
-        p = await jdoc.xlsxToJson(Buffer.from(await lastSync(), 'base64'));
-        const b2u = (p.sheets[0].rows[1]?.cells || [])[1];
-        check('XLSX 撤销恢复', (b2u?.value ?? b2u?.text) === 100, `B2=${b2u?.value}`);
+        const usx = await page.evaluate(() => { const s = (window.__POSTS__ || []).filter((m) => m && m.type === 'sync'); const l = s[s.length - 1]; return l ? { bytes: l.bytes, dirty: l.dirty } : null; });
+        check('XLSX 撤销回最初(放弃编辑 sync null)', !!usx && usx.bytes === null && usx.dirty === false, JSON.stringify(usx));
     }
 
     const stacks = await page.evaluate(() => window.__ERRS__ || []);

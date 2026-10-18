@@ -20,6 +20,8 @@ let mode: EditorMode = 'view';
 let docTitle = 'document';
 let dirty = false;
 let latest: Uint8Array = new Uint8Array(0);
+let original: Uint8Array = new Uint8Array(0);
+let gen = 0; // init 代数：丢弃过期的异步 applyMode 结果，防快速切换竞态
 
 let editor: DocxEditor | XlsxEditor | null = null;
 let root: HTMLElement;
@@ -35,10 +37,17 @@ function post(msg: WebviewToHost): void {
 }
 
 const hooks = {
-    onSync: (bytes: Uint8Array): void => {
-        latest = bytes;
-        dirty = true;
-        post({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
+    onSync: (bytes: Uint8Array | null): void => {
+        if (bytes === null) {
+            // 放弃编辑回到导入态
+            latest = original;
+            dirty = false;
+            post({ type: 'sync', bytes: null, dirty: false });
+        } else {
+            latest = bytes;
+            dirty = true;
+            post({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
+        }
         updateTitle();
     },
     onToast: (message: string, kind?: 'info' | 'warn' | 'error'): void => toast(message, kind)
@@ -150,20 +159,24 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
     if (!msg || typeof msg !== 'object') return;
     switch (msg.type) {
         case 'init': {
+            const my = ++gen; // 丢弃此后被更新的 init 所取代的异步结果
             format = msg.format;
             mode = msg.mode === 'edit' ? 'edit' : 'view';
             docTitle = msg.title || docTitle;
             dirty = msg.dirty;
             latest = b64ToBytes(msg.bytes);
+            original = latest;
             if (editor) {
                 editor.destroy();
                 editor = null;
             }
             await applyMode();
+            if (my !== gen) return;
             break;
         }
         case 'bytes': {
             latest = b64ToBytes(msg.bytes);
+            original = latest;
             dirty = msg.dirty;
             if (mode === 'view') await enterView();
             updateTitle();

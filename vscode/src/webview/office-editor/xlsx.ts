@@ -176,7 +176,8 @@ export class XlsxEditor extends EditorBase {
         this.renderTabs();
         this.paintGrid();
         this.updateUndoRedo();
-        this.markDirty();
+        if (this.past.length === 0) this.syncRevert();
+        else this.markDirty();
     }
     redo(): void {
         if (!this.future.length) return;
@@ -186,7 +187,8 @@ export class XlsxEditor extends EditorBase {
         this.renderTabs();
         this.paintGrid();
         this.updateUndoRedo();
-        this.markDirty();
+        if (this.past.length === 0) this.syncRevert();
+        else this.markDirty();
     }
     private updateUndoRedo(): void {
         if (this.undoBtn) this.undoBtn.disabled = !this.past.length;

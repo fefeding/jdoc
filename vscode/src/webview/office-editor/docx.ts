@@ -515,7 +515,9 @@ export class DocxEditor extends EditorBase {
         this.model.blocks = this.past.pop()!;
         this.renderAll();
         this.updateUndoRedo();
-        this.markDirty();
+        // 历史栈见底 = 回到导入态：通知 host 放弃编辑（bytes=null）而非回传相同字节
+        if (this.past.length === 0) this.syncRevert();
+        else this.markDirty();
     }
     redo(): void {
         if (!this.future.length) return;
@@ -523,7 +525,8 @@ export class DocxEditor extends EditorBase {
         this.model.blocks = this.future.pop()!;
         this.renderAll();
         this.updateUndoRedo();
-        this.markDirty();
+        if (this.past.length === 0) this.syncRevert();
+        else this.markDirty();
     }
     private updateUndoRedo(): void {
         if (this.undoBtn) this.undoBtn.disabled = !this.past.length;

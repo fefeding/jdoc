@@ -3,8 +3,8 @@
 import { debounce } from './util';
 
 export interface EditorHooks {
-    /** 编辑产出新字节（Uint8Array）；由 main 转 base64 后经 sync 回 host。 */
-    onSync(bytes: Uint8Array): void;
+    /** 编辑产出新字节；null 表示放弃编辑回到导入态（host 用原始字节并清除未保存标记）。 */
+    onSync(bytes: Uint8Array | null): void;
     onToast(message: string, kind?: 'info' | 'warn' | 'error'): void;
 }
 
@@ -81,6 +81,12 @@ export abstract class EditorBase {
 
     protected toast(message: string, kind: 'info' | 'warn' | 'error' = 'info'): void {
         this.hooks.onToast(message, kind);
+    }
+
+    /** 放弃编辑回到导入态：通知 host 用原始字节并清除未保存标记（undo 回到最初态时用）。 */
+    protected syncRevert(): void {
+        this.dirty = false;
+        this.hooks.onSync(null);
     }
 }
 
