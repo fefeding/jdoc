@@ -153,6 +153,10 @@ export class DocxEditor extends EditorBase {
     private model: DocxModel = { blocks: [] };
     private sheetEl: HTMLElement | null = null;
     private current = -1; // 选中块索引
+    private past: DocxBlock[][] = [];
+    private future: DocxBlock[][] = [];
+    private undoBtn: HTMLButtonElement | null = null;
+    private redoBtn: HTMLButtonElement | null = null;
     private fmtBtns: Record<string, HTMLButtonElement> = {};
     private savedRange: Range | null = null;
     private selHandler: (() => void) | null = null;
@@ -194,6 +198,9 @@ export class DocxEditor extends EditorBase {
         const bar = this.toolbarEl;
         if (!bar) return;
         bar.innerHTML = '';
+        this.undoBtn = h('button', { class: 'oe-tb', title: '撤销 (Ctrl+Z)', html: icon('undo'), onmousedown: (e: Event) => e.preventDefault(), onclick: () => this.undo() });
+        this.redoBtn = h('button', { class: 'oe-tb', title: '重做 (Ctrl+Shift+Z)', html: icon('redo'), onmousedown: (e: Event) => e.preventDefault(), onclick: () => this.redo() });
+        bar.append(this.undoBtn, this.redoBtn, sep());
         const sel = h('select', { class: 'oe-select', title: '块类型', onchange: (e: Event) => this.setBlockType((e.target as HTMLSelectElement).value) });
         const opts: [string, string][] = [
             ['paragraph', '正文'], ['h1', '标题 1'], ['h2', '标题 2'], ['h3', '标题 3'],
@@ -232,6 +239,7 @@ export class DocxEditor extends EditorBase {
             h('button', { class: 'oe-tb', title: '无序列表', html: icon('listUl'), onclick: () => this.insertBlock({ type: 'list', ordered: false, items: [''] }) }),
             h('button', { class: 'oe-tb', title: '有序列表', html: icon('listOl'), onclick: () => this.insertBlock({ type: 'list', ordered: true, items: [''] }) }),
             h('button', { class: 'oe-tb', title: '插入表格', html: icon('table'), onclick: () => this.insertTable() }),
+            h('button', { class: 'oe-tb', title: '插入图片', html: icon('image'), onclick: () => this.pickImage() }),
             h('button', { class: 'oe-tb', title: '分隔线', html: icon('hr'), onclick: () => this.insertBlock({ type: 'hr' }) }),
             h('button', { class: 'oe-tb', title: '分页符', html: icon('pageBreak'), onclick: () => this.insertBlock({ type: 'pageBreak' }) }),
             sep()
@@ -262,6 +270,7 @@ export class DocxEditor extends EditorBase {
         }
         doc.append(sheet);
         content.append(doc);
+        this.updateUndoRedo();
     }
 
     private renderInsertBar(afterIdx: number): HTMLElement {
@@ -438,9 +447,16 @@ export class DocxEditor extends EditorBase {
 
     private bindEditable(ed: HTMLElement, commit: () => void): void {
         (ed as { __commit?: () => void }).__commit = commit;
-        ed.addEventListener('blur', commit);
+        ed.addEventListener('blur', () => {
+            delete ed.dataset.ck;
+            commit();
+        });
         ed.addEventListener('input', () => {
             this.syncEmptyState(ed);
+            if (!ed.dataset.ck) {
+                this.checkpoint();
+                ed.dataset.ck = '1';
+            }
             this.markDirty();
         });
     }
@@ -449,6 +465,37 @@ export class DocxEditor extends EditorBase {
         const empty = (ed.innerText || '').trim() === '' && !ed.querySelector('img');
         if (empty) ed.dataset.empty = '1';
         else delete ed.dataset.empty;
+    }
+
+    // ---------- 撤销 / 重做 ----------
+    private cloneBlocks(): DocxBlock[][] {
+        return JSON.parse(JSON.stringify(this.model.blocks)) as DocxBlock[][];
+    }
+    private checkpoint(): void {
+        this.past.push(this.cloneBlocks());
+        if (this.past.length > 200) this.past.shift();
+        this.future = [];
+        this.updateUndoRedo();
+    }
+    undo(): void {
+        if (!this.past.length) return;
+        this.future.push(this.cloneBlocks());
+        this.model.blocks = this.past.pop()!;
+        this.renderAll();
+        this.updateUndoRedo();
+        this.markDirty();
+    }
+    redo(): void {
+        if (!this.future.length) return;
+        this.past.push(this.cloneBlocks());
+        this.model.blocks = this.future.pop()!;
+        this.renderAll();
+        this.updateUndoRedo();
+        this.markDirty();
+    }
+    private updateUndoRedo(): void {
+        if (this.undoBtn) this.undoBtn.disabled = !this.past.length;
+        if (this.redoBtn) this.redoBtn.disabled = !this.future.length;
     }
 
     // ---------- 选中 / 命令 ----------
@@ -534,6 +581,7 @@ export class DocxEditor extends EditorBase {
     private setBlockType(value: string): void {
         const b = this.currentBlock();
         if (!b) return;
+        this.checkpoint();
         if (value === 'quote' || value === 'code' || value === 'paragraph') {
             const text = blockText(b);
             const nb: DocxBlock = value === 'code' ? { type: 'code', text } : value === 'quote' ? { type: 'quote', text } : { type: 'paragraph', text, align: (b as DocxParagraph).align };
@@ -550,6 +598,7 @@ export class DocxEditor extends EditorBase {
     private setAlign(a: string): void {
         const b = this.currentBlock();
         if (!b || (b.type !== 'paragraph' && b.type !== 'heading' && b.type !== 'quote')) return;
+        this.checkpoint();
         (b as DocxParagraph).align = a as DocxParagraph['align'];
         // 局部更新样式，避免重建丢失焦点
         const el = this.sheetEl?.querySelector(`.oe-block[data-idx="${this.current}"] .oe-edit`) as HTMLElement | null;
@@ -558,6 +607,7 @@ export class DocxEditor extends EditorBase {
     }
 
     private insertBlock(block: DocxBlock, after = this.current): void {
+        this.checkpoint();
         const at = after < 0 ? this.model.blocks.length : after + 1;
         this.model.blocks.splice(at, 0, block);
         this.current = at;
@@ -575,10 +625,39 @@ export class DocxEditor extends EditorBase {
         this.insertBlock({ type: 'table', header: true, rows }, after);
     }
 
+    /** 选择本地图片，读为 data URL 后作为 image 块插入（尺寸按 pt 归一）。 */
+    private pickImage(): void {
+        const input = h('input', { type: 'file', accept: 'image/*', style: 'display:none' }) as HTMLInputElement;
+        input.addEventListener('change', () => {
+            const file = input.files && input.files[0];
+            if (!file) { input.remove(); return; }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const src = String(reader.result || '');
+                const img = new Image();
+                img.onload = () => {
+                    const maxW = 480;
+                    let w = img.naturalWidth;
+                    let ht = img.naturalHeight;
+                    if (w > maxW) { ht = Math.round((ht * maxW) / w); w = maxW; }
+                    this.insertBlock({ type: 'image', src, width: Math.round(w * 0.75), height: Math.round(ht * 0.75) });
+                };
+                img.onerror = () => this.insertBlock({ type: 'image', src });
+                img.src = src;
+                input.remove();
+            };
+            reader.onerror = () => input.remove();
+            reader.readAsDataURL(file);
+        });
+        document.body.appendChild(input);
+        input.click();
+    }
+
     private moveBlock(dir: number): void {
         const i = this.current;
         const j = i + dir;
         if (i < 0 || j < 0 || j >= this.model.blocks.length) return;
+        this.checkpoint();
         const [b] = this.model.blocks.splice(i, 1);
         this.model.blocks.splice(j, 0, b);
         this.current = j;
@@ -588,6 +667,7 @@ export class DocxEditor extends EditorBase {
 
     private deleteBlock(): void {
         if (this.current < 0) return;
+        this.checkpoint();
         this.model.blocks.splice(this.current, 1);
         this.current = -1;
         this.renderAll();
@@ -603,6 +683,7 @@ export class DocxEditor extends EditorBase {
 
     // ---------- 表格结构 ----------
     private tableAddRow(table: DocxTable, index: number): void {
+        this.checkpoint();
         const cols = table.rows[0]?.length || 1;
         (table.rows as DocxCell[][]).push(new Array(cols).fill(''));
         this.current = index;
@@ -611,12 +692,14 @@ export class DocxEditor extends EditorBase {
     }
     private tableDelRow(table: DocxTable, index: number): void {
         if (table.rows.length <= 1) return;
+        this.checkpoint();
         (table.rows as DocxCell[][]).pop();
         this.current = index;
         this.renderAll();
         this.markDirty();
     }
     private tableAddCol(table: DocxTable, index: number): void {
+        this.checkpoint();
         for (const row of table.rows) (row as DocxCell[]).push('');
         this.current = index;
         this.renderAll();
@@ -625,6 +708,7 @@ export class DocxEditor extends EditorBase {
     private tableDelCol(table: DocxTable, index: number): void {
         const cols = table.rows[0]?.length || 0;
         if (cols <= 1) return;
+        this.checkpoint();
         for (const row of table.rows) (row as DocxCell[]).pop();
         this.current = index;
         this.renderAll();

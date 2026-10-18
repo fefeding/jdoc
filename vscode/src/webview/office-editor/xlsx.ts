@@ -82,6 +82,10 @@ export class XlsxEditor extends EditorBase {
     private tabsEl: HTMLElement | null = null;
     private editing: { r: number; c: number } | null = null;
     private statusRef?: (s: string) => void;
+    private past: XlsxSheet[][] = [];
+    private future: XlsxSheet[][] = [];
+    private undoBtn: HTMLButtonElement | null = null;
+    private redoBtn: HTMLButtonElement | null = null;
 
     async load(bytes: Uint8Array): Promise<void> {
         const parsed = await xlsxToJson(bytes, { assets: 'inline' });
@@ -91,7 +95,7 @@ export class XlsxEditor extends EditorBase {
             assets: parsed.assets as unknown[] | undefined
         };
         this.activeSheet = 0;
-        for (const s of this.model.sheets) this.recomputeSheet(s);
+        this.recomputeAllSheets();
         this.buildToolbar();
         this.renderTabs();
         this.renderGrid();
@@ -107,6 +111,41 @@ export class XlsxEditor extends EditorBase {
         this.tabsEl = null;
     }
 
+    // ---------- 撤销 / 重做 ----------
+    private cloneSheets(): XlsxSheet[][] {
+        return JSON.parse(JSON.stringify(this.model.sheets)) as XlsxSheet[][];
+    }
+    private checkpoint(): void {
+        this.past.push(this.cloneSheets());
+        if (this.past.length > 200) this.past.shift();
+        this.future = [];
+        this.updateUndoRedo();
+    }
+    undo(): void {
+        if (!this.past.length) return;
+        this.future.push(this.cloneSheets());
+        this.model.sheets = this.past.pop()!;
+        if (this.activeSheet >= this.model.sheets.length) this.activeSheet = this.model.sheets.length - 1;
+        this.renderTabs();
+        this.paintGrid();
+        this.updateUndoRedo();
+        this.markDirty();
+    }
+    redo(): void {
+        if (!this.future.length) return;
+        this.past.push(this.cloneSheets());
+        this.model.sheets = this.future.pop()!;
+        if (this.activeSheet >= this.model.sheets.length) this.activeSheet = this.model.sheets.length - 1;
+        this.renderTabs();
+        this.paintGrid();
+        this.updateUndoRedo();
+        this.markDirty();
+    }
+    private updateUndoRedo(): void {
+        if (this.undoBtn) this.undoBtn.disabled = !this.past.length;
+        if (this.redoBtn) this.redoBtn.disabled = !this.future.length;
+    }
+
     private sheet(): XlsxSheet | undefined {
         return this.model.sheets[this.activeSheet];
     }
@@ -116,6 +155,9 @@ export class XlsxEditor extends EditorBase {
         const bar = this.toolbarEl;
         if (!bar) return;
         bar.innerHTML = '';
+        this.undoBtn = h('button', { class: 'oe-tb', title: '撤销 (Ctrl+Z)', html: icon('undo'), onmousedown: (e: Event) => e.preventDefault(), onclick: () => this.undo() });
+        this.redoBtn = h('button', { class: 'oe-tb', title: '重做 (Ctrl+Shift+Z)', html: icon('redo'), onmousedown: (e: Event) => e.preventDefault(), onclick: () => this.redo() });
+        bar.append(this.undoBtn, this.redoBtn, h('span', { class: 'oe-sep' }));
         const tb = (ic: string, title: string, fn: () => void, glyph = '') =>
             h('button', { class: 'oe-tb' + (glyph ? ' oe-glyph' : ''), title, html: glyph || icon(ic), onclick: fn });
         bar.append(
@@ -252,6 +294,7 @@ export class XlsxEditor extends EditorBase {
         table.append(tbody);
         host.append(table);
         this.updateSelectionVisual();
+        this.updateUndoRedo();
     }
 
     private paintCell(td: HTMLElement, sheet: XlsxSheet, r: number, c: number): void {
@@ -317,6 +360,7 @@ export class XlsxEditor extends EditorBase {
     }
 
     private beginEdit(r: number, c: number): void {
+        this.checkpoint();
         this.editing = { r, c };
         this.paintGrid();
         const td = this.gridWrap?.querySelector(`td[data-r="${r}"][data-c="${c}"]`) as HTMLElement | null;
@@ -387,7 +431,7 @@ export class XlsxEditor extends EditorBase {
             } catch {
                 cell.result = null;
             }
-            this.recomputeSheet(sheet);
+            this.recomputeAllSheets();
         } else if (input !== '' && !isNaN(Number(input)) && /^-?\d*(\.\d+)?$/.test(input)) {
             cell.value = Number(input);
         } else {
@@ -400,6 +444,7 @@ export class XlsxEditor extends EditorBase {
     private eachSelected(fn: (cell: XlsxCellObject, r: number, c: number) => void): void {
         const sheet = this.sheet();
         if (!sheet) return;
+        this.checkpoint();
         for (let r = this.sel.r1; r <= this.sel.r2; r++) {
             for (let c = this.sel.c1; c <= this.sel.c2; c++) {
                 if (!(sheet.rows[r] as XlsxRow | undefined)) continue;
@@ -457,6 +502,7 @@ export class XlsxEditor extends EditorBase {
     private insertRow(where: 'above' | 'below'): void {
         const sheet = this.sheet();
         if (!sheet) return;
+        this.checkpoint();
         const at = where === 'above' ? this.sel.r1 : this.sel.r2 + 1;
         const colCount = Math.max(1, ...((sheet.rows || []) as XlsxRow[]).map((r) => (r.cells || []).length));
         (sheet.rows as XlsxRow[]).splice(at, 0, { index: at + 1, cells: new Array(colCount).fill(null) });
@@ -467,6 +513,7 @@ export class XlsxEditor extends EditorBase {
     private deleteRow(): void {
         const sheet = this.sheet();
         if (!sheet || (sheet.rows || []).length <= 1) return;
+        this.checkpoint();
         const count = this.sel.r2 - this.sel.r1 + 1;
         (sheet.rows as XlsxRow[]).splice(this.sel.r1, count);
         this.reindex(sheet);
@@ -478,6 +525,7 @@ export class XlsxEditor extends EditorBase {
     private insertCol(where: 'left' | 'right'): void {
         const sheet = this.sheet();
         if (!sheet) return;
+        this.checkpoint();
         const at = where === 'left' ? this.sel.c1 : this.sel.c2 + 1;
         for (const row of sheet.rows as XlsxRow[]) {
             if (!row.cells) (row as { cells: (XlsxCellObject | null)[] }).cells = [];
@@ -489,6 +537,7 @@ export class XlsxEditor extends EditorBase {
     private deleteCol(): void {
         const sheet = this.sheet();
         if (!sheet) return;
+        this.checkpoint();
         const count = this.sel.c2 - this.sel.c1 + 1;
         for (const row of sheet.rows as XlsxRow[]) row.cells?.splice(this.sel.c1, count);
         this.paintGrid();
@@ -510,6 +559,7 @@ export class XlsxEditor extends EditorBase {
         };
         const onUp = (ev: MouseEvent) => {
             const w = Math.max(24, Math.round(w0 + ev.clientX - startX));
+            this.checkpoint();
             if (!sheet.columns) sheet.columns = [];
             if (!sheet.columns[c]) sheet.columns[c] = {};
             sheet.columns[c].width = w;
@@ -524,6 +574,7 @@ export class XlsxEditor extends EditorBase {
     private setFreeze(rows: number, columns: number): void {
         const sheet = this.sheet();
         if (!sheet) return;
+        this.checkpoint();
         sheet.frozen = rows || columns ? { rows, columns } : undefined;
         this.paintGrid();
         this.markDirty();
@@ -547,6 +598,11 @@ export class XlsxEditor extends EditorBase {
         }
     }
 
+    /** 重算所有工作表的公式（两遍），支持跨表引用在全部表就绪后求值。 */
+    private recomputeAllSheets(): void {
+        for (let pass = 0; pass < 2; pass++) for (const s of this.model.sheets) this.recomputeSheet(s);
+    }
+
     /** 求值公式（不含前导 =）：支持 + - * / ^ %、括号、单元格/区域引用、比较与常用函数。 */
     private evaluateFormula(formula: string, sheet: XlsxSheet): number | string {
         const src = String(formula).replace(/^=/, '');
@@ -554,18 +610,35 @@ export class XlsxEditor extends EditorBase {
             const n = typeof v === 'number' ? v : parseFloat(String(v));
             return isNaN(n) ? 0 : n;
         };
-        type Tok = { t: 'num' | 'ref' | 'func' | 'str' | 'op'; v?: string; n?: number };
+        type Tok = { t: 'num' | 'ref' | 'func' | 'str' | 'op'; v?: string; n?: number; sheet?: string };
         const toks: Tok[] = [];
         let i = 0;
         while (i < src.length) {
             const ch = src[i];
             if (ch === ' ') { i++; continue; }
             if (/[\d.]/.test(ch)) { const m = src.slice(i).match(/^\d*\.?\d+/)!; toks.push({ t: 'num', n: parseFloat(m[0]) }); i += m[0].length; continue; }
+            if (ch === "'") {
+                const end = src.indexOf("'", i + 1);
+                const name = src.slice(i + 1, end < 0 ? src.length : end);
+                i = end < 0 ? src.length : end + 1;
+                if (src[i] === '!') {
+                    i++;
+                    const rm = src.slice(i).match(/^[A-Za-z]+\d+/);
+                    if (rm) { toks.push({ t: 'ref', v: rm[0].toUpperCase(), sheet: name }); i += rm[0].length; }
+                } else {
+                    toks.push({ t: 'str', v: name });
+                }
+                continue;
+            }
             if (/[A-Za-z]/.test(ch)) {
-                const word = src.slice(i).match(/^[A-Za-z]+/)![0];
+                const word = src.slice(i).match(/^[A-Za-z]+[A-Za-z0-9]*/)![0];
                 if (src[i + word.length] === '(') { toks.push({ t: 'func', v: word.toUpperCase() }); i += word.length; continue; }
-                const dm = src.slice(i + word.length).match(/^\d+/);
-                if (dm) { toks.push({ t: 'ref', v: word.toUpperCase() + dm[0] }); i += word.length + dm[0].length; continue; }
+                if (src[i + word.length] === '!') {
+                    i += word.length + 1;
+                    const rm = src.slice(i).match(/^[A-Za-z]+\d+/);
+                    if (rm) { toks.push({ t: 'ref', v: rm[0].toUpperCase(), sheet: word }); i += rm[0].length; }
+                    continue;
+                }
                 toks.push({ t: 'ref', v: word.toUpperCase() }); i += word.length; continue;
             }
             if (ch === '"') { const end = src.indexOf('"', i + 1); toks.push({ t: 'str', v: src.slice(i + 1, end < 0 ? src.length : end) }); i = end < 0 ? src.length : end + 1; continue; }
@@ -577,21 +650,23 @@ export class XlsxEditor extends EditorBase {
         let p = 0;
         const cur = (): Tok | undefined => toks[p];
         const eat = (v: string): boolean => { const t = cur(); if (t && t.t === 'op' && t.v === v) { p++; return true; } return false; };
-        const refVal = (ref: string): number | string => {
+        const refVal = (ref: string, sheetName?: string): number | string => {
+            const target = sheetName ? this.model.sheets.find((s) => s.name === sheetName) : sheet;
+            if (!target) return 0;
             const { r, c } = fromA1(ref);
-            const row = sheet.rows[r] as XlsxRow | undefined;
+            const row = target.rows[r] as XlsxRow | undefined;
             const cell = row?.cells ? row.cells[c] : null;
             if (!cell) return 0;
             if (cell.value != null) return typeof cell.value === 'number' ? cell.value : String(cell.value);
             if (cell.result != null) return cell.result as number;
             return 0;
         };
-        const rangeVals = (a: string, b: string): number[] => {
+        const rangeVals = (a: string, b: string, sheetName?: string): number[] => {
             const pa = fromA1(a);
             const pb = fromA1(b);
             const out: number[] = [];
             for (let r = Math.min(pa.r, pb.r); r <= Math.max(pa.r, pb.r); r++)
-                for (let c = Math.min(pa.c, pb.c); c <= Math.max(pa.c, pb.c); c++) out.push(num(refVal(colName(c + 1) + (r + 1))));
+                for (let c = Math.min(pa.c, pb.c); c <= Math.max(pa.c, pb.c); c++) out.push(num(refVal(colName(c + 1) + (r + 1), sheetName)));
             return out;
         };
         const callFunc = (name: string, args: (number | string | number[])[]): number | string => {
@@ -667,8 +742,8 @@ export class XlsxEditor extends EditorBase {
             }
             if (t.t === 'ref') {
                 p++;
-                if (cur() && cur().t === 'op' && cur().v === ':') { p++; const t2 = cur(); if (t2 && t2.t === 'ref') { p++; return rangeVals(t.v!, t2.v!); } }
-                return refVal(t.v!);
+                if (cur() && cur().t === 'op' && cur().v === ':') { p++; const t2 = cur(); if (t2 && t2.t === 'ref') { p++; return rangeVals(t.v!, t2.v!, t.sheet || t2.sheet); } }
+                return refVal(t.v!, t.sheet);
             }
             if (t.t === 'op' && t.v === '(') { p++; const v = expr(); eat(')'); return v; }
             p++;
@@ -698,6 +773,7 @@ export class XlsxEditor extends EditorBase {
             this.toast('请先选中一个区域再合并');
             return;
         }
+        this.checkpoint();
         const a1 = toA1(this.sel.r1, this.sel.c1) + ':' + toA1(this.sel.r2, this.sel.c2);
         if (!sheet.merges) sheet.merges = [];
         // 移除与新区域重叠的旧合并
@@ -713,6 +789,7 @@ export class XlsxEditor extends EditorBase {
 
     // ---------- 工作表 ----------
     private addSheet(): void {
+        this.checkpoint();
         const name = 'Sheet' + (this.model.sheets.length + 1);
         this.model.sheets.push({ name, rows: [{ index: 1, cells: [] }, { index: 2, cells: [] }] });
         this.activeSheet = this.model.sheets.length - 1;
