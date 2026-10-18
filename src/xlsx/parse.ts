@@ -331,8 +331,23 @@ function readSheet(worksheet: ExcelJS.Worksheet, options: XlsxParseOptions, ctx?
         .filter(Boolean) as XlsxSheet['columns'];
     if (columns && columns.length) sheet.columns = columns;
 
-    // exceljs 把合并区记录在 _merges 中，key 即主单元格地址
-    const merges = Object.keys((worksheet as unknown as { _merges?: object })._merges || {});
+    // exceljs：worksheet.model.merges 是完整范围 ref 数组（如 'A1:C1'）；
+    // 而 _merges 的 key 只是主单元格地址（如 'A1'），不能直接当合并范围使用。
+    const model = worksheet.model as unknown as { merges?: string[] } | undefined;
+    let merges: string[] = Array.isArray(model?.merges) ? model!.merges!.slice() : [];
+    if (!merges.length) {
+        const raw = (worksheet as unknown as { _merges?: Record<string, { model?: { top: number; left: number; bottom: number; right: number } }> })._merges || {};
+        const colLetter = (n: number): string => { let s = ''; while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); } return s; };
+        merges = Object.keys(raw)
+            .map((k) => {
+                const m = raw[k]?.model;
+                if (!m) return k;
+                const a = colLetter(m.left) + m.top;
+                const b = colLetter(m.right) + m.bottom;
+                return a === b ? a : a + ':' + b;
+            })
+            .filter(Boolean);
+    }
     if (merges.length) sheet.merges = merges;
 
     // views 的 xSplit/ySplit 属于「冻结」专属字段，联合类型里被抹平，这里取原始记录
