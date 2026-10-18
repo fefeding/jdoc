@@ -1,0 +1,82 @@
+{
+  "name": "jdoc-viewer",
+  "displayName": "jdoc Document Viewer",
+  "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档（由 @fefeding/jdoc 驱动）",
+  "version": "0.1.0",
+  "publisher": "fefeding",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fefeding/jdoc.git"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Visualization",
+    "Editing"
+  ],
+  "main": "./dist/extension.js",
+  "icon": "icon.png",
+  "activationEvents": [
+    "onCustomEditor:jdoc.documentEditor"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "jdoc.documentEditor",
+        "displayName": "jdoc Document Editor",
+        "selector": [
+          { "filenamePattern": "*.pptx" },
+          { "filenamePattern": "*.docx" },
+          { "filenamePattern": "*.xlsx" },
+          { "filenamePattern": "*.pdf" }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "jdoc.revert",
+        "title": "Revert"
+      },
+      {
+        "command": "jdoc.exportCopy",
+        "title": "Export Copy"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "jdoc.revert",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf)$/",
+          "group": "navigation"
+        },
+        {
+          "command": "jdoc.exportCopy",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf)$/",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "dev": "node esbuild.js --watch",
+    "install:jdoc": "npm install file:..",
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies",
+    "publish:ovsx": "ovsx publish --no-dependencies"
+  },
+  "devDependencies": {
+    "@fefeding/jdoc": "file:..",
+    "@types/node": "^20.19.43",
+    "@types/vscode": "1.75.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.23.1",
+    "ovsx": "^0.11.0",
+    "typescript": "^7.0.2"
+  }
+}

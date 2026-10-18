@@ -1,0 +1,44 @@
+name: Publish Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build jdoc library (provides dist/jdoc.browser.js)
+        run: npm ci && npm run build
+        working-directory: .
+
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: vscode
+
+      - name: Compile extension (esbuild)
+        run: npm run vscode:prepublish
+        working-directory: vscode
+
+      - name: Publish to VS Code Marketplace
+        run: npx vsce publish --no-dependencies
+        working-directory: vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        run: npx ovsx publish --no-dependencies
+        working-directory: vscode
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
