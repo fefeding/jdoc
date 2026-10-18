@@ -180,7 +180,8 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
     }
 
     private getWebviewHtml(webview: vscode.Webview, format: DocFormat): string {
-        const scriptFile = format === 'pptx' ? 'pptx-editor.js' : 'webview.js';
+        const scriptFile =
+            format === 'pptx' ? 'pptx-editor.js' : format === 'pdf' ? 'webview.js' : 'office-editor.js';
         const scriptUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'dist', scriptFile)
         );

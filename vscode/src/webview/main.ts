@@ -65,10 +65,9 @@ function setMode(next: EditorMode): void {
 async function renderContent(): Promise<void> {
     const content = document.getElementById('content')!;
     if (mode === 'edit') {
-        // 编辑模式：PPTX 复用 ppt-parser 编辑器、DOCX/XLSX 基于 jdoc 标准 JSON 往返，
-        // 将在后续提交中落地（见插件 README）。当前先以查看呈现。
-        content.innerHTML =
-            '<div class="hint">编辑模式正在完善中（PPTX / DOCX / XLSX 即将支持）。当前以查看模式呈现文档。</div>';
+        // PPTX / DOCX / XLSX 已各自使用独立编辑器入口（pptx-editor.js / office-editor.js）；
+        // 能走到这里的仅 PDF，按只读处理。
+        content.innerHTML = '<div class="hint">PDF 为只读查看，暂不支持编辑。</div>';
         return;
     }
     try {

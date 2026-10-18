@@ -110,17 +110,32 @@ async function buildWithContext() {
     plugins: [nodeStubPlugin]
   });
 
+  // DOCX / XLSX 编辑器：独立 webview 入口（查看 + 块式/网格编辑），同样自包含。
+  const officeCt = await esbuild.context({
+    ...base,
+    entryPoints: [path.join(__dirname, 'src', 'webview', 'office-editor', 'main.ts')],
+    outfile: path.join(__dirname, 'dist', 'office-editor.js'),
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    alias: {
+      '@fefeding/jdoc': resolveJdocEntry()
+    },
+    plugins: [nodeStubPlugin]
+  });
+
   if (watch) {
-    await Promise.all([extCtx.watch(), webCtx.watch(), pptxCt.watch()]);
+    await Promise.all([extCtx.watch(), webCtx.watch(), pptxCt.watch(), officeCt.watch()]);
     console.log('[esbuild] watching for changes… (press Ctrl+C to stop)');
     console.log('[esbuild] 调试：按 F5 选择 "Run Extension (watch)"；改代码后在扩展开发宿主窗口按 Ctrl/Cmd+R 刷新。');
     return;
   }
 
-  await Promise.all([extCtx.rebuild(), webCtx.rebuild(), pptxCt.rebuild()]);
+  await Promise.all([extCtx.rebuild(), webCtx.rebuild(), pptxCt.rebuild(), officeCt.rebuild()]);
   await extCtx.dispose();
   await webCtx.dispose();
   await pptxCt.dispose();
+  await officeCt.dispose();
   console.log('[esbuild] build complete.');
 }
 
