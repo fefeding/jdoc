@@ -36,13 +36,27 @@
         "viewType": "jdoc.documentEditor",
         "displayName": "jdoc Document Editor",
         "selector": [
-          { "filenamePattern": "*.pptx" },
-          { "filenamePattern": "*.docx" },
-          { "filenamePattern": "*.xlsx" },
-          { "filenamePattern": "*.pdf" },
-          { "filenamePattern": "*.md" },
-          { "filenamePattern": "*.markdown" },
-          { "filenamePattern": "*.txt" }
+          {
+            "filenamePattern": "*.pptx"
+          },
+          {
+            "filenamePattern": "*.docx"
+          },
+          {
+            "filenamePattern": "*.xlsx"
+          },
+          {
+            "filenamePattern": "*.pdf"
+          },
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          },
+          {
+            "filenamePattern": "*.txt"
+          }
         ],
         "priority": "default"
       }
@@ -145,7 +159,8 @@
     "watch": "node esbuild.js --watch",
     "dev": "node esbuild.js --watch",
     "verify:roundtrip": "node scripts/verify-roundtrip.mjs",
-    "sync:md-assets": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve(__dirname,'..','node_modules','katex','dist'),dst=p.resolve(__dirname,'media');fs.copyFileSync(p.join(src,'katex.min.css'),p.join(dst,'katex.min.css'));fs.rmSync(p.join(dst,'fonts'),{recursive:true,force:true});fs.cpSync(p.join(src,'fonts'),p.join(dst,'fonts'),{recursive:true})\"",    "install:jdoc": "npm install file:..",
+    "sync:md-assets": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve(__dirname,'..','node_modules','katex','dist'),dst=p.resolve(__dirname,'media');fs.copyFileSync(p.join(src,'katex.min.css'),p.join(dst,'katex.min.css'));fs.rmSync(p.join(dst,'fonts'),{recursive:true,force:true});fs.cpSync(p.join(src,'fonts'),p.join(dst,'fonts'),{recursive:true})\"",
+    "install:jdoc": "npm install file:..",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies",
     "publish:ovsx": "ovsx publish --no-dependencies"
@@ -156,6 +171,7 @@
     "@types/vscode": "1.75.0",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.23.1",
+    "highlight.js": "^11.12.0",
     "ovsx": "^1.3.0",
     "typescript": "^7.0.2"
   }

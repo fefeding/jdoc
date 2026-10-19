@@ -6,7 +6,7 @@ VS Code 扩展，基于 [`@fefeding/jdoc`](https://github.com/fefeding/jdoc) 在
 - **DOCX** — 文档渲染（按纸张分页），可编辑
 - **XLSX** — 表格渲染，可编辑
 - **PDF** — 页面栅格化渲染（支持扫描件），可叠加编辑：签名 / 图片 / 文本 / 矩形 / 手绘
-- **Markdown**（`.md` / `.markdown`）— 排版预览（只读，支持 Mermaid 图表与 KaTeX 公式）
+- **Markdown**（`.md` / `.markdown`）— 排版预览（只读，围栏代码块语法高亮，支持 Mermaid 图表与 KaTeX 公式）
 - **纯文本**（`.txt`）— 等宽预览（只读）
 
 打开 PPTX / DOCX / XLSX / PDF 会自动以本扩展打开（作为默认编辑器）。

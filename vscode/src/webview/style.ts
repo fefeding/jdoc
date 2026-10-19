@@ -41,7 +41,7 @@ body {
   --jdoc-md-th-bg: var(--jc-surface-2);
   --jdoc-md-row-bg: var(--jc-hover);
 }
-.md-body, .txt-body { background: var(--jc-surface); border: 1px solid var(--jc-border-soft); border-radius: 10px; padding: 28px 32px; max-width: 960px; margin: 0 auto; box-shadow: var(--jc-shadow, none); }
+.md-body, .txt-body { background: var(--jc-surface); border-radius: 10px; padding: 28px 32px; max-width: 960px; margin: 0 auto; box-shadow: var(--jc-shadow, none); }
 .txt-body { padding: 16px 20px; overflow: auto; }
 .txt-body .jdoc-txt { font-family: var(--jc-font-mono); }
 `;

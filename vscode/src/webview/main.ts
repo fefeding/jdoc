@@ -5,6 +5,7 @@ import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
 import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
+import { highlightCodeBlocks, markdownCodeCss } from './markdown-code';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -35,7 +36,7 @@ function bindZoom(): void {
 
 function applyBaseStyle(): void {
     const style = document.createElement('style');
-    style.textContent = CHROME_CSS + baseCss + PDF_CSS;
+    style.textContent = CHROME_CSS + baseCss + PDF_CSS + markdownCodeCss;
     document.head.appendChild(style);
 }
 
@@ -195,6 +196,8 @@ async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<
         a.setAttribute('target', '_blank');
         a.setAttribute('rel', 'noopener noreferrer');
     });
+    // 围栏代码块上色：必须在 mermaid 渲染之前，且 mermaid 自身跳过
+    highlightCodeBlocks(body);
     // 增强内容：Mermaid 图表 / KaTeX 公式（动态加载依赖，失败时保留源码降级显示）
     try {
         // 主题判定：优先用 VS Code 给 webview body 加的类（实时跟随颜色主题），
