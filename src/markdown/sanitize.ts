@@ -39,7 +39,11 @@ const ALLOWED_ATTRS: Record<string, Set<string>> = {
     div: new Set(['class', 'align']),
     span: new Set(['class', 'style']),
     details: new Set(['open']),
-    '*': new Set(['class', 'id', 'align', 'style', 'aria-hidden', 'colspan', 'rowspan', 'start', 'open', 'type'])
+    // data-tex / data-diagram 是 Markdown 增强渲染（KaTeX / Mermaid）的原始源码载体
+    '*': new Set([
+        'class', 'id', 'align', 'style', 'aria-hidden', 'colspan', 'rowspan', 'start', 'open', 'type',
+        'data-tex', 'data-diagram'
+    ])
 };
 
 /** 安全的 URL 协议 / 前缀 */

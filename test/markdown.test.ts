@@ -1,8 +1,61 @@
 import { describe, expect, it } from 'vitest';
-import { markdownToHtml, markdownToText, textToHtml, detectFormat } from '../src/index';
+import { markdownToHtml, markdownToText, textToHtml, detectFormat, renderMarkdownExtras } from '../src/index';
 
 const enc = new TextEncoder();
 const bytes = (s: string) => enc.encode(s);
+
+describe('markdown：公式与图表语法', () => {
+    it('行内公式 $…$ 产出 KaTeX 容器', async () => {
+        const { html } = await markdownToHtml(bytes('质能方程 $E=mc^2$ 成立。\n'));
+        expect(html).toContain('<code class="jdoc-math-inline" data-tex="E=mc^2">');
+    });
+
+    it('块级公式 $$…$$ 产出块容器', async () => {
+        const { html } = await markdownToHtml(bytes('$$\n\\frac{a}{b}\n$$\n'));
+        expect(html).toContain('<pre class="jdoc-math-block" data-tex="\\frac{a}{b}">');
+    });
+
+    it('\\(…\\) 与 \\[…\\] 同样识别', async () => {
+        const inline = await markdownToHtml(bytes('行内 \\(x^2\\) 结束\n'));
+        expect(inline.html).toContain('data-tex="x^2"');
+        const block = await markdownToHtml(bytes('\\[\\sum_i x_i\\]\n'));
+        expect(block.html).toContain('class="jdoc-math-block"');
+    });
+
+    it('普通货币写法不当公式', async () => {
+        const { html } = await markdownToHtml(bytes('价格 $5 和 $6 美元\n'), { includeStyle: false });
+        expect(html).not.toContain('jdoc-math');
+        expect(html).toContain('$5 和 $6');
+    });
+
+    it('```mermaid 围栏产出图表容器', async () => {
+        const { html } = await markdownToHtml(bytes('```mermaid\nflowchart LR\n  A --> B\n```\n'));
+        expect(html).toContain('<pre class="jdoc-mermaid"');
+        expect(html).toContain('flowchart LR');
+    });
+
+    it('```math 围栏产出公式容器', async () => {
+        const { html } = await markdownToHtml(bytes('```math\na^2 + b^2 = c^2\n```\n'), { includeStyle: false });
+        expect(html).toContain('class="jdoc-math-block"');
+        expect(html).not.toContain('jdoc-mermaid');
+    });
+
+    it('可关闭公式/图表语法', async () => {
+        const off = await markdownToHtml(bytes('$x^2$\n\n```mermaid\ngraph TD\n A-->B\n```\n'), {
+            math: false,
+            diagrams: false,
+            includeStyle: false
+        });
+        expect(off.html).not.toContain('data-tex');
+        expect(off.html).not.toContain('jdoc-mermaid');
+    });
+
+    it('renderMarkdownExtras 在无 DOM 环境安全返回 0', async () => {
+        const fake = { querySelector: () => null } as unknown as ParentNode;
+        const result = await renderMarkdownExtras(fake);
+        expect(result).toEqual({ math: 0, diagrams: 0 });
+    });
+});
 
 describe('markdown：渲染为 HTML', () => {
     it('渲染标题、强调与代码', async () => {

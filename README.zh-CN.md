@@ -251,6 +251,26 @@ container.innerHTML = html;              // 自带 .jdoc-md 作用域样式，�
 console.log(metadata?.headings);          // 标题大纲
 ```
 
+### 公式与流程图
+
+解析时把 Mermaid 图表与数学公式识别成语义容器（同时保留源码作降级显示）：
+
+| 语法 | 产出 |
+| --- | --- |
+| ` ```mermaid ` 围栏 | `<pre class="jdoc-mermaid" data-diagram="mermaid">` |
+| ` ```math ` / ` ```tex ` / ` ```latex ` 围栏 | `<pre class="jdoc-math-block" data-tex="…">` |
+| `$$…$$`、`\[…\]` | `<pre class="jdoc-math-block" data-tex="…">` |
+| `$…$`、`\(…\)` | `<code class="jdoc-math-inline" data-tex="…">` |
+
+浏览器端调用 `renderMarkdownExtras()` 才会真正渲染（Mermaid / KaTeX 都是动态 import，不渲染不加载）：
+
+```javascript
+await renderMarkdownExtras(container);   // → { math: n, diagrams: n }
+```
+
+宿主需要提供 KaTeX 样式表（含 `fonts/*.woff2`）公式才美观；渲染失败会自动回退到显示源码。
+用 `{ math: false, diagrams: false }` 可完全关闭这两类语法。
+
 `markdownToHtml` 默认允许 Markdown 内嵌的原始 HTML，但会移除 script / iframe / 事件属性与
 `javascript:` 等危险协议；传 `{ allowHtml: false }` 可让原始 HTML 全部按纯文本转义。
 

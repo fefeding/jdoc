@@ -204,6 +204,10 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         const pdfWorkerUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pdf.worker.min.mjs')
         );
+        // KaTeX 样式（Markdown 公式渲染），CSS 内部以相对路径引用 media/fonts/*.woff2
+        const katexCssUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this.context.extensionUri, 'media', 'katex.min.css')
+        );
         const nonce = getNonce();
         const oeTheme =
             vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Dark ||
@@ -214,6 +218,8 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             `default-src 'none';`,
             `img-src ${webview.cspSource} data: blob:;`,
             `media-src ${webview.cspSource} data: blob:;`,
+            // KaTeX 字体（Markdown 公式）
+            `font-src ${webview.cspSource} data:;`,
             `style-src ${webview.cspSource} 'unsafe-inline';`,
             // echarts-gl 内部用 new Function() 解析 expr()，需 unsafe-eval 否则 3D 图表抛错；
             // pdfjs worker 以 Worker 形式加载，需 worker-src（含 blob: 兜底）
@@ -226,6 +232,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
 <meta charset="utf-8" />
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="${katexCssUri}" />
 <title>jdoc Document</title>
 </head>
 <body>

@@ -88,8 +88,7 @@
     "watch": "node esbuild.js --watch",
     "dev": "node esbuild.js --watch",
     "verify:roundtrip": "node scripts/verify-roundtrip.mjs",
-    "sync:pdf-worker": "node -e \"const fs=require('fs'),p=require('path');fs.copyFileSync(p.resolve(__dirname,'..','node_modules','pdfjs-dist','legacy','build','pdf.worker.min.mjs'),p.resolve(__dirname,'media','pdf.worker.min.mjs'))\"",
-    "install:jdoc": "npm install file:..",
+    "sync:md-assets": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve(__dirname,'..','node_modules','katex','dist'),dst=p.resolve(__dirname,'media');fs.copyFileSync(p.join(src,'katex.min.css'),p.join(dst,'katex.min.css'));fs.rmSync(p.join(dst,'fonts'),{recursive:true,force:true});fs.cpSync(p.join(src,'fonts'),p.join(dst,'fonts'),{recursive:true})\"",    "install:jdoc": "npm install file:..",
     "package": "vsce package --no-dependencies",
     "publish": "vsce publish --no-dependencies",
     "publish:ovsx": "ovsx publish --no-dependencies"

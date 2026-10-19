@@ -1,4 +1,4 @@
-import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml } from '@fefeding/jdoc';
+import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml, renderMarkdownExtras } from '@fefeding/jdoc';
 import { chartRenderer } from './chart-renderer';
 import { b64ToBytes, escapeHtml } from './util';
 import { baseCss } from './style';
@@ -126,7 +126,8 @@ async function renderXlsx(content: HTMLElement, bytes: Uint8Array): Promise<void
 }
 
 async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<void> {
-    const { html, messages } = await markdownToHtml(bytes);
+    const { html, messages: baseMessages } = await markdownToHtml(bytes);
+    let messages = baseMessages || [];
     const body = document.createElement('div');
     body.className = 'md-body';
     body.innerHTML = html;
@@ -136,7 +137,13 @@ async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<
         a.setAttribute('target', '_blank');
         a.setAttribute('rel', 'noopener noreferrer');
     });
-    if (messages?.length) {
+    // 增强内容：Mermaid 图表 / KaTeX 公式（动态加载依赖，失败时保留源码降级显示）
+    try {
+        await renderMarkdownExtras(body);
+    } catch (err: any) {
+        messages.push(`图表/公式渲染失败：${String(err?.message || err)}`);
+    }
+    if (messages.length) {
         const note = document.createElement('div');
         note.className = 'hint';
         note.textContent = messages.join('；');

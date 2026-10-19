@@ -39,6 +39,16 @@ export interface MarkdownOptions {
     gfm?: boolean;
     /** 是否把单个换行当作 <br>，默认 false（按 CommonMark 规范） */
     breaks?: boolean;
+    /**
+     * 是否启用公式语法（$…$ / $$…$$ / ```math），默认 true。
+     * 仅影响标记：真正渲染需浏览器端调用 `renderMarkdownExtras()`。
+     */
+    math?: boolean;
+    /**
+     * 是否启用 ```mermaid 图表语法，默认 true。
+     * 真正渲染同样由 `renderMarkdownExtras()` 完成。
+     */
+    diagrams?: boolean;
 }
 
 /** markdownToHtml 的返回结构 */

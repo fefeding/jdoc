@@ -7,14 +7,16 @@
  * @module markdown
  */
 
-import { marked } from 'marked';
+import { Marked, marked } from 'marked';
 import { wrapError } from '../core/errors';
 import { toUint8Array, type DocInput } from '../core/input';
 import { sanitizeHtml, htmlToText, escapeHtml } from './sanitize';
 import { MARKDOWN_CSS } from './to-html';
+import { markdownExtensions } from './extensions';
 import type { MarkdownHeading, MarkdownHtmlResult, MarkdownMetadata, MarkdownOptions } from './types';
 
 export * from './types';
+export * from './extras';
 
 /** 字节 -> UTF-8 文本（Markdown/TXT 均为文本格式） */
 function decodeText(bytes: Uint8Array): string {
@@ -71,12 +73,10 @@ export async function markdownToHtml(
             // 关闭原始 HTML：让 marked 把内嵌 HTML 当作纯文本输出（自动转义）
             renderer.html = (token: { text?: string }) => escapeHtml(String(token?.text ?? ''));
         }
-        const raw = marked.parse(markdown, {
-            gfm: options.gfm !== false,
-            breaks: options.breaks === true,
-            async: false,
-            renderer
-        }) as unknown;
+        // 用独立实例承载扩展，避免污染全局 marked（库不应有全局副作用）
+        const md = new Marked({ gfm: options.gfm !== false, breaks: options.breaks === true, renderer });
+        md.use(markdownExtensions({ enableMath: options.math !== false, enableDiagrams: options.diagrams !== false }));
+        const raw = md.parse(markdown, { async: false });
         const rendered = typeof raw === 'string' ? raw : String(raw ?? '');
 
         const html = allowHtml ? sanitizeHtml(rendered) : rendered;

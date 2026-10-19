@@ -35,4 +35,13 @@ export const MARKDOWN_CSS = `
 .jdoc-md del { color: var(--jdoc-md-mut, #656d76); }
 .jdoc-md details { padding: 8px 12px; background: var(--jdoc-md-code-bg, #f6f8fa); border-radius: 8px; }
 .jdoc-md summary { cursor: pointer; font-weight: 600; }
+/* Mermaid 图表 / KaTeX 公式（未增强渲染时的降级显示同样可读） */
+.jdoc-md .jdoc-mermaid { padding: 14px 16px; background: var(--jdoc-md-code-bg, #f6f8fa); border-radius: 8px; overflow: auto; }
+.jdoc-md .jdoc-mermaid code { background: transparent; padding: 0; }
+.jdoc-md .jdoc-mermaid-svg { margin: 0 0 14px; text-align: center; overflow-x: auto; }
+.jdoc-md .jdoc-mermaid-svg svg { max-width: 100%; height: auto; }
+.jdoc-md .jdoc-math-block { overflow-x: auto; }
+.jdoc-md pre.jdoc-math-block { padding: 12px 14px; text-align: center; background: var(--jdoc-md-code-bg, #f6f8fa); border-radius: 8px; }
+.jdoc-md pre.jdoc-math-block code { background: transparent; padding: 0; }
+.jdoc-md .jdoc-math-inline { background: transparent; padding: 0; }
 `;
