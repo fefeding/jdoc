@@ -1,6 +1,6 @@
 {
   "name": "@fefeding/jdoc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "文档解析与生成统一库：支持 PPTX / DOCX / XLSX / PDF 的解析与生成，纯 TypeScript，浏览器与 Node.js 双端可用",
   "main": "./dist/jdoc.cjs",
   "module": "./dist/jdoc.esm.js",
@@ -84,6 +84,7 @@
   "files": [
     "dist",
     "src",
+    "skills",
     "README.md",
     "README.zh-CN.md"
   ]
