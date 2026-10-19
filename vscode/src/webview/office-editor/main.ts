@@ -10,8 +10,7 @@ import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
 import { createXlsxEditor, type XlsxEditor } from './xlsx';
 import { b64ToBytes, bytesToB64, h, escapeHtml } from './util';
-import { icon, iconNode } from '../icons';
-import { createTopBar, createDocTabs, type TopBar, type DocTabs } from '../chrome';
+import { icon } from '../icons';
 import type { DocFormat, EditorMode, HostToWebview, WebviewToHost } from '../../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -19,18 +18,12 @@ const vscode = acquireVsCodeApi();
 
 let format: DocFormat = 'pptx';
 let mode: EditorMode = 'view';
-let docTitle = 'document';
-let dirty = false;
 let latest: Uint8Array = new Uint8Array(0);
 let original: Uint8Array = new Uint8Array(0);
 let gen = 0; // init 代数：丢弃过期的异步 applyMode 结果，防快速切换竞态
 
 let editor: DocxEditor | XlsxEditor | null = null;
 let root: HTMLElement;
-let topBar: TopBar | null = null;
-let docTabs: DocTabs | null = null;
-let titleEl: HTMLElement;
-let dirtyEl: HTMLElement;
 let toolbarEl: HTMLElement;
 let contentEl: HTMLElement;
 let statusEl: HTMLElement;
@@ -44,14 +37,11 @@ const hooks = {
         if (bytes === null) {
             // 放弃编辑回到导入态
             latest = original;
-            dirty = false;
             post({ type: 'sync', bytes: null, dirty: false });
         } else {
             latest = bytes;
-            dirty = true;
             post({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
         }
-        updateTitle();
     },
     onToast: (message: string, kind?: 'info' | 'warn' | 'error'): void => toast(message, kind)
 };
@@ -62,44 +52,23 @@ function buildShell(): void {
     root.innerHTML = '';
     const app = h('div', { class: 'oe' });
 
-    topBar = createTopBar(
-        [
-            { id: 'view', label: '查看', icon: 'eye' },
-            { id: 'edit', label: '编辑', icon: 'pencil' }
-        ],
-        mode,
-        (id) => setMode(id as EditorMode),
-        { node: iconNode }
-    );
-    topBar.setBadge(format === 'xlsx' ? 'XLSX' : 'DOCX');
-    titleEl = topBar.nameEl;
-    dirtyEl = topBar.dirtyEl;
-    // 右上角文档切换标签（由 host 的 docs 广播填充）
-    docTabs = createDocTabs((uri) => post({ type: 'openDocument', uri }));
-    topBar.el.append(docTabs.el);
-    const top = topBar.el;
-
+    // 不画顶栏：文档标题 / 未保存点由 VS Code 编辑器标题栏呈现；查看/编辑切换放在
+    // VS Code 标题栏（editor/title 菜单），由 host 通过 setMode 消息驱动。
     toolbarEl = h('div', { class: 'oe-toolbar' });
     contentEl = h('div', { class: 'oe-content' });
     statusEl = h('span', { class: 'grow' });
 
-    app.append(top, toolbarEl, contentEl, h('div', { class: 'oe-statusbar' }, [statusEl]));
+    app.append(toolbarEl, contentEl, h('div', { class: 'oe-statusbar' }, [statusEl]));
     root.append(app);
 }
 
-function updateTitle(): void {
-    topBar?.setTitle(docTitle, dirty);
-}
-
-function updateSeg(): void {
-    topBar?.setActive(mode);
+function updateModeHint(): void {
     if (statusEl && mode === 'view') statusEl.textContent = '查看模式（只读）';
 }
 
 // ---------- 模式 ----------
 async function applyMode(): Promise<void> {
-    updateSeg();
-    updateTitle();
+    updateModeHint();
     if (mode === 'edit') await enterEdit();
     else await enterView();
 }
@@ -149,19 +118,11 @@ async function enterEdit(): Promise<void> {
         }
         editor.mount(toolbarEl, contentEl);
         await editor.load(latest);
-        updateTitle();
     } catch (err: unknown) {
         const msg = (err as { message?: string })?.message || String(err);
         contentEl.append(h('pre', { class: 'oe-error', text: '加载失败：' + msg }));
         post({ type: 'error', message: msg });
     }
-}
-
-function setMode(next: EditorMode): void {
-    if (next === mode) return;
-    mode = next;
-    post({ type: 'setMode', mode });
-    void applyMode();
 }
 
 // ---------- 消息 ----------
@@ -173,8 +134,6 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             const my = ++gen; // 丢弃此后被更新的 init 所取代的异步结果
             format = msg.format;
             mode = msg.mode === 'edit' ? 'edit' : 'view';
-            docTitle = msg.title || docTitle;
-            dirty = msg.dirty;
             latest = b64ToBytes(msg.bytes);
             original = latest;
             if (editor) {
@@ -185,25 +144,24 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             if (my !== gen) return;
             break;
         }
+        case 'setMode':
+            // 来自 VS Code 标题栏的查看/编辑按钮
+            if (msg.mode !== mode) {
+                mode = msg.mode;
+                post({ type: 'setMode', mode });
+                await applyMode();
+            }
+            break;
         case 'bytes': {
             latest = b64ToBytes(msg.bytes);
             original = latest;
-            dirty = msg.dirty;
             if (mode === 'view') await enterView();
-            updateTitle();
             break;
         }
-        case 'docs':
-            docTabs?.update(msg.docs, msg.activeUri);
-            break;
         case 'saved':
-            dirty = false;
-            updateTitle();
             toast('已保存');
             break;
         case 'reverted':
-            dirty = false;
-            updateTitle();
             break;
         case 'info':
             toast(msg.message, msg.kind || 'info');
@@ -217,7 +175,6 @@ function main(): void {
     style.textContent = CHROME_CSS + officeCss;
     document.head.appendChild(style);
     buildShell();
-    updateSeg();
     post({ type: 'ready' });
 }
 

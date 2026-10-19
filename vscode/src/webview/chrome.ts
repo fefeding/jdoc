@@ -1,241 +1,102 @@
 // 统一外观层：所有 webview 入口（查看器 / office-editor / pptx-editor）共用同一套
-// 顶栏布局——「文档标题 + 格式徽标在左，查看/编辑分段切换在右上，状态栏在底部」。
+// 设计令牌、字体与底部状态栏。
 //
-// 主题：extension 在 <html data-oe-theme="dark|light"> 上注入主题，深浅色由此驱动；
-// 未注入时跟随系统 prefers-color-scheme。
+// 顶部区域刻意不画任何外壳：文档标题、面包屑、未保存点都由 VS Code 编辑器标题栏/标签栏
+// 呈现，webview 再画一份只会重复；查看/编辑切换与文档切换改为注册成 editor/title 命令，
+// 由 host 通过 setMode 消息驱动（见 package.json 的 menus 与 extension.ts）。
+//
+// 主题：颜色全部取自 VS Code 注入 webview 的 `--vscode-*` 主题变量，用户切换颜色主题
+// （含 High Contrast）时实时跟随，不需要自己维护深浅色两套配色。
+// 兜底值按 `body.vscode-light / vscode-dark / vscode-high-contrast` 三类给出
+// （这三个类由 VS Code 自动加到 webview 的 body 上）。
 
-/** 共享外观样式表（设计令牌 + 顶栏 + 分段切换 + 状态栏） */
+/** 共享外观样式表（设计令牌 + 字体 + 内容区 + 状态栏） */
 export const CHROME_CSS = `
-:root {
-  --jc-bg: #f3f4f6;
-  --jc-surface: #ffffff;
-  --jc-surface-2: #fafbfc;
-  --jc-border: #e2e5ea;
-  --jc-text: #1f2430;
-  --jc-muted: #6b7280;
-  --jc-accent: #2b6cb0;
-  --jc-accent-soft: #e8f0fb;
-  --jc-shadow: 0 1px 2px rgba(16,24,40,.05);
+/* ---------- 设计令牌：优先跟随 VS Code 主题 ---------- */
+body {
+  --jc-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif);
+  --jc-font-mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace);
+
+  --jc-bg: var(--vscode-editor-background, #1b1f27);
+  --jc-surface: var(--vscode-editor-background, #232936);
+  --jc-surface-2: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, #1f242f));
+  --jc-statusbar: var(--vscode-statusBar-background, var(--vscode-editorGroupHeader-tabsBackground, #232936));
+  --jc-statusbar-fg: var(--vscode-statusBar-foreground, var(--vscode-descriptionForeground, #9aa3b2));
+  --jc-border: var(--vscode-panel-border, #333a49);
+  --jc-border-soft: var(--vscode-editorWidget-border, var(--vscode-panel-border, #333a49));
+  --jc-text: var(--vscode-foreground, #e6e9ef);
+  --jc-muted: var(--vscode-descriptionForeground, #9aa3b2);
+  --jc-accent: var(--vscode-button-background, #4c8fe0);
+  --jc-accent-fg: var(--vscode-button-foreground, #ffffff);
+  --jc-accent-hover: var(--vscode-button-hoverBackground, #5f9de6);
+  --jc-accent-soft: var(--vscode-badge-background, #2b3a55);
+  --jc-accent-soft-fg: var(--vscode-badge-foreground, var(--vscode-textLink-foreground, #9ecbff));
+  --jc-hover: var(--vscode-list-hoverBackground, rgba(255,255,255,.06));
+  --jc-active: var(--vscode-list-activeSelectionBackground, var(--vscode-toolbar-activeBackground, rgba(76,143,224,.24)));
+  --jc-focus: var(--vscode-focusBorder, #4c8fe0);
+  --jc-link: var(--vscode-textLink-foreground, #4daafc);
+  --jc-code-bg: var(--vscode-textCodeBlock-background, rgba(255,255,255,.07));
+  --jc-code-fg: var(--vscode-textPreformat-foreground, var(--vscode-foreground, #e6e9ef));
+  color-scheme: dark;
 }
-html[data-oe-theme="dark"] {
-  --jc-bg: #1b1f27;
-  --jc-surface: #232936;
-  --jc-surface-2: #1f242f;
-  --jc-border: #333a49;
-  --jc-text: #e6e9ef;
-  --jc-muted: #9aa3b2;
-  --jc-accent: #4c8fe0;
-  --jc-accent-soft: #2b3a55;
-  --jc-shadow: 0 1px 2px rgba(0,0,0,.3);
+/* 浅色宿主：仅换兜底值，宿主变量存在时仍以宿主为准 */
+body.vscode-light {
+  --jc-bg: var(--vscode-editor-background, #ffffff);
+  --jc-surface: var(--vscode-editor-background, #ffffff);
+  --jc-surface-2: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, #f8f8f8));
+  --jc-statusbar: var(--vscode-statusBar-background, var(--vscode-editorGroupHeader-tabsBackground, #f8f8f8));
+  --jc-statusbar-fg: var(--vscode-statusBar-foreground, var(--vscode-descriptionForeground, #616161));
+  --jc-border: var(--vscode-panel-border, #e5e5e5);
+  --jc-border-soft: var(--vscode-editorWidget-border, var(--vscode-panel-border, #e5e5e5));
+  --jc-text: var(--vscode-foreground, #3b3b3b);
+  --jc-muted: var(--vscode-descriptionForeground, #616161);
+  --jc-accent: var(--vscode-button-background, #005fb8);
+  --jc-accent-fg: var(--vscode-button-foreground, #ffffff);
+  --jc-accent-hover: var(--vscode-button-hoverBackground, #0258a8);
+  --jc-accent-soft: var(--vscode-badge-background, #c4c4c4);
+  --jc-accent-soft-fg: var(--vscode-badge-foreground, #ffffff);
+  --jc-hover: var(--vscode-list-hoverBackground, #e8e8e8);
+  --jc-active: var(--vscode-list-activeSelectionBackground, #e8e8e8);
+  --jc-focus: var(--vscode-focusBorder, #005fb8);
+  --jc-link: var(--vscode-textLink-foreground, #005fb8);
+  --jc-code-bg: var(--vscode-textCodeBlock-background, rgba(0,0,0,.05));
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  html:not([data-oe-theme="light"]) {
-    --jc-bg: #1b1f27; --jc-surface: #232936; --jc-surface-2: #1f242f; --jc-border: #333a49;
-    --jc-text: #e6e9ef; --jc-muted: #9aa3b2; --jc-accent: #4c8fe0; --jc-accent-soft: #2b3a55;
-  }
+/* High Contrast：仍走同一套 vscode 变量，仅保证边框可见 */
+body.vscode-high-contrast {
+  --jc-border: var(--vscode-panel-border, #6fc3df);
+  --jc-border-soft: var(--vscode-panel-border, #6fc3df);
+  color-scheme: dark;
 }
 
-/* ---------- 顶栏 ---------- */
-.jc-top {
-  display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
-  padding: 8px 14px; background: var(--jc-surface);
-  border-bottom: 1px solid var(--jc-border); box-shadow: var(--jc-shadow);
-}
-.jc-top-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--jc-text); }
-.jc-top-title .jc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jc-badge {
-  flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: .6px;
-  padding: 2px 7px; border-radius: 6px; text-transform: uppercase;
-  background: var(--jc-accent-soft); color: var(--jc-accent);
-}
-.jc-dirty { width: 7px; height: 7px; border-radius: 50%; background: transparent; flex: 0 0 auto; }
-.jc-dirty.on { background: var(--jc-accent); }
-.jc-spacer { flex: 1 1 auto; }
-
-/* ---------- 分段切换（查看/编辑） ---------- */
-.jc-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--jc-surface-2); border: 1px solid var(--jc-border); }
-.jc-seg button {
-  appearance: none; border: 0; background: transparent; color: var(--jc-muted);
-  height: 26px; padding: 0 11px; border-radius: 7px; font-size: 12px; font-weight: 600;
-  cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .12s, color .12s;
-}
-.jc-seg button:hover { color: var(--jc-text); }
-.jc-seg button.active { background: var(--jc-accent); color: #fff; box-shadow: 0 1px 2px rgba(16,24,40,.18); }
-.jc-seg button svg { width: 14px; height: 14px; }
-
-/* ---------- 文档切换标签（右上角） ---------- */
-.jc-doctabs { max-width: 46vw; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; margin-left: 6px; }
-.jc-doctabs::-webkit-scrollbar { display: none; }
-.jc-doctabs button { max-width: 190px; }
-.jc-doctab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.jc-doctab-dot {
-  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
-  background: currentColor; opacity: 0;
-}
-.jc-doctab.dirty .jc-doctab-dot { opacity: .9; }
+/* ---------- 字体与基础 ---------- */
+body { font-family: var(--jc-font); }
+button, input, select, textarea { font-family: inherit; }
+:focus-visible { outline: 1px solid var(--jc-focus); outline-offset: -1px; }
 
 /* ---------- 内容与状态栏 ---------- */
-.jc-content { flex: 1 1 auto; overflow: auto; position: relative; }
+.jc-content { flex: 1 1 auto; overflow: auto; position: relative; background: var(--jc-bg); }
 .jc-statusbar {
   display: flex; align-items: center; gap: 12px; flex: 0 0 auto;
-  padding: 5px 14px; background: var(--jc-surface); border-top: 1px solid var(--jc-border);
-  font-size: 12px; color: var(--jc-muted);
+  padding: 4px 12px; background: var(--jc-statusbar); border-top: 1px solid var(--jc-border);
+  font-size: 12px; color: var(--jc-statusbar-fg);
 }
 .jc-statusbar .jc-grow { flex: 1 1 auto; }
 .jc-statusbar .jc-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- 滚动条 ---------- */
-.jc-content::-webkit-scrollbar, .jdoc-md ::-webkit-scrollbar { width: 10px; height: 10px; }
-.jc-content::-webkit-scrollbar-thumb, .jdoc-md ::-webkit-scrollbar-thumb { background: var(--jc-border); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
-.jc-content::-webkit-scrollbar-thumb:hover, .jdoc-md ::-webkit-scrollbar-thumb:hover { background: var(--jc-muted); border: 2px solid transparent; background-clip: content-box; }
+/* ---------- 滚动条（跟随 VS Code） ---------- */
+.jc-content::-webkit-scrollbar, .oe-content::-webkit-scrollbar, .jdoc-md ::-webkit-scrollbar { width: 10px; height: 10px; }
+.jc-content::-webkit-scrollbar-thumb, .oe-content::-webkit-scrollbar-thumb, .jdoc-md ::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,.4)); border-radius: 6px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+.jc-content::-webkit-scrollbar-thumb:hover, .oe-content::-webkit-scrollbar-thumb:hover, .jdoc-md ::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,.7)); border: 2px solid transparent; background-clip: content-box;
+}
+.jc-content::-webkit-scrollbar-thumb:active, .oe-content::-webkit-scrollbar-thumb:active, .jdoc-md ::-webkit-scrollbar-thumb:active {
+  background: var(--vscode-scrollbarSlider-activeBackground, rgba(85,85,85,.8)); border: 2px solid transparent; background-clip: content-box;
+}
 `;
-
-/** 分段切换的一项 */
-export interface ChromeMode {
-    /** 模式标识（调用方自定义语义） */
-    id: string;
-    /** 按钮文案 */
-    label: string;
-    /** 图标名（共享图标集，可选） */
-    icon?: string;
-}
-
-/** createTopBar 的返回 */
-export interface TopBar {
-    el: HTMLElement;
-    /** 标题文本节点容器 */
-    nameEl: HTMLElement;
-    /** 未保存标记 */
-    dirtyEl: HTMLElement;
-    /** 格式徽标 */
-    badgeEl: HTMLElement;
-    /** 切换高亮段 */
-    setActive(id: string): void;
-    /** 更新标题（含未保存点） */
-    setTitle(text: string, dirty?: boolean): void;
-    /** 更新格式徽标 */
-    setBadge(text: string): void;
-}
-
-/** 创建统一顶栏：标题/徽标在左，分段切换在右上。 */
-export function createTopBar(
-    modes: ChromeMode[],
-    current: string,
-    onMode: (id: string) => void,
-    icons: { node(name: string): Node }
-): TopBar {
-    const nameEl = document.createElement('span');
-    nameEl.className = 'jc-name';
-    nameEl.title = '';
-    const dirtyEl = document.createElement('span');
-    dirtyEl.className = 'jc-dirty';
-    dirtyEl.title = '有未保存的修改';
-    const badgeEl = document.createElement('span');
-    badgeEl.className = 'jc-badge';
-
-    const titleEl = document.createElement('div');
-    titleEl.className = 'jc-top-title';
-    titleEl.append(badgeEl, nameEl, dirtyEl);
-
-    const buttons = modes.map((m) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.dataset.mode = m.id;
-        b.title = m.label;
-        if (m.icon) b.append(icons.node(m.icon));
-        b.append(document.createTextNode(m.label));
-        b.onclick = () => onMode(m.id);
-        return b;
-    });
-    const seg = document.createElement('div');
-    seg.className = 'jc-seg';
-    buttons.forEach((b) => seg.append(b));
-
-    const spacer = document.createElement('span');
-    spacer.className = 'jc-spacer';
-    const el = document.createElement('div');
-    el.className = 'jc-top';
-    el.append(titleEl, spacer, seg);
-
-    const setActive = (id: string) => {
-        buttons.forEach((b) => b.classList.toggle('active', b.dataset.mode === id));
-    };
-    setActive(current);
-
-    return {
-        el,
-        nameEl,
-        dirtyEl,
-        badgeEl,
-        setActive,
-        setTitle(text: string, dirty = false) {
-            nameEl.textContent = text;
-            nameEl.title = text + (dirty ? '（有未保存的修改）' : '');
-            dirtyEl.classList.toggle('on', dirty);
-        },
-        setBadge(text: string) {
-            badgeEl.textContent = text;
-            badgeEl.style.display = text ? '' : 'none';
-        }
-    };
-}
-
-/** 已打开文档标签的数据项（与 host 的 DocTabInfo 对应，webview 侧不关心 format） */
-export interface DocTabItem {
-    uri: string;
-    title: string;
-    dirty?: boolean;
-}
-
-/** createDocTabs 的返回 */
-export interface DocTabs {
-    el: HTMLElement;
-    /** 用 host 广播的文档列表刷新标签；只有一个文档时自动隐藏。 */
-    update(items: DocTabItem[], activeUri: string): void;
-}
-
-/**
- * 顶栏右上角的「文档切换标签」：与查看/编辑分段切换同一套视觉，点击切换已打开的文档。
- * 只在打开 2 个及以上文档时显示，避免单文档时白占位置。
- */
-export function createDocTabs(onSelect: (uri: string) => void): DocTabs {
-    const el = document.createElement('div');
-    el.className = 'jc-seg jc-doctabs';
-    el.setAttribute('role', 'tablist');
-    el.style.display = 'none';
-    let signature = '';
-
-    const update = (items: DocTabItem[], activeUri: string): void => {
-        const sig =
-            activeUri + '|' + items.map((i) => `${i.uri}:${i.title}:${i.dirty ? 1 : 0}`).join(',');
-        if (sig === signature) return;
-        signature = sig;
-        el.innerHTML = '';
-        el.style.display = items.length > 1 ? '' : 'none';
-        for (const item of items) {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className =
-                'jc-doctab' +
-                (item.uri === activeUri ? ' active' : '') +
-                (item.dirty ? ' dirty' : '');
-            btn.title = item.title;
-            btn.setAttribute('role', 'tab');
-            btn.setAttribute('aria-selected', item.uri === activeUri ? 'true' : 'false');
-            const name = document.createElement('span');
-            name.className = 'jc-doctab-name';
-            name.textContent = item.title;
-            const dot = document.createElement('span');
-            dot.className = 'jc-doctab-dot';
-            btn.append(name, dot);
-            btn.onclick = () => onSelect(item.uri);
-            el.append(btn);
-        }
-    };
-
-    return { el, update };
-}
-
 /** 创建统一底部状态栏 */
 export function createStatusBar(): { el: HTMLElement; textEl: HTMLElement } {
     const textEl = document.createElement('span');

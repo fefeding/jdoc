@@ -14,18 +14,11 @@ import { icon } from './icons';
 import { t, tip, withAccel } from './i18n';
 import { openMenuAt, MenuItem } from './menu';
 import { THEMES } from '@fefeding/jdoc';
-import type { DocTabInfo, EditorMode } from './protocol';
+import type { EditorMode } from './protocol';
 import { buildTabs, RibbonTab } from './ribbon-tabs';
 
 export type RibbonState = {
   mode: EditorMode;
-  /** Document title (file name) shown in the title bar. */
-  title: string;
-  dirty: boolean;
-  /** 已打开的文档列表（右上角文档切换标签）。 */
-  docs: DocTabInfo[];
-  /** 当前 webview 自己的文档 uri，用于高亮对应标签。 */
-  activeUri: string;
   canUndo: boolean;
   canRedo: boolean;
   zoom: number;
@@ -337,15 +330,8 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
   const builders = { bigButton, miniButton, splitButton, selectBox, colorBox, gallery, chip, group, advanceCheck, animListBox };
 
   // ---------- title bar / quick access ----------
-  const titleText = h('span', { class: 'rb-doc-title' });
-  const dirtyDot = h('span', { class: 'rb-dirty' });
-  const modeGroup = h('div', { class: 'rb-seg', role: 'group', 'aria-label': t('tbar.mode') });
-  const modePreview = h('button', { class: 'rb-seg-btn', type: 'button', title: tip('cmd.modePreview') }, [t('tbar.mode.preview')]);
-  const modeEdit = h('button', { class: 'rb-seg-btn', type: 'button', title: tip('cmd.modeEdit') }, [t('tbar.mode.edit')]);
-  modePreview.onclick = () => api.cmd('setMode', 'preview');
-  modeEdit.onclick = () => api.cmd('setMode', 'edit');
-  modeGroup.append(modePreview, modeEdit);
-
+  // 文档标题 / 未保存点 / 查看-编辑切换都不在这里画：前两者与 VS Code 编辑器标题栏重复，
+  // 模式切换与文档切换由 host 注册为 editor/title 命令（见 package.json 的 menus）。
   const collapseBtn = h('button', { class: 'rb-btn rb-btn-mini rb-collapse', type: 'button', 'aria-expanded': 'true' }, [icon('chevron', 12)]);
   collapseBtn.title = t('tbar.ribbonHide');
 
@@ -407,18 +393,11 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     writeStore(COLLAPSE_KEY, '0');
   }
 
-  // 右上角文档切换标签：由 main.ts 收到 host 的 `docs` 广播后写入 state，sync() 时重建。
-  const docTabsEl = h('div', { class: 'rb-doctabs', role: 'tablist' });
-  docTabsEl.style.display = 'none';
-  let docSig = '';
-
   const rightQat = h('div', { class: 'rb-qat' }, [
-    modeGroup,
     miniButton({ ico: 'help', title: withAccel(t('cmd.shortcuts'), '?'), onClick: () => api.cmd('shortcuts') }).el
   ]);
 
   const titlebar = h('div', { class: 'rb-titlebar' }, [
-    h('div', { class: 'rb-doc' }, [icon('props', 14), titleText, dirtyDot]),
     h('div', { class: 'rb-qat' }, [
       miniButton({ ico: 'undo', title: withAccel(t('cmd.undo'), 'mod+z'), needs: 'canUndo', onClick: () => api.cmd('undo') }).el,
       miniButton({ ico: 'redo', title: withAccel(t('cmd.redo'), 'mod+y'), needs: 'canRedo', onClick: () => api.cmd('redo') }).el,
@@ -428,7 +407,6 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     tabsEl,
     h('div', { class: 'rb-spring' }),
     rightQat,
-    docTabsEl,
     collapseBtn
   ]);
 
@@ -453,46 +431,11 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     collapseBtn.title = t('tbar.ribbonShow');
   }
 
-  /** 文档切换标签：2 个及以上文档时显示；签名不变不重建（sync 调用非常频繁）。 */
-  function renderDocTabs(s: RibbonState): void {
-    const docs = s.docs || [];
-    const sig = s.activeUri + '|' + docs.map((d) => `${d.uri}:${d.title}:${d.dirty ? 1 : 0}`).join(',');
-    if (sig === docSig) return;
-    docSig = sig;
-    docTabsEl.innerHTML = '';
-    docTabsEl.style.display = docs.length > 1 ? '' : 'none';
-    for (const d of docs) {
-      const btn = h(
-        'button',
-        {
-          class: 'rb-doctab' + (d.uri === s.activeUri ? ' on' : '') + (d.dirty ? ' dirty' : ''),
-          type: 'button',
-          title: d.title,
-          'aria-selected': d.uri === s.activeUri ? 'true' : 'false'
-        },
-        [h('span', { class: 'rb-doctab-name' }, [d.title]), h('span', { class: 'rb-doctab-dot' })]
-      );
-      btn.onclick = () => api.cmd('openDocument', d.uri);
-      docTabsEl.append(btn);
-    }
-  }
-
   function sync(s: RibbonState): void {
     const modeChanged = lastState?.mode !== s.mode;
     lastState = s;
     // Preview mode swaps the tab ribbon for a compact header menu (no expandable toolbar).
     root.classList.toggle('rb-preview', s.mode === 'preview');
-    titleText.textContent = s.title;
-    titleText.title = s.title;
-    // coerce to boolean: `toggle(name, undefined)` flips instead of clearing, and the host's
-    // dirty flag is absent on older init payloads.
-    dirtyDot.classList.toggle('on', !!s.dirty);
-    dirtyDot.title = t('tbar.dirty');
-    modeEdit.classList.toggle('on', s.mode === 'edit');
-    modePreview.classList.toggle('on', s.mode === 'preview');
-    modeEdit.classList.toggle('disabled', s.mode === 'edit');
-    modePreview.classList.toggle('disabled', s.mode === 'preview');
-    renderDocTabs(s);
     for (const w of widgets) w.sync?.(s);
     // Preview mode has no editing tabs — hide the ones that would be empty and fall back to
     // the first visible tab. Visibility is re-applied on every render because switching back

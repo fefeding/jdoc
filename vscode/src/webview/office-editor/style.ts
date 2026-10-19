@@ -2,8 +2,9 @@
 // 顶栏/分段切换的统一样式见 chrome.ts（CHROME_CSS），这里只保留编辑器专属规则。
 
 export const officeCss = `
-:root {
-  /* 与共享外观层保持同一套令牌，便于深浅色一致 */
+/* 与共享外观层保持同一套令牌，便于深浅色一致。
+   注意：引用了 body 上的 --jc-*，因此必须声明在 body 上（var() 在声明处解析）。 */
+body {
   --oe-bg: var(--jc-bg, #f3f4f6);
   --oe-surface: var(--jc-surface, #ffffff);
   --oe-border: var(--jc-border, #e2e5ea);
@@ -18,7 +19,9 @@ export const officeCss = `
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
 body {
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--jc-font);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.5;
   color: var(--oe-text);
   background: var(--oe-bg);
 }
@@ -33,18 +36,17 @@ body {
 .oe-tb.oe-glyph { font-weight: 700; }
 .oe-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--oe-border); }
 .oe-select { height: 30px; border: 1px solid var(--oe-border); border-radius: 6px; background: var(--oe-surface); color: var(--oe-text); padding: 0 6px; font-size: 13px; cursor: pointer; }
+.oe-select option { background: var(--vscode-dropdown-background, var(--oe-surface)); color: var(--vscode-dropdown-foreground, var(--oe-text)); }
+.oe-toolbar input[type="text"], .oe-toolbar input[type="number"], .oe-toolbar textarea { background: var(--vscode-input-background, var(--oe-surface)); color: var(--vscode-input-foreground, var(--oe-text)); border: 1px solid var(--vscode-input-border, var(--oe-border)); border-radius: 6px; padding: 4px 8px; font-size: 13px; }
 .oe-color { width: 30px; height: 30px; padding: 0; border: 1px solid var(--oe-border); border-radius: 6px; background: var(--oe-surface); cursor: pointer; }
 
 .oe-content { flex: 1; overflow: auto; position: relative; }
-.oe-statusbar { display: flex; align-items: center; gap: 12px; padding: 5px 14px; background: var(--oe-surface); border-top: 1px solid var(--oe-border); font-size: 12px; color: var(--oe-muted); }
+.oe-statusbar { display: flex; align-items: center; gap: 12px; padding: 5px 14px; background: var(--jc-statusbar); border-top: 1px solid var(--jc-border); font-size: 12px; color: var(--jc-statusbar-fg); }
 .oe-statusbar .grow { flex: 1; }
-.oe-content::-webkit-scrollbar { width: 10px; height: 10px; }
-.oe-content::-webkit-scrollbar-thumb { background: var(--jc-border, #e2e5ea); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
-.oe-content::-webkit-scrollbar-thumb:hover { background: var(--jc-muted, #6b7280); border: 2px solid transparent; background-clip: content-box; }
 
 /* ---------- 查看模式（DOCX/XLSX 只读预览） ---------- */
 .oe-view { padding: 24px; display: flex; justify-content: center; }
-.oe-view .page { background: var(--oe-surface); box-shadow: var(--oe-shadow); border-radius: 4px; padding: 48px 56px; max-width: 820px; width: 100%; }
+.oe-view .page { background: #fff; color: #1f2328; box-shadow: var(--oe-shadow); border-radius: 4px; padding: 48px 56px; max-width: 820px; width: 100%; }
 .oe-view .page table { border-collapse: collapse; }
 .oe-view img { max-width: 100%; }
 .oe-hint { padding: 16px; color: var(--oe-muted); }
@@ -62,7 +64,7 @@ body {
 .oe-grip button:hover { color: var(--oe-accent); border-color: var(--oe-accent); }
 .oe-grip svg { width: 13px; height: 13px; }
 .oe-edit { outline: none; min-height: 1.5em; }
-.oe-edit:focus { background: #fffbe6; border-radius: 4px; }
+.oe-edit:focus { background: var(--vscode-editor-selectionBackground, #fffbe6); border-radius: 4px; }
 .oe-edit[data-empty="1"]::before { content: attr(data-ph); color: #b6bcc7; }
 .oe-block[data-type="heading"] .oe-edit { font-weight: 700; line-height: 1.3; margin: .5em 0 .3em; }
 .oe-block[data-type="heading"][data-level="1"] .oe-edit { font-size: 28px; }
@@ -73,7 +75,7 @@ body {
 .oe-block[data-type="heading"][data-level="6"] .oe-edit { font-size: 14px; }
 .oe-block[data-type="paragraph"] .oe-edit { margin: .35em 0; }
 .oe-block[data-type="quote"] .oe-edit { border-left: 3px solid var(--oe-accent); padding-left: 12px; color: var(--oe-muted); font-style: italic; }
-.oe-block[data-type="code"] .oe-edit { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f6f8fa; padding: 10px 12px; border-radius: 6px; white-space: pre-wrap; }
+.oe-block[data-type="code"] .oe-edit { font-family: var(--vscode-editor-font-family, ui-monospace, monospace); background: #f6f8fa; padding: 10px 12px; border-radius: 6px; white-space: pre-wrap; }
 .oe-block[data-type="hr"] { padding: 6px 0; }
 .oe-block[data-type="hr"] hr { border: 0; border-top: 2px solid var(--oe-border); margin: 0; }
 .oe-block[data-type="image"] img { max-width: 100%; border-radius: 4px; }
@@ -107,14 +109,14 @@ body {
 .oe-grid td .cell { width: 100%; height: 100%; min-height: 26px; padding: 3px 6px; outline: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: cell; }
 .oe-grid td.inrange { background: var(--oe-accent-soft); }
 .oe-grid td.active { outline: 2px solid var(--oe-accent); outline-offset: -2px; }
-.oe-grid td .cell[contenteditable="true"] { background: #fff; white-space: normal; overflow: auto; cursor: text; box-shadow: inset 0 0 0 2px var(--oe-accent); }
+.oe-grid td .cell[contenteditable="true"] { background: #fff; color: #1f2328; white-space: normal; overflow: auto; cursor: text; box-shadow: inset 0 0 0 2px var(--oe-accent); }
 .oe-grid .col-res { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 1; }
 .oe-grid .fz { position: sticky; z-index: 2; }
 .oe-grid thead th.fz { z-index: 6; }
 .oe-grid tbody th.oe-rownum.fz { z-index: 4; }
 
 /* ---------- toast ---------- */
-.oe-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #1f2430; color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; box-shadow: var(--oe-shadow); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 50; max-width: 80%; }
+.oe-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--vscode-notifications-background, #1f2430); color: var(--vscode-notifications-foreground, #fff); border: 1px solid var(--jc-border); padding: 8px 16px; border-radius: 8px; font-size: 13px; box-shadow: var(--oe-shadow); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 50; max-width: 80%; }
 .oe-toast.show { opacity: .96; }
 .oe-toast.err { background: var(--oe-danger); }
 

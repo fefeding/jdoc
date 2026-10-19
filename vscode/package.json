@@ -18,10 +18,6 @@
   ],
   "main": "./dist/extension.js",
   "icon": "icon.png",
-  "activationEvents": [
-    "onCustomEditor:jdoc.documentEditor",
-    "onCommand:jdoc.preview"
-  ],
   "contributes": {
     "customEditors": [
       {
@@ -51,10 +47,43 @@
       {
         "command": "jdoc.preview",
         "title": "jdoc: 用 jdoc 打开预览"
+      },
+      {
+        "command": "jdoc.viewMode",
+        "title": "查看",
+        "category": "jdoc",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "jdoc.editMode",
+        "title": "编辑",
+        "category": "jdoc",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "jdoc.switchDocument",
+        "title": "切换文档",
+        "category": "jdoc",
+        "icon": "$(files)"
       }
     ],
     "menus": {
       "editor/title": [
+        {
+          "command": "jdoc.viewMode",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && !jdoc:editing",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jdoc.editMode",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && jdoc:editing",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jdoc.switchDocument",
+          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "group": "navigation@2"
+        },
         {
           "command": "jdoc.revert",
           "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",

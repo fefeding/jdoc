@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { JdocDocument } from './document';
-import type { DocFormat, DocTabInfo, HostToWebview, WebviewToHost } from './protocol';
+import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
 
 const VIEW_TYPE = 'jdoc.documentEditor';
 
@@ -29,15 +29,14 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
 
     private _activeDoc: JdocDocument | undefined;
 
+    /** 当前活动的 webview 面板（标题栏命令需要向它发消息）。 */
+    private _activePanel: vscode.WebviewPanel | undefined;
+
     /**
-     * 已打开的文档（key 为 uri.toString()）。用于驱动各 webview 顶栏右上角的
-     * 「文档切换标签」：所有自定义编辑器都经由本 provider 打开，因此这里能拿到全量列表。
-     * key 同时就是该文档所属面板的标识，广播时据此告诉每个 webview 哪个是自己。
+     * 已打开的文档（key 为 uri.toString()）。用于编辑器标题栏的「切换文档」命令：
+     * 所有自定义编辑器都经由本 provider 打开，因此这里能拿到全量列表。
      */
-    private readonly _openDocs = new Map<
-        string,
-        { entry: DocTabInfo; panels: Set<vscode.WebviewPanel> }
-    >();
+    private readonly _openDocs = new Map<string, DocTabInfo>();
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -76,25 +75,17 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
 
         const key = document.uri.toString();
         const title = document.uri.path.split('/').pop() || 'document';
-        let rec = this._openDocs.get(key);
-        if (!rec) {
-            rec = {
-                entry: { uri: key, title, format: document.format, dirty: document.isDirty },
-                panels: new Set()
-            };
-            this._openDocs.set(key, rec);
-        }
-        rec.panels.add(webviewPanel);
-        rec.entry.dirty = document.isDirty;
+        this._openDocs.set(key, { uri: key, title, format: document.format, dirty: document.isDirty });
         webviewPanel.onDidDispose(() => {
-            rec!.panels.delete(webviewPanel);
-            if (!rec!.panels.size) this._openDocs.delete(key);
-            this.broadcastDocs();
+            this._openDocs.delete(key);
         });
-        this.broadcastDocs();
 
         webviewPanel.onDidChangeViewState((e) => {
-            if (e.webviewPanel.active) this._activeDoc = document;
+            if (e.webviewPanel.active) {
+                this._activeDoc = document;
+                this._activePanel = webviewPanel;
+                this.syncContext();
+            }
         });
 
         const send = (msg: HostToWebview) => webviewPanel.webview.postMessage(msg);
@@ -123,19 +114,10 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                 switch (message.type) {
                     case 'ready':
                         await sendInit();
-                        this.broadcastDocs();
-                        break;
-                    case 'openDocument':
-                        // 用同一个 viewType 重新打开目标文档：已打开则聚焦到该标签，
-                        // 未打开则新建（遵循 VS Code 的 preview 设置）。
-                        await vscode.commands.executeCommand(
-                            'vscode.openWith',
-                            vscode.Uri.parse(message.uri),
-                            VIEW_TYPE
-                        );
                         break;
                     case 'setMode':
                         document.mode = message.mode;
+                        if (this._activeDoc === document) this.syncContext();
                         break;
                     case 'sync':
                         document.setBytes(message.bytes);
@@ -172,22 +154,46 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         }
     }
 
-    /** 文档 dirty 状态变化时刷新对应标签并广播。 */
-    private syncDocTab(document: JdocDocument): void {
-        const rec = this._openDocs.get(document.uri.toString());
-        if (!rec || rec.entry.dirty === document.isDirty) return;
-        rec.entry.dirty = document.isDirty;
-        this.broadcastDocs();
+    /** 记录当前活动文档，用于标题栏命令（查看/编辑、切换文档）。 */
+    private syncContext(): void {
+        void vscode.commands.executeCommand('setContext', 'jdoc:editing', this._activeDoc?.mode === 'edit');
     }
 
-    /** 把「已打开文档」列表推给每个 webview（activeUri = 该 webview 自己的文档）。 */
-    private broadcastDocs(): void {
-        const docs = Array.from(this._openDocs.values(), (rec) => rec.entry);
-        for (const [key, rec] of this._openDocs) {
-            for (const panel of rec.panels) {
-                void panel.webview.postMessage({ type: 'docs', docs, activeUri: key } as HostToWebview);
-            }
+    /** 标题栏「查看 / 编辑」命令：把模式推给当前活动的 webview。 */
+    public async setActiveMode(mode: EditorMode): Promise<void> {
+        const doc = this._activeDoc;
+        if (!doc) return;
+        doc.mode = mode;
+        this.syncContext();
+        await this._activePanel?.webview.postMessage({ type: 'setMode', mode } as HostToWebview);
+    }
+
+    /** 标题栏「切换文档」命令：在已打开的 jdoc 文档之间跳转。 */
+    public async switchDocument(): Promise<void> {
+        const docs = Array.from(this._openDocs.values());
+        if (docs.length === 0) {
+            vscode.window.showInformationMessage(loc('extension.noOpenDoc', 'No jdoc document is open.'));
+            return;
         }
+        const items = docs.map((d) => ({
+            label: d.title,
+            description: vscode.workspace.asRelativePath(vscode.Uri.parse(d.uri)),
+            detail: d.dirty ? loc('extension.unsavedDoc', 'Unsaved changes') : undefined,
+            uri: d.uri
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+            placeHolder: loc('extension.switchDoc', 'Switch to an open document')
+        });
+        if (!picked) return;
+        // 用同一个 viewType 打开：已打开则聚焦到该标签，未打开则新建。
+        await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.parse(picked.uri), VIEW_TYPE);
+    }
+
+    /** 文档 dirty 状态变化时刷新已打开文档列表。 */
+    private syncDocTab(document: JdocDocument): void {
+        const rec = this._openDocs.get(document.uri.toString());
+        if (!rec || rec.dirty === document.isDirty) return;
+        rec.dirty = document.isDirty;
     }
 
     // ---- CustomEditorProvider 必需方法 ----
@@ -325,6 +331,10 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('jdoc.revert', () => provider.revertActive()),
         vscode.commands.registerCommand('jdoc.exportCopy', () => provider.exportActive()),
+        // 标题栏（editor/title）里的查看/编辑与文档切换
+        vscode.commands.registerCommand('jdoc.viewMode', () => provider.setActiveMode('view')),
+        vscode.commands.registerCommand('jdoc.editMode', () => provider.setActiveMode('edit')),
+        vscode.commands.registerCommand('jdoc.switchDocument', () => provider.switchDocument()),
         // Markdown / TXT 等文件 VS Code 有内置编辑器（内置优先级更高），
         // 因此提供显式入口，用 jdoc 预览当前文件或资源管理器里选中的文件。
         vscode.commands.registerCommand('jdoc.preview', async (uri?: vscode.Uri) => {

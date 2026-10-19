@@ -5,15 +5,17 @@ export const baseCss = `
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; padding: 0; }
 body {
-  background: var(--jc-bg, #f3f4f6);
-  color: var(--jc-text, #1f2328);
-  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--jc-bg);
+  color: var(--jc-text);
+  font-family: var(--jc-font);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.6;
 }
 #pptx-styles { display: none; }
 .jc-app { display: flex; flex-direction: column; height: 100%; }
 .jc-app > .jc-content { padding: 16px; }
-.hint { color: var(--jc-muted, #656d76); font-size: 12px; padding: 24px; text-align: center; }
-.error { color: #cf222e; white-space: pre-wrap; }
+.hint { color: var(--jc-muted); font-size: 12px; padding: 24px; text-align: center; }
+.error { color: var(--vscode-errorForeground, #f14c4c); white-space: pre-wrap; }
 
 /* PPTX 幻灯片 */
 .pptx-slides { display: flex; flex-direction: column; align-items: center; gap: 16px; }
@@ -22,7 +24,8 @@ body {
 ::where(.pptx-slides, .pptx-slides *) { box-sizing: content-box; line-height: normal; }
 
 /* DOCX / XLSX 文档体（查看器兜底路径，office-editor 有自己的样式） */
-.docx-body, .xlsx-body { background: var(--jc-surface, #fff); border: 1px solid var(--jc-border, #d0d7de); border-radius: 10px; padding: 24px; max-width: 960px; margin: 0 auto; }
+/* 文档纸面：DOCX/XLSX 的 HTML 自带深色文字与浅色表格，保持白底以保证可读性 */
+.docx-body, .xlsx-body { background: #fff; color: #1f2328; border: 1px solid var(--jc-border-soft); border-radius: 10px; padding: 24px; max-width: 960px; margin: 0 auto; box-shadow: var(--jc-shadow, none); }
 .xlsx-body { padding: 8px; overflow: auto; }
 
 /* PDF 页面 */
@@ -37,15 +40,18 @@ body {
 .pdf-canvas-page .pdf-text-layer span { position: absolute; white-space: pre; line-height: 1; font-family: sans-serif; transform-origin: 0 0; }
 
 /* Markdown / 纯文本预览 */
-:root {
-  --jdoc-md-fg: var(--jc-text, #1f2328);
-  --jdoc-md-bd: var(--jc-border, #d0d7de);
-  --jdoc-md-mut: var(--jc-muted, #656d76);
-  --jdoc-md-link: var(--jc-accent, #0969da);
-  --jdoc-md-code-bg: #f6f8fa;
-  --jdoc-md-th-bg: #f6f8fa;
-  --jdoc-md-row-bg: rgba(246,248,250,.6);
+/* 注意：这些令牌引用了 --jc-*（声明在 body 上），因此必须同样声明在 body 上——
+   自定义属性里的 var() 在声明处解析，写在 :root 会因取不到 --jc-* 而整体失效。 */
+body {
+  --jdoc-md-fg: var(--jc-text);
+  --jdoc-md-bd: var(--jc-border);
+  --jdoc-md-mut: var(--jc-muted);
+  --jdoc-md-link: var(--jc-link);
+  --jdoc-md-code-bg: var(--jc-code-bg);
+  --jdoc-md-th-bg: var(--jc-surface-2);
+  --jdoc-md-row-bg: var(--jc-hover);
 }
-.md-body, .txt-body { background: var(--jc-surface, #fff); border: 1px solid var(--jc-border, #d0d7de); border-radius: 10px; padding: 28px 32px; max-width: 960px; margin: 0 auto; }
+.md-body, .txt-body { background: var(--jc-surface); border: 1px solid var(--jc-border-soft); border-radius: 10px; padding: 28px 32px; max-width: 960px; margin: 0 auto; box-shadow: var(--jc-shadow, none); }
 .txt-body { padding: 16px 20px; overflow: auto; }
+.txt-body .jdoc-txt { font-family: var(--jc-font-mono); }
 `;

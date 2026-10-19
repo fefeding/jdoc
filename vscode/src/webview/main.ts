@@ -2,8 +2,7 @@ import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml, renderM
 import { chartRenderer } from './chart-renderer';
 import { b64ToBytes, escapeHtml } from './util';
 import { baseCss } from './style';
-import { CHROME_CSS, createTopBar, createStatusBar, createDocTabs, type TopBar, type DocTabs } from './chrome';
-import { iconNode } from './icons';
+import { CHROME_CSS, createStatusBar } from './chrome';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -12,17 +11,9 @@ const vscode = acquireVsCodeApi();
 let format: DocFormat = 'pptx';
 let mode: EditorMode = 'view';
 let currentBytes: Uint8Array = new Uint8Array(0);
-let docTitle = '';
-let topBar: TopBar | null = null;
-let docTabs: DocTabs | null = null;
 let statusText: HTMLElement | null = null;
 /** 只握手一次：host 收到 ready 会再发一次 init，无条件回 ready 会形成无限循环。 */
 let readySent = false;
-
-/** 格式 -> 徽标文案 */
-const FORMAT_LABEL: Record<string, string> = {
-    pptx: 'PPTX', docx: 'DOCX', xlsx: 'XLSX', pdf: 'PDF', md: 'Markdown', txt: 'TXT'
-};
 
 function applyBaseStyle(): void {
     const style = document.createElement('style');
@@ -49,36 +40,15 @@ function renderShell(): { content: HTMLElement } {
     const app = document.getElementById('app')!;
     app.innerHTML = '';
 
-    topBar = createTopBar(
-        [
-            { id: 'view', label: '查看', icon: 'eye' },
-            { id: 'edit', label: '编辑', icon: 'pencil' }
-        ],
-        mode,
-        (id) => setMode(id as EditorMode),
-        { node: iconNode }
-    );
-    topBar.setTitle(docTitle);
-    topBar.setBadge(FORMAT_LABEL[format] || format.toUpperCase());
-    // 右上角文档切换标签（由 host 的 docs 广播填充）
-    docTabs = createDocTabs((uri) => vscode.postMessage({ type: 'openDocument', uri }));
-    topBar.el.append(docTabs.el);
-
+    // 不画顶栏：标题 / 面包屑 / 未保存点由 VS Code 编辑器标题栏呈现，webview 再画一份只会重复。
     const content = document.createElement('div');
     content.className = 'jc-content';
     content.id = 'content';
     const status = createStatusBar();
     statusText = status.textEl;
     app.className = 'jc-app';
-    app.append(topBar.el, content, status.el);
+    app.append(content, status.el);
     return { content };
-}
-
-function setMode(next: EditorMode): void {
-    mode = next;
-    vscode.postMessage({ type: 'setMode', mode });
-    topBar?.setActive(mode);
-    void renderContent();
 }
 
 async function renderContent(): Promise<void> {
@@ -166,9 +136,11 @@ async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<
     });
     // 增强内容：Mermaid 图表 / KaTeX 公式（动态加载依赖，失败时保留源码降级显示）
     try {
-        const dark = document.documentElement.getAttribute('data-oe-theme') === 'dark'
-            || (window.matchMedia?.('(prefers-color-scheme: dark)').matches &&
-                document.documentElement.getAttribute('data-oe-theme') !== 'light');
+        // 主题判定：优先用 VS Code 给 webview body 加的类（实时跟随颜色主题），
+        // 其次退回 html 上的 data-oe-theme，再退回系统偏好。
+        const cls = document.body.classList;
+        const dark = cls.contains('vscode-dark') || cls.contains('vscode-high-contrast') ||
+            (document.documentElement.getAttribute('data-oe-theme') === 'dark');
         await renderMarkdownExtras(body, { theme: dark ? 'dark' : 'default' });
     } catch (err: any) {
         messages.push(`图表/公式渲染失败：${String(err?.message || err)}`);
@@ -347,7 +319,6 @@ window.addEventListener('message', (e) => {
         case 'init':
             format = msg.format;
             mode = msg.mode || 'view';
-            docTitle = msg.title || '';
             currentBytes = b64ToBytes(msg.bytes);
             applyBaseStyle();
             renderShell();
@@ -357,12 +328,10 @@ window.addEventListener('message', (e) => {
                 vscode.postMessage({ type: 'ready' });
             }
             break;
-        case 'docs':
-            docTabs?.update(msg.docs, msg.activeUri);
-            break;
         case 'reverted':
             void renderContent();
             break;
+        case 'setMode':
         case 'saved':
         case 'info':
             break;

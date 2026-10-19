@@ -8,16 +8,6 @@
 
 export type EditorMode = 'preview' | 'edit';
 
-/** 顶栏「文档切换标签」的一项（host 广播的已打开文档列表）。 */
-export interface DocTabInfo {
-  /** 文档 uri.toString()，点击时原样回传给 host。 */
-  uri: string;
-  /** 文件名，用作标签文案。 */
-  title: string;
-  /** 是否有未保存的修改（标签上显示小圆点）。 */
-  dirty: boolean;
-}
-
 /** Webview → Host */
 export type WebviewToHost =
   | { type: 'ready' }
@@ -30,8 +20,6 @@ export type WebviewToHost =
   | { type: 'save' }
   | { type: 'saveAs'; bytes: string | null }
   | { type: 'revert' }
-  /** 顶栏文档标签被点击：切换到（或打开）该文档。 */
-  | { type: 'openDocument'; uri: string }
   /** Surface a webview-side problem (parse/serialize failure) in the host UI. */
   | { type: 'error'; message: string };
 
@@ -55,8 +43,8 @@ export type HostToWebview =
      */
     locale: string;
   }
-  /** 已打开文档列表：驱动顶栏右上角的文档切换标签。 */
-  | { type: 'docs'; docs: DocTabInfo[]; activeUri: string }
+  /** 切换预览/编辑模式（由 VS Code 标题栏的 jdoc.viewMode / jdoc.editMode 命令触发）。 */
+  | { type: 'setMode'; mode: EditorMode }
   | { type: 'bytes'; bytes: string; dirty: boolean }
   | { type: 'saved' }
   | { type: 'reverted' }
