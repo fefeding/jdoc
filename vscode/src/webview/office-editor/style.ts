@@ -1,16 +1,18 @@
 // office-editor 样式：外壳（工具栏/内容/状态栏）+ 块式 DOCX + 网格 XLSX。
+// 顶栏/分段切换的统一样式见 chrome.ts（CHROME_CSS），这里只保留编辑器专属规则。
 
 export const officeCss = `
 :root {
-  --oe-bg: #f3f4f6;
-  --oe-surface: #ffffff;
-  --oe-border: #e2e5ea;
-  --oe-text: #1f2430;
-  --oe-muted: #6b7280;
-  --oe-accent: #2b6cb0;
-  --oe-accent-soft: #e8f0fb;
+  /* 与共享外观层保持同一套令牌，便于深浅色一致 */
+  --oe-bg: var(--jc-bg, #f3f4f6);
+  --oe-surface: var(--jc-surface, #ffffff);
+  --oe-border: var(--jc-border, #e2e5ea);
+  --oe-text: var(--jc-text, #1f2430);
+  --oe-muted: var(--jc-muted, #6b7280);
+  --oe-accent: var(--jc-accent, #2b6cb0);
+  --oe-accent-soft: var(--jc-accent-soft, #e8f0fb);
   --oe-danger: #d64545;
-  --oe-toolbar: #fafbfc;
+  --oe-toolbar: var(--jc-surface-2, #fafbfc);
   --oe-shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1);
 }
 * { box-sizing: border-box; }
@@ -21,16 +23,6 @@ body {
   background: var(--oe-bg);
 }
 .oe { display: flex; flex-direction: column; height: 100%; }
-.oe-top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--oe-surface); border-bottom: 1px solid var(--oe-border); }
-.oe-top .oe-title { font-weight: 600; font-size: 13px; color: var(--oe-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
-.oe-top .oe-title .dirty { color: var(--oe-accent); }
-.oe-seg { display: inline-flex; border: 1px solid var(--oe-border); border-radius: 8px; overflow: hidden; }
-.oe-seg button { appearance: none; border: 0; background: var(--oe-surface); color: var(--oe-muted); padding: 5px 12px; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-.oe-seg button + button { border-left: 1px solid var(--oe-border); }
-.oe-seg button.active { background: var(--oe-accent); color: #fff; }
-.oe-seg svg { width: 15px; height: 15px; }
-.oe-spacer { flex: 1; }
-
 .oe-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 12px; background: var(--oe-toolbar); border-bottom: 1px solid var(--oe-border); min-height: 42px; }
 .oe-toolbar:empty { display: none; }
 .oe-tb { appearance: none; border: 1px solid transparent; background: transparent; color: var(--oe-text); height: 30px; min-width: 30px; padding: 0 7px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 5px; font-size: 13px; }
@@ -44,8 +36,11 @@ body {
 .oe-color { width: 30px; height: 30px; padding: 0; border: 1px solid var(--oe-border); border-radius: 6px; background: var(--oe-surface); cursor: pointer; }
 
 .oe-content { flex: 1; overflow: auto; position: relative; }
-.oe-statusbar { display: flex; align-items: center; gap: 12px; padding: 4px 12px; background: var(--oe-surface); border-top: 1px solid var(--oe-border); font-size: 12px; color: var(--oe-muted); }
+.oe-statusbar { display: flex; align-items: center; gap: 12px; padding: 5px 14px; background: var(--oe-surface); border-top: 1px solid var(--oe-border); font-size: 12px; color: var(--oe-muted); }
 .oe-statusbar .grow { flex: 1; }
+.oe-content::-webkit-scrollbar { width: 10px; height: 10px; }
+.oe-content::-webkit-scrollbar-thumb { background: var(--jc-border, #e2e5ea); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+.oe-content::-webkit-scrollbar-thumb:hover { background: var(--jc-muted, #6b7280); border: 2px solid transparent; background-clip: content-box; }
 
 /* ---------- 查看模式（DOCX/XLSX 只读预览） ---------- */
 .oe-view { padding: 24px; display: flex; justify-content: center; }

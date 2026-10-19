@@ -5,12 +5,14 @@
 // 编辑器载入 blocks/sheets 模型 → 编辑 → jsonToDocx/jsonToXlsx 生成字节 → sync 回 host 保存。
 import { docxToHtml, xlsxToHtml } from '@fefeding/jdoc';
 import { officeCss } from './style';
+import { CHROME_CSS } from '../chrome';
 import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
 import { createXlsxEditor, type XlsxEditor } from './xlsx';
 import { b64ToBytes, bytesToB64, h, escapeHtml } from './util';
-import { icon, iconNode } from './icons';
-import type { DocFormat, EditorMode, HostToWebview, WebviewToHost } from '../protocol';
+import { icon, iconNode } from '../icons';
+import { createTopBar, createDocTabs, type TopBar, type DocTabs } from '../chrome';
+import type { DocFormat, EditorMode, HostToWebview, WebviewToHost } from '../../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -25,9 +27,10 @@ let gen = 0; // init 代数：丢弃过期的异步 applyMode 结果，防快速
 
 let editor: DocxEditor | XlsxEditor | null = null;
 let root: HTMLElement;
+let topBar: TopBar | null = null;
+let docTabs: DocTabs | null = null;
 let titleEl: HTMLElement;
-let segView: HTMLButtonElement;
-let segEdit: HTMLButtonElement;
+let dirtyEl: HTMLElement;
 let toolbarEl: HTMLElement;
 let contentEl: HTMLElement;
 let statusEl: HTMLElement;
@@ -59,11 +62,22 @@ function buildShell(): void {
     root.innerHTML = '';
     const app = h('div', { class: 'oe' });
 
-    titleEl = h('span', { class: 'oe-title' });
-    segView = h('button', { type: 'button', onclick: () => setMode('view') }, [iconNode('eye'), h('span', { text: '查看' })]) as HTMLButtonElement;
-    segEdit = h('button', { type: 'button', onclick: () => setMode('edit') }, [iconNode('pencil'), h('span', { text: '编辑' })]) as HTMLButtonElement;
-    const seg = h('div', { class: 'oe-seg' }, [segView, segEdit]);
-    const top = h('div', { class: 'oe-top' }, [titleEl, h('span', { class: 'oe-spacer' }), seg]);
+    topBar = createTopBar(
+        [
+            { id: 'view', label: '查看', icon: 'eye' },
+            { id: 'edit', label: '编辑', icon: 'pencil' }
+        ],
+        mode,
+        (id) => setMode(id as EditorMode),
+        { node: iconNode }
+    );
+    topBar.setBadge(format === 'xlsx' ? 'XLSX' : 'DOCX');
+    titleEl = topBar.nameEl;
+    dirtyEl = topBar.dirtyEl;
+    // 右上角文档切换标签（由 host 的 docs 广播填充）
+    docTabs = createDocTabs((uri) => post({ type: 'openDocument', uri }));
+    topBar.el.append(docTabs.el);
+    const top = topBar.el;
 
     toolbarEl = h('div', { class: 'oe-toolbar' });
     contentEl = h('div', { class: 'oe-content' });
@@ -74,15 +88,12 @@ function buildShell(): void {
 }
 
 function updateTitle(): void {
-    titleEl.innerHTML = '';
-    titleEl.append(document.createTextNode(docTitle + ' '));
-    if (dirty) titleEl.append(h('span', { class: 'dirty', text: '•' }));
-    titleEl.title = docTitle + (dirty ? '（未保存）' : '');
+    topBar?.setTitle(docTitle, dirty);
 }
 
 function updateSeg(): void {
-    segView.classList.toggle('active', mode === 'view');
-    segEdit.classList.toggle('active', mode === 'edit');
+    topBar?.setActive(mode);
+    if (statusEl && mode === 'view') statusEl.textContent = '查看模式（只读）';
 }
 
 // ---------- 模式 ----------
@@ -101,7 +112,7 @@ async function enterView(): Promise<void> {
         editor = null;
     }
     toolbarEl.innerHTML = '';
-    statusEl.textContent = '';
+    statusEl.textContent = '查看模式（只读）';
     contentEl.innerHTML = '';
     try {
         let html = '';
@@ -182,6 +193,9 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             updateTitle();
             break;
         }
+        case 'docs':
+            docTabs?.update(msg.docs, msg.activeUri);
+            break;
         case 'saved':
             dirty = false;
             updateTitle();
@@ -200,7 +214,7 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
 // ---------- 启动 ----------
 function main(): void {
     const style = document.createElement('style');
-    style.textContent = officeCss;
+    style.textContent = CHROME_CSS + officeCss;
     document.head.appendChild(style);
     buildShell();
     updateSeg();

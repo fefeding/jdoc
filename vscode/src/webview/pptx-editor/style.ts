@@ -71,6 +71,24 @@ button { font-family: inherit; }
 .rb-seg-btn.on { background: var(--accent-bg); }
 .rb-seg-btn.disabled { opacity: .5; cursor: default; }
 
+/* 右上角文档切换标签（打开 2 个及以上文档时显示） */
+.rb-doctabs {
+  display: inline-flex; align-items: center; gap: 2px; align-self: center;
+  max-width: 38vw; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px; margin-left: 8px;
+}
+.rb-doctabs::-webkit-scrollbar { display: none; }
+.rb-doctab {
+  background: transparent; border: 0; border-radius: 3px; color: var(--text);
+  padding: 3px 8px; font-size: 12px; cursor: pointer; max-width: 190px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.rb-doctab:hover { background: var(--hover); }
+.rb-doctab.on { background: var(--accent-bg); }
+.rb-doctab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-doctab-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0; flex: 0 0 auto; }
+.rb-doctab.dirty .rb-doctab-dot { opacity: .9; }
+
 /* Tab strip sits inline in the title bar; the active tab is marked by a bottom accent. */
 .rb-tabs { display: flex; align-items: stretch; gap: 1px; flex: 0 1 auto; margin: 0 2px; overflow: hidden; }
 .rb-tab {

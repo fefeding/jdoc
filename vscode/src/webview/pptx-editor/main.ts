@@ -70,7 +70,7 @@ import {
 } from './dialogs';
 // Same ECharts renderer the preview side uses (option building incl. 3D matches examples/index.html)
 import { chartRenderer } from '../chart-renderer';
-import type { EditorMode, HostToWebview, WebviewToHost } from './protocol';
+import type { DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
 
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewToHost): void;
@@ -111,6 +111,10 @@ const state: {
   present: { slides: string[]; charts: any[]; version: number; global?: string } | null;
   /** True when the host document has unsaved changes (drives the title-bar dirty dot). */
   dirty: boolean;
+  /** 已打开的文档列表（右上角文档切换标签，由 host 的 docs 广播驱动）。 */
+  docs: DocTabInfo[];
+  /** 当前 webview 自己的文档 uri，用于高亮对应标签。 */
+  uri: string;
   /** Bumped whenever the serialized document changes, to invalidate cached renders. */
   version: number;
   slideSize: { width: number; height: number };
@@ -128,6 +132,8 @@ const state: {
   preview: null,
   present: null,
   dirty: false,
+  docs: [],
+  uri: '',
   version: 0,
   slideSize: { width: 1280, height: 720 },
   current: 0,
@@ -461,6 +467,8 @@ function ribbonState(): RibbonState {
     mode: state.mode,
     title: state.title,
     dirty: state.dirty,
+    docs: state.docs,
+    activeUri: state.uri,
     canUndo: editing && store.canUndo(),
     canRedo: editing && store.canRedo(),
     zoom: state.zoom,
@@ -494,6 +502,8 @@ function ribbonCommands(name: string, ...args: any[]): any {
     case 'undo': return runAction(() => store.undo());
     case 'redo': return runAction(() => store.redo());
     case 'setMode': return setMode(args[0]);
+    // 顶栏文档标签：切到已打开的其他文档（由 host 负责聚焦/打开对应编辑器）。
+    case 'openDocument': return post({ type: 'openDocument', uri: String(args[0] || '') });
     case 'shortcuts': return openShortcuts();
     case 'docProps': return toggleDocInfo();
     case 'present': return startPresent(false);
@@ -3389,6 +3399,7 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
         state.original = toBytes(msg.originalBytes ?? msg.bytes);
         state.latest = toBytes(msg.bytes);
         state.title = msg.title || state.title;
+        state.uri = msg.uri || state.uri;
         state.mode = msg.mode === 'edit' ? 'edit' : 'preview';
         state.dirty = msg.dirty;
         state.version++;
@@ -3409,6 +3420,11 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
         syncChrome();
         break;
       }
+      case 'docs':
+        state.docs = msg.docs || [];
+        state.uri = msg.activeUri || state.uri;
+        syncChrome();
+        break;
       case 'saved':
         state.dirty = false;
         syncChrome();

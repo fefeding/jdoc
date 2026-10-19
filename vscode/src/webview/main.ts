@@ -2,6 +2,8 @@ import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml, renderM
 import { chartRenderer } from './chart-renderer';
 import { b64ToBytes, escapeHtml } from './util';
 import { baseCss } from './style';
+import { CHROME_CSS, createTopBar, createStatusBar, createDocTabs, type TopBar, type DocTabs } from './chrome';
+import { iconNode } from './icons';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -10,10 +12,21 @@ const vscode = acquireVsCodeApi();
 let format: DocFormat = 'pptx';
 let mode: EditorMode = 'view';
 let currentBytes: Uint8Array = new Uint8Array(0);
+let docTitle = '';
+let topBar: TopBar | null = null;
+let docTabs: DocTabs | null = null;
+let statusText: HTMLElement | null = null;
+/** 只握手一次：host 收到 ready 会再发一次 init，无条件回 ready 会形成无限循环。 */
+let readySent = false;
+
+/** 格式 -> 徽标文案 */
+const FORMAT_LABEL: Record<string, string> = {
+    pptx: 'PPTX', docx: 'DOCX', xlsx: 'XLSX', pdf: 'PDF', md: 'Markdown', txt: 'TXT'
+};
 
 function applyBaseStyle(): void {
     const style = document.createElement('style');
-    style.textContent = baseCss;
+    style.textContent = CHROME_CSS + baseCss;
     document.head.appendChild(style);
 }
 
@@ -27,38 +40,44 @@ function injectGlobalStyles(css: string): void {
     el.textContent = css;
 }
 
-function buildToolbar(toolbar: HTMLElement): void {
-    toolbar.innerHTML = '';
-    const viewBtn = document.createElement('button');
-    viewBtn.className = 'tbtn' + (mode === 'view' ? ' active' : '');
-    viewBtn.textContent = '查看';
-    viewBtn.onclick = () => setMode('view');
-    toolbar.appendChild(viewBtn);
-
-    const editBtn = document.createElement('button');
-    editBtn.className = 'tbtn' + (mode === 'edit' ? ' active' : '');
-    editBtn.textContent = '编辑';
-    editBtn.onclick = () => setMode('edit');
-    toolbar.appendChild(editBtn);
+/** 更新底部状态栏文案 */
+function setStatus(text: string): void {
+    if (statusText) statusText.textContent = text;
 }
 
-function renderShell(): { toolbar: HTMLElement; content: HTMLElement } {
+function renderShell(): { content: HTMLElement } {
     const app = document.getElementById('app')!;
     app.innerHTML = '';
-    const toolbar = document.createElement('div');
-    toolbar.className = 'toolbar';
-    app.appendChild(toolbar);
+
+    topBar = createTopBar(
+        [
+            { id: 'view', label: '查看', icon: 'eye' },
+            { id: 'edit', label: '编辑', icon: 'pencil' }
+        ],
+        mode,
+        (id) => setMode(id as EditorMode),
+        { node: iconNode }
+    );
+    topBar.setTitle(docTitle);
+    topBar.setBadge(FORMAT_LABEL[format] || format.toUpperCase());
+    // 右上角文档切换标签（由 host 的 docs 广播填充）
+    docTabs = createDocTabs((uri) => vscode.postMessage({ type: 'openDocument', uri }));
+    topBar.el.append(docTabs.el);
+
     const content = document.createElement('div');
+    content.className = 'jc-content';
     content.id = 'content';
-    app.appendChild(content);
-    return { toolbar, content };
+    const status = createStatusBar();
+    statusText = status.textEl;
+    app.className = 'jc-app';
+    app.append(topBar.el, content, status.el);
+    return { content };
 }
 
 function setMode(next: EditorMode): void {
     mode = next;
     vscode.postMessage({ type: 'setMode', mode });
-    const { toolbar } = renderShell();
-    buildToolbar(toolbar);
+    topBar?.setActive(mode);
     void renderContent();
 }
 
@@ -74,6 +93,7 @@ async function renderContent(): Promise<void> {
         }
         const name = format === 'md' ? 'Markdown' : format === 'txt' ? '纯文本' : 'PDF';
         content.innerHTML = `<div class="hint">${name}为只读查看，暂不支持编辑。</div>`;
+        setStatus('只读预览');
         return;
     }
     try {
@@ -85,6 +105,7 @@ async function renderContent(): Promise<void> {
         else if (format === 'txt') await renderText(content, currentBytes);
     } catch (err: any) {
         content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
+        setStatus('渲染失败');
         vscode.postMessage({ type: 'error', message: String(err?.message || err) });
     }
 }
@@ -107,6 +128,8 @@ async function renderPptx(content: HTMLElement, bytes: Uint8Array): Promise<void
     if (r.charts && r.charts.length) {
         chartRenderer.renderCharts(r.charts, wrap);
     }
+    const slideCount = (r.slides || []).length;
+    setStatus(`共 ${slideCount} 页幻灯片${r.charts?.length ? `，${r.charts.length} 个图表` : ''}`);
 }
 
 async function renderDocx(content: HTMLElement, bytes: Uint8Array): Promise<void> {
@@ -115,6 +138,8 @@ async function renderDocx(content: HTMLElement, bytes: Uint8Array): Promise<void
     body.className = 'docx-body';
     body.innerHTML = html;
     content.appendChild(body);
+
+    setStatus('DOCX 文档预览');
 }
 
 async function renderXlsx(content: HTMLElement, bytes: Uint8Array): Promise<void> {
@@ -123,6 +148,8 @@ async function renderXlsx(content: HTMLElement, bytes: Uint8Array): Promise<void
     body.className = 'xlsx-body';
     body.innerHTML = html;
     content.appendChild(body);
+
+    setStatus('XLSX 表格预览');
 }
 
 async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<void> {
@@ -139,10 +166,14 @@ async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<
     });
     // 增强内容：Mermaid 图表 / KaTeX 公式（动态加载依赖，失败时保留源码降级显示）
     try {
-        await renderMarkdownExtras(body);
+        const dark = document.documentElement.getAttribute('data-oe-theme') === 'dark'
+            || (window.matchMedia?.('(prefers-color-scheme: dark)').matches &&
+                document.documentElement.getAttribute('data-oe-theme') !== 'light');
+        await renderMarkdownExtras(body, { theme: dark ? 'dark' : 'default' });
     } catch (err: any) {
         messages.push(`图表/公式渲染失败：${String(err?.message || err)}`);
     }
+    setStatus(messages.length ? 'Markdown 预览（有清洗提示）' : 'Markdown 预览');
     if (messages.length) {
         const note = document.createElement('div');
         note.className = 'hint';
@@ -157,6 +188,8 @@ async function renderText(content: HTMLElement, bytes: Uint8Array): Promise<void
     body.className = 'txt-body';
     body.innerHTML = html;
     content.appendChild(body);
+
+    setStatus('纯文本预览');
 }
 
 /** 当前 PDF 渲染代数：渲染过程中切模式/重渲染时用于丢弃过期任务 */
@@ -230,6 +263,7 @@ async function renderPdf(content: HTMLElement, bytes: Uint8Array): Promise<void>
     hint.className = 'hint';
     hint.textContent = '正在打开 PDF…';
     content.replaceChildren(hint);
+    setStatus('正在打开 PDF…');
 
     const pdfjs = await loadPdfjs();
     // pdfjs 会把 data 转移给 worker（原 ArrayBuffer 会被 detach），必须传副本
@@ -245,12 +279,12 @@ async function renderPdf(content: HTMLElement, bytes: Uint8Array): Promise<void>
     const wrap = document.createElement('div');
     wrap.className = 'pdf-pages';
     let done = 0;
-    hint.textContent = `共 ${total} 页，按需渲染中…（0/${total}）`;
+    setStatus(`共 ${total} 页，按需渲染中…（0/${total}）`);
     pdfProgress = (d, t) => {
         if (stale()) return;
-        hint.textContent = `共 ${t} 页，按需渲染中…（${d}/${t}）`;
+        setStatus(`共 ${t} 页，按需渲染中…（${d}/${t}）`);
     };
-    content.replaceChildren(hint, wrap);
+    content.replaceChildren(wrap);
 
     // 页面宽度按容器可用宽度自适应（上限 1000px）
     const cssWidth = Math.max(320, Math.min(1000, (content.clientWidth || 900) - 40));
@@ -313,14 +347,18 @@ window.addEventListener('message', (e) => {
         case 'init':
             format = msg.format;
             mode = msg.mode || 'view';
+            docTitle = msg.title || '';
             currentBytes = b64ToBytes(msg.bytes);
             applyBaseStyle();
-            {
-                const { toolbar } = renderShell();
-                buildToolbar(toolbar);
-            }
+            renderShell();
             void renderContent();
-            vscode.postMessage({ type: 'ready' });
+            if (!readySent) {
+                readySent = true;
+                vscode.postMessage({ type: 'ready' });
+            }
+            break;
+        case 'docs':
+            docTabs?.update(msg.docs, msg.activeUri);
             break;
         case 'reverted':
             void renderContent();

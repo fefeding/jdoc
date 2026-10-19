@@ -14,7 +14,7 @@ import { icon } from './icons';
 import { t, tip, withAccel } from './i18n';
 import { openMenuAt, MenuItem } from './menu';
 import { THEMES } from '@fefeding/jdoc';
-import type { EditorMode } from './protocol';
+import type { DocTabInfo, EditorMode } from './protocol';
 import { buildTabs, RibbonTab } from './ribbon-tabs';
 
 export type RibbonState = {
@@ -22,6 +22,10 @@ export type RibbonState = {
   /** Document title (file name) shown in the title bar. */
   title: string;
   dirty: boolean;
+  /** 已打开的文档列表（右上角文档切换标签）。 */
+  docs: DocTabInfo[];
+  /** 当前 webview 自己的文档 uri，用于高亮对应标签。 */
+  activeUri: string;
   canUndo: boolean;
   canRedo: boolean;
   zoom: number;
@@ -403,6 +407,16 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     writeStore(COLLAPSE_KEY, '0');
   }
 
+  // 右上角文档切换标签：由 main.ts 收到 host 的 `docs` 广播后写入 state，sync() 时重建。
+  const docTabsEl = h('div', { class: 'rb-doctabs', role: 'tablist' });
+  docTabsEl.style.display = 'none';
+  let docSig = '';
+
+  const rightQat = h('div', { class: 'rb-qat' }, [
+    modeGroup,
+    miniButton({ ico: 'help', title: withAccel(t('cmd.shortcuts'), '?'), onClick: () => api.cmd('shortcuts') }).el
+  ]);
+
   const titlebar = h('div', { class: 'rb-titlebar' }, [
     h('div', { class: 'rb-doc' }, [icon('props', 14), titleText, dirtyDot]),
     h('div', { class: 'rb-qat' }, [
@@ -413,10 +427,8 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     previewMenuBtn,
     tabsEl,
     h('div', { class: 'rb-spring' }),
-    h('div', { class: 'rb-qat' }, [
-      modeGroup,
-      miniButton({ ico: 'help', title: withAccel(t('cmd.shortcuts'), '?'), onClick: () => api.cmd('shortcuts') }).el
-    ]),
+    rightQat,
+    docTabsEl,
     collapseBtn
   ]);
 
@@ -441,6 +453,30 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     collapseBtn.title = t('tbar.ribbonShow');
   }
 
+  /** 文档切换标签：2 个及以上文档时显示；签名不变不重建（sync 调用非常频繁）。 */
+  function renderDocTabs(s: RibbonState): void {
+    const docs = s.docs || [];
+    const sig = s.activeUri + '|' + docs.map((d) => `${d.uri}:${d.title}:${d.dirty ? 1 : 0}`).join(',');
+    if (sig === docSig) return;
+    docSig = sig;
+    docTabsEl.innerHTML = '';
+    docTabsEl.style.display = docs.length > 1 ? '' : 'none';
+    for (const d of docs) {
+      const btn = h(
+        'button',
+        {
+          class: 'rb-doctab' + (d.uri === s.activeUri ? ' on' : '') + (d.dirty ? ' dirty' : ''),
+          type: 'button',
+          title: d.title,
+          'aria-selected': d.uri === s.activeUri ? 'true' : 'false'
+        },
+        [h('span', { class: 'rb-doctab-name' }, [d.title]), h('span', { class: 'rb-doctab-dot' })]
+      );
+      btn.onclick = () => api.cmd('openDocument', d.uri);
+      docTabsEl.append(btn);
+    }
+  }
+
   function sync(s: RibbonState): void {
     const modeChanged = lastState?.mode !== s.mode;
     lastState = s;
@@ -456,6 +492,7 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     modePreview.classList.toggle('on', s.mode === 'preview');
     modeEdit.classList.toggle('disabled', s.mode === 'edit');
     modePreview.classList.toggle('disabled', s.mode === 'preview');
+    renderDocTabs(s);
     for (const w of widgets) w.sync?.(s);
     // Preview mode has no editing tabs — hide the ones that would be empty and fall back to
     // the first visible tab. Visibility is re-applied on every render because switching back
