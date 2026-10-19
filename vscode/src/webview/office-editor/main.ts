@@ -94,14 +94,87 @@ function buildShell(): void {
     new MutationObserver(() => bindZoom()).observe(contentEl, { childList: true, subtree: true });
 }
 
+/**
+ * 解析真正能滚动的容器
+ *
+ * 正常就是 .oe-content。若它当前不可滚（外层布局塌缩、或缩放后内容比视口短），
+ * 上溯找第一个真正能滚的祖先；都没有时返回 null —— 此时**必须保持当前视图**，
+ * 任何 scrollTo 都会被浏览器归零，效果就是「点任何条目都被甩回顶部」。
+ */
+function resolveScroller(): HTMLElement | null {
+    if (contentEl.scrollHeight > contentEl.clientHeight + 1) return contentEl;
+    for (let el = contentEl.parentElement; el; el = el.parentElement) {
+        const oy = getComputedStyle(el).overflowY;
+        if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && el.scrollHeight > el.clientHeight + 1) {
+            return el;
+        }
+    }
+    return null;
+}
+
 /** 把带缩放的文档滚动到视口内（大纲点击用） */
 function scrollToAnchor(el: HTMLElement): void {
-    // rect 与 scrollTop 同属「视觉」坐标系：CSS zoom 生效后，滚动容器的 scrollTop
-    // 也按缩放后的距离计，两者直接相加即为目标在滚动内容中的位置，不需要再除 zoom。
-    const top = el.getBoundingClientRect().top - contentEl.getBoundingClientRect().top + contentEl.scrollTop;
-    contentEl.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' });
     el.classList.add('oe-flash');
     window.setTimeout(() => el.classList.remove('oe-flash'), 900);
+
+    const scroller = resolveScroller();
+    // 无处可滚：保持当前视图（否则 scrollTo 会被归零，反而把用户甩回顶部）
+    if (!scroller) return;
+    // 目标已不在文档里（重排后失效）：不猜位置，保持当前视图
+    if (!el.isConnected || !scroller.contains(el)) return;
+
+    // rect 与 scrollTop 同属「视觉」坐标系：CSS zoom 生效后，滚动容器的 scrollTop
+    // 也按缩放后的距离计，两者直接相加即为目标在滚动内容中的位置，不需要再除 zoom。
+    const goto = (behavior: ScrollBehavior): void => {
+        const sRect = scroller.getBoundingClientRect();
+        const docTopOf = (node: HTMLElement): number =>
+            node.getBoundingClientRect().top - sRect.top + scroller.scrollTop;
+        const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+
+        let desired = docTopOf(el) - 12;
+        if (desired > maxScroll) {
+            // 末尾条目（末章、附录）后面不足一屏，标题物理上推不到内容区顶部：退化为
+            // 「滚到所在页的页顶」，与 Word 导航窗格跳转的落点一致。若不这样处理，
+            // 位置完全交给浏览器的隐式 clamp，缩放越小文档越短偏得越多（实测适应宽度
+            // 下最后一条偏 168px，且目标可能压根没进视口）。
+            const page = el.closest<HTMLElement>('.oe-page');
+            const padTop = page ? parseFloat(getComputedStyle(page).paddingTop) || 0 : 0;
+            desired = page ? Math.min(docTopOf(page) + padTop - 12, maxScroll) : maxScroll;
+        }
+
+        scroller.scrollTo({ top: Math.max(0, Math.min(desired, maxScroll)), behavior });
+    };
+
+    goto('smooth');
+
+    // 落稳后二次校正：smooth 期间若发生重排（图片解码后重分页）或缩放变化，
+    // 首次算出的位置会偏（表现为滚过头 / 没滚到位）。等滚动停止再量一次，
+    // 偏差仍超过阈值就用 instant 拉回——只校正一次，避免来回抖动。
+    let stableSince = 0;
+    let lastTop = scroller.scrollTop;
+    let done = false;
+    const watch = (): void => {
+        if (done) return;
+        const top = scroller.scrollTop;
+        if (top !== lastTop) {
+            lastTop = top;
+            stableSince = performance.now();
+            window.setTimeout(watch, 100);
+            return;
+        }
+        if (stableSince === 0) stableSince = performance.now();
+        if (performance.now() - stableSince < 180) {
+            window.setTimeout(watch, 100);
+            return;
+        }
+        done = true;
+        scroller.removeEventListener('scroll', watch);
+        if (!el.isConnected) return;
+        const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        if (Math.abs(delta) > 24) goto('instant');
+    };
+    scroller.addEventListener('scroll', watch, { passive: true });
+    window.setTimeout(watch, 100);
 }
 
 /** 依据当前内容重建左侧目录并接上滚动联动 */

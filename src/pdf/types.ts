@@ -175,11 +175,22 @@ export interface PdfRun {
     strike?: boolean;
 }
 
+/** 制表位 */
+export interface PdfTabStop {
+    /** 相对段落左边缘的位置（pt）；缺省为段落右端（目录右对齐页码的典型用法） */
+    pos?: number;
+    /** 对齐方式，默认 left */
+    align?: 'left' | 'center' | 'right';
+    /** 前导符：目录条目与标题的「点线导引」用 dot */
+    leader?: 'dot' | 'hyphen' | 'underscore' | 'middleDot';
+}
+
 /**
  * 富文本元素：一段由多个 run 组成的段落，支持内联样式混排。
  *
  * 与 `PdfTextElement` 的区别：text 只能整段单一字号/颜色，runs 可逐片段混排。
  * 生成端会自行按宽度断行（中文按字、西文按空格），因此调用方无需预先换行。
+ * run 文本中的 `\t` 按 tabStops 跳到制表位（未给 tabStops 时按普通空格处理）。
  */
 export interface PdfRunsElement {
     type: 'runs';
@@ -205,6 +216,8 @@ export interface PdfRunsElement {
     indentRight?: number;
     /** 首行缩进（pt）：仅段落第一行右移 */
     indentFirstLine?: number;
+    /** 制表位（pos 相对段落左边缘），用于目录「文本 …… 页码」排版 */
+    tabStops?: PdfTabStop[];
 }
 
 /** 标题元素 */
@@ -356,6 +369,13 @@ export interface PdfDocumentSpec {
     pageSize?: PdfPageSize;
     /** 页边距（pt，自动分页模式），默认 56（约 2cm） */
     margin?: number | { top?: number; right?: number; bottom?: number; left?: number };
+    /**
+     * 自动分页模式下每个元素绘制前的回调（pageNumber 从 1 开始）。
+     *
+     * 文档互转链路用它做两遍排版：第一遍收集标题实际页码，回填目录页码后
+     * 再生成第二遍（页码占位不影响行数，故两遍分页结果一致）。
+     */
+    onElementLayout?: (element: PdfElement, pageNumber: number) => void;
 }
 
 /** 内嵌字体集合 */

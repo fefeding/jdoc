@@ -171,6 +171,21 @@ const bytes = await jsonToPdf({
 - **XLSX does not preserve pivot tables, charts, conditional formatting or comments** (comments require `includeNotes`).
 - **PPTX fidelity follows `@fefeding/ppt-parser`** (shapes, charts, SmartArt rendering and round-trip).
 
+## Skills
+
+This repository ships agent skills under [`skills/`](./skills) — one package per capability, each with a `SKILL.md` describing when to use it, the exact API, runnable examples and gotchas. They follow the same package model as the work-space skill store (`SKILL.md` + optional resources), so an AI assistant can load them on demand.
+
+| Skill | Covers |
+| --- | --- |
+| `docx` | parse / generate / round-trip edit DOCX |
+| `xlsx` | parse / generate spreadsheets, cells, styles, formulas |
+| `pptx` | render / generate / edit presentations |
+| `pdf` | parse text, generate, rasterize to PNG, flatten overlays |
+| `markdown` | Markdown / plain-text → HTML, Mermaid + KaTeX |
+| `convert` | one-call `convert()` between docx / pdf / md / html |
+| `assets` | binary resource extraction, per-end access, reference write-back |
+| `bundle` | pack / unpack document + assets into a self-contained `.jdbundle` |
+
 ## Development
 
 ```bash

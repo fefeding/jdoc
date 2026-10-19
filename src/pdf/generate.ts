@@ -31,6 +31,7 @@ import type {
     PdfRunsElement,
     PdfTableCell,
     PdfTableElement,
+    PdfTabStop,
     PdfTextElement
 } from './types';
 import { registerPdfFontkit } from './fonts';
@@ -435,7 +436,11 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
                 // CJK 与任何非 ASCII：逐字成段
                 flushWord();
                 pieces.push({ text: ch, run });
-            } else if (ch === ' ' || ch === '\t') {
+            } else if (ch === '\t') {
+                // 制表符单独成段：绘制时按 tabStops 跳位（无 tabStops 时退化为空格）
+                flushWord();
+                pieces.push({ text: '\t', run });
+            } else if (ch === ' ') {
                 flushWord();
                 pieces.push({ text: ' ', run });
             } else if (isLatin(ch)) {
@@ -468,14 +473,19 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
         lineWidth = 0;
         lineFirst = false;
     };
+    const tabStops = element.tabStops?.length
+        ? [...element.tabStops].sort((a, b) => (a.pos ?? Infinity) - (b.pos ?? Infinity))
+        : undefined;
     for (const piece of pieces) {
         if (piece.text === '\n') {
             pushLine();
             continue;
         }
         const lineAvail = width - (lineFirst ? firstIndent : 0);
-        const w = measureRun(ctx, piece.run, piece.text, piece.run.size ?? size);
-        if (lineWidth + w > lineAvail && line.length) {
+        // tab 的落点在绘制时按制表位确定，宽度不预占（有 tabStops 时按 0 计）
+        const w =
+            piece.text === '\t' ? (tabStops ? 0 : size * 0.5) : measureRun(ctx, piece.run, piece.text, piece.run.size ?? size);
+        if (lineWidth + w > lineAvail && line.length && piece.text !== '\t') {
             pushLine();
         }
         line.push(piece);
@@ -484,13 +494,53 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
     pushLine();
 
     const drawLine = (l: Line, localY: number) => {
-        const lineTextWidth = l.pieces.reduce((sum, p) => sum + measureRun(ctx, p.run, p.text, p.run.size ?? size), 0);
+        const lineTextWidth = l.pieces.reduce(
+            (sum, p) => (p.text === '\t' ? sum : sum + measureRun(ctx, p.run, p.text, p.run.size ?? size)),
+            0
+        );
         let x = baseX + (l.first ? firstIndent : 0);
         if (element.align === 'center' || element.align === 'right') {
             const offset = width - lineTextWidth;
             x += element.align === 'center' ? offset / 2 : Math.max(0, offset);
         }
-        for (const p of l.pieces) {
+
+        // 制表位：预扫每个 tab 到「下一个 tab / 行末」之间的片段总宽（右对齐需要）
+        const segWidths = new Map<number, number>();
+        if (tabStops) {
+            for (let i = 0; i < l.pieces.length; i++) {
+                if (l.pieces[i].text !== '\t') continue;
+                let sum = 0;
+                for (let j = i + 1; j < l.pieces.length && l.pieces[j].text !== '\t'; j++) {
+                    sum += measureRun(ctx, l.pieces[j].run, l.pieces[j].text, l.pieces[j].run.size ?? size);
+                }
+                segWidths.set(i, sum);
+            }
+        }
+
+        for (let i = 0; i < l.pieces.length; i++) {
+            const p = l.pieces[i];
+            if (p.text === '\t') {
+                if (!tabStops) {
+                    x += size * 0.5; // 无制表位定义：退化为半角空格
+                    continue;
+                }
+                // 跳到第一个位于当前位置右侧的制表位（pos 缺省 = 段落右端）
+                const stop = tabStops.find((s) => (s.pos ?? width) > x - baseX + 0.5);
+                if (!stop) continue;
+                const stopPos = stop.pos ?? width;
+                const segW = segWidths.get(i) ?? 0;
+                const segSize = p.run.size ?? size;
+                const segColor = p.run.color ? parseColor(p.run.color, ctx.defaultColor) : ctx.defaultColor;
+                let contentX = baseX + stopPos;
+                if (stop.align === 'right') contentX -= segW;
+                else if (stop.align === 'center') contentX -= segW / 2;
+                if (stop.leader) {
+                    // 右/居中对齐时前导符只填「内容与制表位之间」的空白
+                    drawLeader(ctx, x, contentX, localY, segSize, stop.leader, segColor);
+                }
+                x = Math.max(x, contentX); // 内容超宽时不倒退
+                continue;
+            }
             const rs = p.run.size ?? size;
             const w = measureRun(ctx, p.run, p.text, rs);
             const color = p.run.color ? parseColor(p.run.color, ctx.defaultColor) : ctx.defaultColor;
@@ -553,6 +603,47 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
     const used = (ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : localY) - startTop;
     // 段后间距在 flow 模式下由自动分页循环统一进给，不占元素内容高
     return used + (ctx.flow ? 0 : (element.spacingAfter ?? 4));
+}
+
+/** 绘制制表位前导符（目录的点线导引等） */
+function drawLeader(
+    ctx: DrawContext,
+    from: number,
+    to: number,
+    localY: number,
+    size: number,
+    leader: NonNullable<PdfTabStop['leader']>,
+    color: RGB
+): void {
+    if (to - from < 1) return;
+    const page = currentPage(ctx);
+    // 前导符位于基线略下方
+    const y = ctx.pageHeight - localY - size * 0.28;
+    switch (leader) {
+        case 'dot':
+            for (let px = from + 0.5; px < to; px += 3) {
+                page.drawLine({ start: { x: px, y }, end: { x: px + 0.9, y }, thickness: 0.8, color });
+            }
+            break;
+        case 'middleDot':
+            for (let px = from + 0.5; px < to; px += 3) {
+                page.drawLine({ start: { x: px, y: y + 0.8 }, end: { x: px + 0.9, y: y + 0.8 }, thickness: 1.6, color });
+            }
+            break;
+        case 'hyphen':
+            for (let px = from + 0.5; px < to; px += 4) {
+                page.drawLine({
+                    start: { x: px, y },
+                    end: { x: Math.min(to - 0.5, px + 2), y },
+                    thickness: 0.8,
+                    color
+                });
+            }
+            break;
+        case 'underscore':
+            page.drawLine({ start: { x: from, y }, end: { x: to, y }, thickness: 0.6, color });
+            break;
+    }
 }
 
 /**
@@ -918,6 +1009,7 @@ export async function generatePdf(
             const usableHeight = pageHeight - margin.top - margin.bottom;
 
             let page = doc.addPage([pageWidth, pageHeight]);
+            let pageNumber = 1; // 从 1 开始，供 onElementLayout 回调使用
             let ctx: DrawContext = {
                 doc,
                 fonts,
@@ -936,6 +1028,7 @@ export async function generatePdf(
                 ctx = { ...ctx, page };
                 flow.page = page;
                 flow.cursorY = 0;
+                pageNumber += 1;
             };
             const flow: FlowState = {
                 page,
@@ -966,6 +1059,7 @@ export async function generatePdf(
                     flow.cursorY += Math.min(gap, Math.max(0, usableHeight - flow.cursorY));
                 }
 
+                spec.onElementLayout?.(element, pageNumber);
                 await drawElement({ ...ctx, flow }, element);
                 prevAfter = after;
             }

@@ -13,6 +13,10 @@ export interface OutlineItem {
     level: number;
     /** 章节号前缀（"1." / "3.1."），无则空串 */
     number: string;
+    /** 标题元素本身（运行时引用，不参与序列化）。
+     *  点击跳转必须用它而不是拿 id 再 querySelector：分页重排后锚点可能错位
+     *  （id 复用、残留锚点），二次查找会命中别的元素，表现为「跳到另一段」。 */
+    el?: HTMLElement;
 }
 
 /** 正文标题元素上打锚点的属性 */
@@ -54,7 +58,8 @@ export function buildOutline(root: HTMLElement): OutlineItem[] {
             id,
             text: (el.textContent || '').replace(/\s+/g, ' ').trim(),
             level,
-            number: numEl ? (numEl.textContent || '').trim() : ''
+            number: numEl ? (numEl.textContent || '').trim() : '',
+            el
         });
     });
 
@@ -148,7 +153,11 @@ export function createOutline(handlers: OutlineHandlers): OutlineView {
                 label.append(document.createTextNode(item.text.replace(/^\s*\d+(\.\d+)*\.?\s*/, '')));
                 node.appendChild(label);
                 node.addEventListener('click', () => {
-                    const target = document.querySelector<HTMLElement>(`[${ANCHOR_ATTR}="${item.id}"]`);
+                    // 优先用登记时的元素引用；元素已被重排替换才退回按 id 查找
+                    const target =
+                        item.el && item.el.isConnected
+                            ? item.el
+                            : document.querySelector<HTMLElement>(`[${ANCHOR_ATTR}="${item.id}"]`);
                     if (target) handlers.onJump(item, target);
                     setActive(item.id);
                 });

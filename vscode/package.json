@@ -3,6 +3,18 @@
   "displayName": "jdoc Document Viewer",
   "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档，并预览 Markdown / 纯文本（由 @fefeding/jdoc 驱动）",
   "version": "0.1.1",
+  "keywords": [
+    "docx",
+    "xlsx",
+    "pdf",
+    "pptx",
+    "markdown",
+    "document",
+    "viewer",
+    "editor",
+    "skills",
+    "ai-agent"
+  ],
   "publisher": "fefeding",
   "license": "MIT",
   "repository": {

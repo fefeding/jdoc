@@ -67,6 +67,10 @@ contenteditable 的光标定位、选区与撤销都会失准，因此编辑模�
 - 坐标复用文本层同一套换算（含旋转），高亮矩形为轴对齐近似（与文本层一致）
 - 词边界用相邻文本项的水平间隙近似补空格，跨词的短语（如 `by JDOC`）会精确高亮到对应的若干段文本项
 
+## 技能（Skills）
+
+仓库根目录的 [`skills/`](../../skills) 为 `@fefeding/jdoc` 提供了按能力拆分的 agent 技能包（每个一份 `SKILL.md`），供 AI 助手按需加载：涵盖 docx / xlsx / pptx / pdf / markdown / convert / assets / bundle 八类。扩展本身与这些技能共享同一套 jdoc API。
+
 ## 开发
 
 ```bash

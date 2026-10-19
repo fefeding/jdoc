@@ -254,6 +254,69 @@ const drift = await page.evaluate(async () => {
 check('反复重算不漂移（幂等，不滑向 MIN_ZOOM）', Math.min(...drift) > 60 && Math.max(...drift) - Math.min(...drift) <= 2,
     `samples=${drift.join(',')}`);
 
+// 10. 真实 docx 的末尾条目：标题推不到内容区顶部时（后面内容不足一屏），
+//     必须退化为「滚到所在页的页顶」，而不是卡在文档底部让目标偏出预期位置。
+//     该缺陷只在缩放后的真实文档上出现：适应宽度下最后一条曾偏 168px 且页顶不可见。
+const EXAMPLES = path.resolve(__dirname, '..', '..', 'examples');
+const realDocx = fs
+    .readdirSync(EXAMPLES)
+    .filter((f) => f.endsWith('.docx'))
+    .map((f) => ({ name: f, b64: fs.readFileSync(path.join(EXAMPLES, f)).toString('base64') }));
+
+for (const doc of realDocx) {
+    await page.evaluate(
+        (bytes) =>
+            window.postMessage(
+                { type: 'init', format: 'docx', mode: 'view', bytes, title: 'real.docx', dirty: false, locale: 'zh-cn' },
+                '*'
+            ),
+        doc.b64
+    );
+    await page.waitForSelector('.oe-page', { timeout: 20000 });
+    await page.waitForTimeout(1200);
+
+    const last = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const c = document.querySelector('.oe-content');
+        const items = [...document.querySelectorAll('.oe-outline-item')];
+        if (!items.length) return { err: 'no outline item' };
+        const t = items[items.length - 1];
+        const id = t.dataset.id;
+        const zoom = Number(getComputedStyle(document.querySelector('.oe-content > *')).zoom || 1);
+        t.click();
+        let prev = -1;
+        for (let k = 0; k < 50; k++) {
+            await sleep(100);
+            if (c.scrollTop === prev) break;
+            prev = c.scrollTop;
+        }
+        const h = document.querySelector(`[data-oe-anchor="${id}"]`);
+        if (!h) return { err: 'no anchor' };
+        const hr = h.getBoundingClientRect();
+        const cr = c.getBoundingClientRect();
+        const pg = h.closest('.oe-page');
+        return {
+            id,
+            zoom,
+            label: t.textContent.slice(0, 18),
+            delta: Math.round(hr.top - cr.top),
+            visible: hr.top < cr.bottom && hr.bottom > cr.top,
+            pageTopAligned: pg
+                ? Math.round(pg.getBoundingClientRect().top - cr.top + (parseFloat(getComputedStyle(pg).paddingTop) || 0) - 12)
+                : null,
+            atBottom: Math.round(c.scrollTop) >= Math.round(c.scrollHeight - c.clientHeight) - 1
+        };
+    });
+
+    // 判据：标题顶部对齐，或已退化为页顶对齐（含页面 padding 补偿）；且目标必须可见
+    const aligned = Math.abs(last.delta ?? 999) <= 30 || Math.abs(last.pageTopAligned ?? 999) <= 30;
+    check(
+        `真实文档末尾条目可定位（${doc.name}）`,
+        !last.err && last.visible && aligned,
+        `label=${last.label} zoom=${last.zoom} delta=${last.delta} pageTopAligned=${last.pageTopAligned} atBottom=${last.atBottom}`
+    );
+}
+
 const errs = await page.evaluate(() => window.__ERRS__ || []);
 check('无运行时错误', errs.length === 0, errs.slice(0, 2).join(' | '));
 

@@ -325,6 +325,21 @@ const bytes = await jsonToPdf({
 - **XLSX 不保留数据透视表、图表、条件格式与批注**（批注需显式开启 `includeNotes`）。
 - **PPTX 由 `@fefeding/ppt-parser` 提供**，其保真度以该库为准（形状、图表、SmartArt 渲染与往返）。
 
+## 技能（Skills）
+
+本仓库在 [`skills/`](./skills) 下随库提供一组 agent 技能：按能力各一个包，每个含一份 `SKILL.md`，说明何时使用、精确的 API、可运行示例与常见坑。其包模型与 work-space 技能存储一致（`SKILL.md` + 可选资源），AI 助手可按需加载。
+
+| 技能 | 覆盖 |
+| --- | --- |
+| `docx` | 解析 / 生成 / 往返编辑 DOCX |
+| `xlsx` | 解析 / 生成表格、单元格、样式、公式 |
+| `pptx` | 渲染 / 生成 / 编辑演示文稿 |
+| `pdf` | 解析文本、生成、栅格化 PNG、扁平化叠加 |
+| `markdown` | Markdown / 纯文本 → HTML，Mermaid + KaTeX |
+| `convert` | 一条命令在 docx / pdf / md / html 间互转 |
+| `assets` | 二进制资源提取、按端取用、按引用写回 |
+| `bundle` | 把「文档 + 资源」打包 / 解包成自包含 `.jdbundle` |
+
 ## 开发
 
 ```bash

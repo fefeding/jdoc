@@ -394,13 +394,16 @@ export function paginate(nodes: HTMLElement[], options: PaginateOptions = {}): H
                 const cut = slot.lineEnds[fitLines - 1];
                 const tail = splitAtOffset(slot.node, cut);
                 if (tail) {
-                    // 前半留在本页：高度必须实测（行高未必均等，按比例估会累积误差）
+                    // 前半留在本页：高度必须实测（行高未必均等，按比例估会累积误差）。
+                    // 用 offsetHeight 而非 getBoundingClientRect：此刻节点已被移入 .oe-page-body
+                    //（缩放子树内），rect 是乘过 zoom 的视觉值，而 avail 是未缩放页高，
+                    // 混用会让 used 虚高 z 倍、后续块被无谓地推到下一页。
                     body!.appendChild(slot.node);
-                    used += slot.gap + slot.node.getBoundingClientRect().height;
+                    used += slot.gap + slot.node.offsetHeight;
                     // 后半必须插在「下一个块之前」，否则内容顺序会乱
                     slots.splice(i + 1, 0, {
                         node: tail,
-                        own: tail.getBoundingClientRect().height || slot.own * (leftover / total),
+                        own: tail.offsetHeight || slot.own * (leftover / total),
                         gap: 0,
                         isHeading: false,
                         splittable: slot.splittable,

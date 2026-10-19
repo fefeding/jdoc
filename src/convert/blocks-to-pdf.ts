@@ -12,7 +12,15 @@
 import { jsonToPdf } from '../pdf/index';
 import { detectSystemFonts } from '../pdf/fonts';
 import { getAsset, type DocAsset } from '../core/asset';
-import type { PdfDocumentSpec, PdfElement, PdfFontSet, PdfPageSize, PdfRun, PdfTableElement } from '../pdf/types';
+import type {
+    PdfDocumentSpec,
+    PdfElement,
+    PdfFontSet,
+    PdfPageSize,
+    PdfRun,
+    PdfRunsElement,
+    PdfTableElement
+} from '../pdf/types';
 import type { DocxBlock, DocxCell, DocxDocument, DocxRun } from '../docx/types';
 
 /** blocksToPdf 选项 */
@@ -159,8 +167,50 @@ function tableToElement(table: Extract<DocxBlock, { type: 'table' }>): PdfTableE
     };
 }
 
+/** 目录条目层级缩进（pt）：Word TOC 样式每级缩进 0.25 英寸 */
+const TOC_LEVEL_INDENT = 18;
+
+/** 渲染上下文：两遍排版时携带标题实测页码 */
+interface PdfRenderCtx {
+    /** 标题页码表，key = `${level}|${归一化文本}` */
+    headingPages?: Map<string, number>;
+}
+
+/** 归一化标题文本用于匹配（去空白） */
+function normalizeTitleText(text: string): string {
+    return text.replace(/\s+/g, '');
+}
+
+/**
+ * 目录 -> 条目元素序列
+ *
+ * 按 Word「目录」排版还原：层级缩进 + 文本与页码之间的点线导引 + 页码右对齐到
+ * 内容区右端。页码优先取本次排版实测的标题页码（两遍排版回填），匹配不到时
+ * 退回 docx 里TOC 域缓存的页码。
+ */
+function tocToElements(
+    toc: Extract<DocxBlock, { type: 'toc' }>,
+    depth: number,
+    ctx?: PdfRenderCtx
+): PdfElement[] {
+    return toc.entries.map((entry) => {
+        const indentLeft = depth * TOC_LEVEL_INDENT + Math.max(0, entry.level - 1) * TOC_LEVEL_INDENT;
+        const page = ctx?.headingPages?.get(`${entry.level}|${normalizeTitleText(entry.text)}`) ?? entry.page;
+        return {
+            type: 'runs',
+            runs: [{ text: entry.text }, { text: '\t' }, ...(page ? [{ text: String(page) }] : [])],
+            indentLeft,
+            spacingBefore: 0,
+            spacingAfter: 0,
+            lineHeight: lineSpacingToLineHeight(undefined, hasCjkText(entry.text)),
+            // pos 缺省 = 内容区右端：页码右对齐，点线填满到页码前的空白
+            tabStops: [{ align: 'right', leader: 'dot' }]
+        } as PdfRunsElement;
+    });
+}
+
 /** 单个块 -> PDF 元素（可能产出多个，如列表） */
-function blockToElements(block: DocxBlock): PdfElement[] {
+function blockToElements(block: DocxBlock, ctx?: PdfRenderCtx): PdfElement[] {
     switch (block.type) {
         case 'heading': {
             const idx = Math.min(5, Math.max(0, block.level - 1));
@@ -231,9 +281,9 @@ function blockToElements(block: DocxBlock): PdfElement[] {
         case 'pageBreak':
             return [{ type: 'pageBreak' }];
         case 'textBox':
-            return block.paragraphs.flatMap((p) => blockToElements(p));
+            return block.paragraphs.flatMap((p) => blockToElements(p, ctx));
         case 'toc':
-            return [];
+            return tocToElements(block, 0, ctx);
         default:
             return [];
     }
@@ -269,20 +319,54 @@ export async function blocksToPdf(
         }
     }
 
-    const elements: PdfElement[] = blocks.flatMap((b) => blockToElements(b));
+    const assets = resolveAssets(options.assets);
 
-    const spec: PdfDocumentSpec = {
+    const baseSpec: PdfDocumentSpec = {
         metadata: Array.isArray(input) ? undefined : input.metadata,
-        elements,
         fonts,
-        assets: resolveAssets(options.assets),
+        assets,
         // Word 中文排版基线：正文五号 10.5pt、A4 边距上下 72pt / 左右 90pt
         defaultSize: WORD_DEFAULTS.bodySize,
         pageSize: options.pageSize ?? 'A4',
         margin: options.margin ?? WORD_DEFAULTS.margin
     };
 
-    return jsonToPdf(spec, { assets: resolveAssets(options.assets) });
+    const hasToc = blocks.some((b) => b.type === 'toc');
+
+    // 无目录：单遍排版
+    if (!hasToc) {
+        return jsonToPdf({ ...baseSpec, elements: blocks.flatMap((b) => blockToElements(b)) }, { assets });
+    }
+
+    /**
+     * 含目录：两遍排版。
+     * 第一遍页码留空（占位宽度不改变行数，故分页结果与第二遍一致），
+     * 同时收集各标题的实际页码；第二遍把页码回填进目录条目。
+     */
+    const headings: { level: number; text: string; page: number }[] = [];
+    await jsonToPdf(
+        {
+            ...baseSpec,
+            elements: blocks.flatMap((b) => blockToElements(b)),
+            onElementLayout: (element, pageNumber) => {
+                if (element.type === 'heading') {
+                    headings.push({ level: element.level, text: element.text ?? '', page: pageNumber });
+                }
+            }
+        },
+        { assets }
+    );
+
+    const headingPages = new Map<string, number>();
+    for (const h of headings) {
+        const key = `${h.level}|${normalizeTitleText(h.text)}`;
+        if (!headingPages.has(key)) headingPages.set(key, h.page);
+    }
+
+    return jsonToPdf(
+        { ...baseSpec, elements: blocks.flatMap((b) => blockToElements(b, { headingPages })) },
+        { assets }
+    );
 }
 
 /** 资源表归一 */
