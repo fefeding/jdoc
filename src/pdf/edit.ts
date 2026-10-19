@@ -154,7 +154,7 @@ function carryMetadata(from: PDFDocument, to: PDFDocument): void {
     if (title !== undefined) to.setTitle(title);
     if (author !== undefined) to.setAuthor(author);
     if (subject !== undefined) to.setSubject(subject);
-    if (keywords !== undefined) to.setKeywords(keywords);
+    if (keywords !== undefined) to.setKeywords([keywords]);
     if (creator !== undefined) to.setCreator(creator);
     if (producer !== undefined) to.setProducer(producer);
     if (created !== undefined) to.setCreationDate(created);

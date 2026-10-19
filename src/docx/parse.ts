@@ -1063,6 +1063,9 @@ function parseSection(body: XmlElement): DocxSection | undefined {
         const twips = pgMar ? attrNumber(pgMar, name, 1440) : 1440;
         return Math.round((twips / 20) * 100) / 100;
     };
+    // 文档网格行距：type="lines" 时 Word/WPS 把每行行高对齐到 linePitch 的整数倍
+    const grid = firstChild(sectPr, 'docGrid');
+    const linePitchTwips = grid ? attrNumber(grid, 'linePitch', 0) : 0;
 
     return {
         width: Math.round(width * 100) / 100,
@@ -1071,7 +1074,8 @@ function parseSection(body: XmlElement): DocxSection | undefined {
         marginTop: mar('top'),
         marginRight: mar('right'),
         marginBottom: mar('bottom'),
-        marginLeft: mar('left')
+        marginLeft: mar('left'),
+        ...(linePitchTwips > 0 ? { gridLinePitch: Math.round((linePitchTwips / 20) * 100) / 100 } : {})
     };
 }
 

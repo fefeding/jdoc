@@ -163,13 +163,24 @@ async function runPdf() {
     // 宿主 init 的 edit 不该回发 setMode（否则与标题栏命令互相触发）
     check('宿主指定的模式不回发 setMode', !editUi.setMode);
 
-    // 点击页内相对位置（0~1）
-    const clickInPage = async (fx, fy) => {
+    // 页内相对坐标 -> 屏幕坐标
+    // 页面往往比视口高（单页在 1280 宽下有 1400+px），必须夹到「可视的正文区」内：
+    // 超出视口或压在底部状态栏上，鼠标事件都到不了叠加层
+    const inPagePoint = async (fx, fy) => {
         const box = await page.evaluate(() => {
             const r = document.querySelector('.pdf-page.current .pdf-ov-layer').getBoundingClientRect();
             return { x: r.x, y: r.y, w: r.width, h: r.height };
         });
-        await page.mouse.click(box.x + box.w * fx, box.y + box.h * fy);
+        const vp = page.viewportSize();
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+        return {
+            x: clamp(box.x + box.w * fx, 40, vp.width - 40),
+            y: clamp(box.y + box.h * fy, 40, vp.height - 90)
+        };
+    };
+    const clickInPage = async (fx, fy) => {
+        const p = await inPagePoint(fx, fy);
+        await page.mouse.click(p.x, p.y);
         await page.waitForTimeout(220);
     };
 
@@ -183,14 +194,12 @@ async function runPdf() {
     // 手绘签名：按下拖出一笔
     await page.click('.pdf-edit-bar [data-tool="draw"]');
     {
-        const box = await page.evaluate(() => {
-            const r = document.querySelector('.pdf-page.current .pdf-ov-layer').getBoundingClientRect();
-            return { x: r.x, y: r.y, w: r.width, h: r.height };
-        });
-        await page.mouse.move(box.x + box.w * 0.2, box.y + box.h * 0.7);
+        const start = await inPagePoint(0.2, 0.75);
+        await page.mouse.move(start.x, start.y);
         await page.mouse.down();
         for (let i = 1; i <= 8; i++) {
-            await page.mouse.move(box.x + box.w * (0.2 + i * 0.06), box.y + box.h * (0.7 - Math.sin(i / 2) * 0.05));
+            const p = await inPagePoint(0.2 + i * 0.06, 0.75 - Math.sin(i / 2) * 0.04);
+            await page.mouse.move(p.x, p.y, { steps: 2 });
         }
         await page.mouse.up();
         await page.waitForTimeout(220);
@@ -213,17 +222,50 @@ async function runPdf() {
         posts.map((m) => m && m.type).join(','));
 
     const saved = Buffer.from(syncMsg?.bytes || '', 'base64');
-    if (process.env.DEBUG_PDF) fs.writeFileSync('/tmp/jdoc-saved.pdf', saved);
     const ops = saved.length ? await pageContentOps(saved, 0) : '';
     // 叠加文本用标准字体写入，内容流里是字形 hex；手绘/矩形走 path 指令
     const hexText = Buffer.from('Signed by JDOC').toString('hex').toUpperCase();
     const segs = (ops.match(/ l\s*\n/g) || []).length;
-    check('PDF 叠加写入内容流（文本/手绘/矩形）', ops.includes(hexText) && segs >= 8 && / h\s*\nf/.test(ops),
-        `len=${saved.length} text=${ops.includes(hexText)} lineSegs=${segs} closed=${/ h\s*\nf/.test(ops)}`);
+    check('PDF 叠加写入内容流（文本/手绘/矩形）', ops.includes(hexText) && segs >= 10 && /h\s*\n[BF]/.test(ops),
+        `len=${saved.length} text=${ops.includes(hexText)} lineSegs=${segs} closed=${/h\s*\n[BF]/.test(ops)}`);
     const parsed = saved.length ? await jdoc.pdfToJson(saved) : null;
     const text = saved.length ? await jdoc.pdfToText(saved) : '';
     check('PDF 叠加后可正常回读且原内容保留', parsed?.pageCount === 6 && text.includes('Chapter 1') && text.includes('Signed by JDOC'),
         `pages=${parsed?.pageCount} chapter=${text.includes('Chapter 1')} signed=${text.includes('Signed by JDOC')}`);
+
+    // 全文搜索：打开后预取文本，搜 "Chapter" 应命中多页并能跳到首命中页
+    await page.waitForTimeout(800); // 等预取文本项完成
+    await page.click('.pdf-bar [data-tool="search"]');
+    const searchVisible = await page.evaluate(() => !document.querySelector('.pdf-search-bar').hidden);
+    check('搜索栏可打开', searchVisible, `visible=${searchVisible}`);
+    await page.fill('.pdf-search-input', 'Chapter');
+    await page.waitForTimeout(500);
+    const search = await page.evaluate(() => {
+        const count = document.querySelector('.pdf-search-count')?.textContent || '';
+        const active = document.querySelector('.pdf-search-hit.current');
+        const firstPage = active ? Number(active.closest('.pdf-page')?.dataset.page) : 0;
+        return { count, total: document.querySelectorAll('.pdf-search-hit').length, firstPage };
+    });
+    check('全文搜索命中并高亮', Number(search.count.split('/')[1]) > 1 && search.total > 1,
+        `count=${search.count} hits=${search.total}`);
+    check('搜索跳到首个命中页', search.firstPage >= 1, `page=${search.firstPage}`);
+    // 下一个匹配
+    await page.click('.pdf-search-bar .pdf-btn[aria-label="下一个匹配"]');
+    await page.waitForTimeout(300);
+    const next = await page.evaluate(() => {
+        const cur = document.querySelector('.pdf-search-hit.current');
+        return { page: cur ? Number(cur.closest('.pdf-page')?.dataset.page) : 0, count: document.querySelector('.pdf-search-count')?.textContent };
+    });
+    check('下一个匹配切换当前项', next.count.split('/')[0] === '2', `count=${next.count} page=${next.page}`);
+    // 无匹配：标红且不报错
+    await page.fill('.pdf-search-input', 'zzz_no_such_text');
+    await page.waitForTimeout(400);
+    const none = await page.evaluate(() => ({
+        noMatch: document.querySelector('.pdf-search-input')?.classList.contains('no-match'),
+        count: document.querySelector('.pdf-search-count')?.textContent
+    }));
+    check('无匹配时提示且不崩溃', none.noMatch === true && none.count === '0/0', JSON.stringify(none));
+    await page.keyboard.press('Escape');
 
     const stacks = await page.evaluate(() => window.__ERRS__ || []);
     check('无运行时错误', errs.length === 0 && stacks.length === 0, errs.concat(stacks).slice(0, 2).join(' | '));
@@ -287,6 +329,20 @@ async function run(fmt) {
             first: document.querySelector('.oe-view .docx-toc-row')?.textContent?.trim() || ''
         }));
         check('DOCX 目录条目', toc.rows === 3 && toc.first.includes('季度报告'), `rows=${toc.rows} first=${JSON.stringify(toc.first)}`);
+        // 「与下段同页」：标题不能孤立在页尾（Word/WPS 的 keepNext）
+        const orphan = await page.evaluate(() => {
+            const bad = [];
+            document.querySelectorAll('.oe-view .oe-page').forEach((p, i) => {
+                const body = p.querySelector('.docx-body');
+                if (!body) return;
+                const blocks = Array.from(body.children);
+                if (blocks.length < 2) return;
+                const last = blocks[blocks.length - 1];
+                if (/^H[1-6]$/.test(last.tagName) || last.dataset?.type === 'heading') bad.push(i + 1);
+            });
+            return bad;
+        });
+        check('DOCX 标题不落在页尾（与下段同页）', orphan.length === 0, `页码=${orphan.join(',')}`);
         // 编辑模式同样要有目录块与分页（块编辑器走另一条渲染路径）
         await page.evaluate(() => { window.__POSTS__ = []; });
         await init('edit'); await page.waitForTimeout(1300);

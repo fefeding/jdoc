@@ -111,6 +111,101 @@ describe('convert: 统一门面', () => {
     });
 });
 
+describe('convert: code review 修复回归', () => {
+    /** 表格单元格 -> 纯文本（兼容 string / run 数组两种形态） */
+    const cellText = (cell: unknown): string => {
+        if (typeof cell === 'string') return cell;
+        if (Array.isArray(cell)) return (cell as { text?: string }[]).map((r) => r.text ?? '').join('');
+        return String((cell as { text?: string })?.text ?? '');
+    };
+
+    it('quote 块输出 > 前缀', () => {
+        const md = blocksToMarkdown([{ type: 'quote', text: '引用内容' }]);
+        expect(md).toBe('> 引用内容');
+    });
+
+    it('列表与段落之间有空行（避免 lazy continuation 吞段）', () => {
+        const md = blocksToMarkdown([
+            { type: 'list', ordered: false, items: [[{ text: 'a' }]] },
+            { type: 'paragraph', text: '后续段落' }
+        ]);
+        expect(md).toContain('- a\n\n后续段落');
+    });
+
+    it('string 形态的列表项不丢文本', () => {
+        const md = blocksToMarkdown([{ type: 'list', ordered: true, items: ['第一项', '第二项'] }]);
+        expect(md).toContain('1. 第一项');
+        expect(md).toContain('2. 第二项');
+    });
+
+    it('相邻段落之间有空行（保持段落边界）', () => {
+        const md = blocksToMarkdown([{ type: 'paragraph', text: 'p1' }, { type: 'paragraph', text: 'p2' }]);
+        expect(md).toBe('p1\n\np2');
+    });
+
+    it('marked 选项不互相污染：gfm:false 调用后默认调用仍解析表格', () => {
+        const table = '| a | b |\n| - | - |\n| 1 | 2 |';
+        markdownToBlocks(table, { gfm: false });
+        const blocks = markdownToBlocks(table);
+        expect(blocks.some((b) => b.type === 'table')).toBe(true);
+    });
+
+    it('p 内嵌 img 不丢图且前后文保留为段落', () => {
+        const blocks = htmlToBlocks('<p>前文 <img src="data:image/png;base64,xx" alt="图" /> 后文</p>');
+        expect(blocks.some((b) => b.type === 'image')).toBe(true);
+        expect(blocks.some((b) => b.type === 'paragraph')).toBe(true);
+    });
+
+    it('span 的 background-color 不会误标文字颜色', () => {
+        const blocks = htmlToBlocks('<p><span style="background-color: red">文本</span></p>');
+        const p = blocks.find((b) => b.type === 'paragraph') as Extract<DocxBlock, { type: 'paragraph' }>;
+        expect(p.runs?.every((r) => !r.color)).toBe(true);
+    });
+
+    it('PDF 表格往返：行序从上到下、首行为表头', async () => {
+        const blocks: DocxBlock[] = [
+            {
+                type: 'table',
+                header: true,
+                rows: [
+                    [[{ text: 'H1' }], [{ text: 'H2' }]],
+                    [[{ text: 'r1c1' }], [{ text: 'r1c2' }]],
+                    [[{ text: 'r2c1' }], [{ text: 'r2c2' }]]
+                ]
+            }
+        ];
+        const pdf = await blocksToPdf(blocks);
+        const result = await pdfToBlocks(pdf, { quality: 'layout' });
+        const table = result.blocks.find((b) => b.type === 'table') as Extract<DocxBlock, { type: 'table' }>;
+        expect(table).toBeTruthy();
+        expect(table.rows.length).toBe(3);
+        expect(cellText(table.rows[0][0])).toBe('H1');
+        expect(cellText(table.rows[2][1])).toBe('r2c2');
+    });
+
+    it('pageBreaks：末页后无多余分页符', async () => {
+        const blocks: DocxBlock[] = [
+            { type: 'paragraph', text: 'Page one content here.' },
+            { type: 'pageBreak' },
+            { type: 'paragraph', text: 'Page two content here.' }
+        ];
+        const pdf = await blocksToPdf(blocks);
+        const result = await pdfToBlocks(pdf, { pageBreaks: true });
+        expect(result.blocks.some((b) => b.type === 'pageBreak')).toBe(true);
+        expect(result.blocks[result.blocks.length - 1].type).not.toBe('pageBreak');
+    });
+
+    it('hr 走流式分隔线元素，生成成功', async () => {
+        const blocks: DocxBlock[] = [
+            { type: 'paragraph', text: 'before' },
+            { type: 'hr' },
+            { type: 'paragraph', text: 'after' }
+        ];
+        const pdf = await blocksToPdf(blocks);
+        expect(pdf[0]).toBe(0x25); // %
+    });
+});
+
 describe('convert: PDF 生成与解析', () => {
     it('blocks -> pdf 生成可解析的 PDF（无中文无需字体）', async () => {
         const blocks: DocxBlock[] = [

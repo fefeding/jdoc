@@ -23,7 +23,7 @@ export interface BlocksToPdfOptions {
     assets?: DocAsset[] | Record<string, DocAsset> | { assets?: DocAsset[] };
     /** 纸张尺寸，默认 A4 */
     pageSize?: PdfPageSize;
-    /** 页边距（pt），默认 56（约 2cm） */
+    /** 页边距（pt），默认 Word 中文标准：上下 72（2.54cm）、左右 90（3.17cm） */
     margin?: number | { top?: number; right?: number; bottom?: number; left?: number };
     /** 是否自动探测系统字体（默认 true，仅 Node 端有效） */
     autoFont?: boolean;
@@ -48,6 +48,43 @@ function runsToText(runs: DocxRun[] | undefined): string {
     return (runs || []).map((r) => r.text).join('');
 }
 
+/**
+ * Word/WPS 中文排版基线（对齐目标：与 WPS 打开同一 docx 的分页位置接近）
+ *
+ * - 正文五号 10.5pt；A4 纵向页边距上下 2.54cm(72pt)、左右 3.17cm(90pt)
+ * - 单倍行距：中文约 1.3 倍字号（宋体系），西文约 1.15 倍
+ * - 段前/段后默认 0（Word 默认段间距为 0，间距来自行距）
+ */
+const WORD_DEFAULTS = {
+    /** 正文默认字号（pt，五号） */
+    bodySize: 10.5,
+    /** A4 页边距（pt）：上下 2.54cm、左右 3.17cm（Word 中文默认） */
+    margin: { top: 72, bottom: 72, left: 90, right: 90 },
+    /** 中文单倍行距系数 */
+    lineBaseCjk: 1.3,
+    /** 西文单倍行距系数 */
+    lineBaseLatin: 1.15
+};
+
+/** Word 中文内置标题字号（pt）：h1 二号 22、h2 三号 16、h3 小三 15、h4 四号 14、h5 小四 12、h6 五号 10.5 */
+const HEADING_SIZES = [22, 16, 15, 14, 12, 10.5];
+
+/** Word 中文内置标题段前/段后间距（pt） */
+const HEADING_SPACING: [number, number][] = [
+    [17, 16],
+    [13, 13],
+    [13, 13],
+    [12, 10],
+    [12, 10],
+    [12, 10]
+];
+
+/** 行距倍数（1 = 单倍）-> PDF 行高系数；缺省按内容 CJK 与否取单倍行距基线 */
+function lineSpacingToLineHeight(lineSpacing: number | undefined, hasCjk: boolean): number {
+    const base = hasCjk ? WORD_DEFAULTS.lineBaseCjk : WORD_DEFAULTS.lineBaseLatin;
+    return lineSpacing && lineSpacing > 0 ? base * lineSpacing : base;
+}
+
 /** 单元格 -> 纯文本 */
 function cellToText(cell: DocxCell | undefined): string {
     if (cell == null) return '';
@@ -59,7 +96,7 @@ function cellToText(cell: DocxCell | undefined): string {
     return detail.text ?? '';
 }
 
-/** 任意块 -> 纯文本（用于表格单元格降级） */
+/** 任意块 -> 纯文本（用于表格单元格降级与 CJK 检测） */
 function blockToText(block: DocxBlock): string {
     switch (block.type) {
         case 'heading':
@@ -72,8 +109,14 @@ function blockToText(block: DocxBlock): string {
             return block.alt ?? '';
         case 'textBox':
             return block.paragraphs.map(blockToText).join(' ');
+        case 'quote':
+            return block.runs ? runsToText(block.runs) : block.text ?? '';
         case 'list':
-            return block.items.map((i) => (Array.isArray(i) ? runsToText(i as DocxRun[]) : '')).join(' ');
+            return block.items
+                .map((i) => (typeof i === 'string' ? i : Array.isArray(i) ? runsToText(i as DocxRun[]) : ''))
+                .join(' ');
+        case 'table':
+            return block.rows.map((row) => row.map(cellToText).join(' ')).join(' ');
         default:
             return '';
     }
@@ -84,12 +127,19 @@ function listToElements(list: Extract<DocxBlock, { type: 'list' }>, depth: numbe
     const els: PdfElement[] = [];
     const indent = '   '.repeat(depth);
     list.items.forEach((item, index) => {
-        const runs = (Array.isArray(item) ? item : []) as DocxRun[];
+        const runs = (typeof item === 'string' ? [{ text: item }] : Array.isArray(item) ? item : []) as DocxRun[];
         const children = (runs as DocxRun[] & { children?: typeof list.items }).children;
         const prefix = list.ordered ? `${index + 1}. ` : '• ';
         const prefixRun: PdfRun = { text: indent + prefix };
         const itemRuns = runs.map(runToPdf);
-        els.push({ type: 'runs', runs: [prefixRun, ...itemRuns], spacingAfter: 2 });
+        const text = runsToText(runs);
+        // 列表项行距与正文一致、段间距 0（Word 列表即普通段落）
+        els.push({
+            type: 'runs',
+            runs: [prefixRun, ...itemRuns],
+            spacingAfter: 0,
+            lineHeight: lineSpacingToLineHeight(undefined, hasCjkText(text))
+        });
         if (children?.length) {
             els.push(...listToElements({ type: 'list', ordered: list.ordered, items: children }, depth + 1));
         }
@@ -102,23 +152,51 @@ function tableToElement(table: Extract<DocxBlock, { type: 'table' }>): PdfTableE
     return {
         type: 'table',
         header: table.header,
-        rows: table.rows.map((row) => row.map(cellToText)) as string[][]
+        rows: table.rows.map((row) => row.map(cellToText)) as string[][],
+        // 透传 docx tblGrid 列宽（磅），缺列宽时由生成端按内容区等分
+        columnWidths: table.columnWidths,
+        fontSize: WORD_DEFAULTS.bodySize
     };
 }
 
 /** 单个块 -> PDF 元素（可能产出多个，如列表） */
-function blockToElements(block: DocxBlock, contentWidth: number): PdfElement[] {
+function blockToElements(block: DocxBlock): PdfElement[] {
     switch (block.type) {
-        case 'heading':
+        case 'heading': {
+            const idx = Math.min(5, Math.max(0, block.level - 1));
             return [
                 {
                     type: 'heading',
                     level: block.level,
-                    text: block.runs ? runsToText(block.runs) : block.text ?? ''
+                    text: block.runs ? runsToText(block.runs) : block.text ?? '',
+                    // Word 中文内置标题字号与段前/段后间距
+                    size: HEADING_SIZES[idx],
+                    spacingBefore: HEADING_SPACING[idx][0],
+                    spacingAfter: HEADING_SPACING[idx][1],
+                    lineHeight: lineSpacingToLineHeight(undefined, true)
                 }
             ];
-        case 'paragraph':
-            return [{ type: 'runs', runs: (block.runs || [{ text: block.text ?? '' }]).map(runToPdf), spacingAfter: 4 }];
+        }
+        case 'paragraph': {
+            const runs = (block.runs || [{ text: block.text ?? '' }]).map(runToPdf);
+            const text = runsToText(block.runs) || block.text || '';
+            // justify 的断行/分页与 left 完全一致（断行只取决于宽度），暂按左对齐渲染
+            const align = block.align === 'justify' ? undefined : block.align;
+            return [
+                {
+                    type: 'runs',
+                    runs,
+                    align,
+                    indentLeft: block.indentLeft,
+                    indentRight: block.indentRight,
+                    indentFirstLine: block.indentFirstLine,
+                    // Word 默认段前/段后均为 0（间距来自行距）
+                    spacingBefore: block.spacingBefore ?? 0,
+                    spacingAfter: block.spacingAfter ?? 0,
+                    lineHeight: lineSpacingToLineHeight(block.lineSpacing, hasCjkText(text))
+                }
+            ];
+        }
         case 'list':
             return listToElements(block, 0);
         case 'table':
@@ -128,26 +206,32 @@ function blockToElements(block: DocxBlock, contentWidth: number): PdfElement[] {
                 typeof block.src === 'string'
                     ? block.src
                     : block.assetId
-                      ? ({ assetId: block.assetId } as never)
-                      : (block.src as never);
+                      ? { assetId: block.assetId }
+                      : block.src;
             return [{ type: 'image', src, width: block.width, height: block.height }];
         }
         case 'code':
             return [{ type: 'runs', runs: [{ text: block.text, code: true }], spacingAfter: 4 }];
-        case 'quote':
+        case 'quote': {
+            const text = block.runs ? runsToText(block.runs) : block.text ?? '';
             return [
                 {
                     type: 'runs',
-                    runs: [{ text: block.runs ? runsToText(block.runs) : block.text ?? '' }],
-                    spacingAfter: 4
+                    runs: [{ text }],
+                    // Word 引用样式：左缩进 1cm
+                    indentLeft: 28.35,
+                    spacingAfter: 4,
+                    lineHeight: lineSpacingToLineHeight(undefined, hasCjkText(text))
                 }
             ];
+        }
         case 'hr':
-            return [{ type: 'line', x1: 0, y1: 0, x2: contentWidth, y2: 0, lineWidth: 0.5 }];
+            // 流式分隔线：画在当前内容位置（line 元素是绝对定位语义，不适合流式内容）
+            return [{ type: 'hr', lineWidth: 0.5 }];
         case 'pageBreak':
             return [{ type: 'pageBreak' }];
         case 'textBox':
-            return block.paragraphs.flatMap((p) => blockToElements(p, contentWidth));
+            return block.paragraphs.flatMap((p) => blockToElements(p));
         case 'toc':
             return [];
         default:
@@ -155,23 +239,9 @@ function blockToElements(block: DocxBlock, contentWidth: number): PdfElement[] {
     }
 }
 
-/** 内容区宽度（pt） */
-function contentWidthOf(options: BlocksToPdfOptions): number {
-    const size: [number, number] =
-        options.pageSize && Array.isArray(options.pageSize)
-            ? options.pageSize
-            : (options.pageSize as string) === 'A3'
-              ? [841.89, 1190.55]
-              : (options.pageSize as string) === 'A5'
-                ? [419.53, 595.28]
-                : (options.pageSize as string) === 'Letter'
-                  ? [612, 792]
-                  : (options.pageSize as string) === 'Legal'
-                    ? [612, 1008]
-                    : [595.28, 841.89];
-    const m = typeof options.margin === 'number' ? options.margin : 56;
-    const mx = typeof options.margin === 'object' ? Math.max(options.margin.left || m, options.margin.right || m) : m;
-    return Math.max(100, size[0] - mx * 2);
+/** 文本是否含 CJK 字符（决定单倍行距基线） */
+function hasCjkText(text: string): boolean {
+    return /[\u2E80-\u9FFF\uF900-\uFAFF\uFF01-\uFF5E]/.test(text);
 }
 
 /**
@@ -185,7 +255,6 @@ export async function blocksToPdf(
     options: BlocksToPdfOptions = {}
 ): Promise<Uint8Array> {
     const blocks = Array.isArray(input) ? input : input.blocks || [];
-    const contentWidth = contentWidthOf(options);
 
     // 自动字体：含中文且未提供字体时探测系统字体（仅 Node 端）
     let fonts = options.fonts;
@@ -200,13 +269,17 @@ export async function blocksToPdf(
         }
     }
 
-    const elements: PdfElement[] = blocks.flatMap((b) => blockToElements(b, contentWidth));
+    const elements: PdfElement[] = blocks.flatMap((b) => blockToElements(b));
 
     const spec: PdfDocumentSpec = {
         metadata: Array.isArray(input) ? undefined : input.metadata,
         elements,
         fonts,
-        assets: resolveAssets(options.assets)
+        assets: resolveAssets(options.assets),
+        // Word 中文排版基线：正文五号 10.5pt、A4 边距上下 72pt / 左右 90pt
+        defaultSize: WORD_DEFAULTS.bodySize,
+        pageSize: options.pageSize ?? 'A4',
+        margin: options.margin ?? WORD_DEFAULTS.margin
     };
 
     return jsonToPdf(spec, { assets: resolveAssets(options.assets) });

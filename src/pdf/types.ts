@@ -151,6 +151,10 @@ export interface PdfTextElement {
     width?: number;
     /** 行高倍数，默认 1.35 */
     lineHeight?: number;
+    /** 段前间距（pt），自动分页时生效 */
+    spacingBefore?: number;
+    /** 段后间距（pt），自动分页时生效 */
+    spacingAfter?: number;
 }
 
 /** 富文本片段（同一行内可混排多段不同样式的文本） */
@@ -193,6 +197,14 @@ export interface PdfRunsElement {
     lineHeight?: number;
     /** 段后间距（pt），默认 4 */
     spacingAfter?: number;
+    /** 段前间距（pt），自动分页时生效 */
+    spacingBefore?: number;
+    /** 左缩进（pt）：绘制起点右移并相应收窄行宽 */
+    indentLeft?: number;
+    /** 右缩进（pt）：行宽相应收窄 */
+    indentRight?: number;
+    /** 首行缩进（pt）：仅段落第一行右移 */
+    indentFirstLine?: number;
 }
 
 /** 标题元素 */
@@ -230,6 +242,23 @@ export interface PdfLineElement {
     color?: string;
     /** 虚线间隔，如 [3, 2] */
     dash?: number[];
+}
+
+/**
+ * 水平分隔线（流式）：在当前内容位置画一条横贯内容区的细线。
+ *
+ * 与 `line` 元素的区别：`line` 的 y 坐标是距页面顶部的绝对偏移（不跟随流式光标），
+ * 而 `hr` 始终绘制在文档流的当前位置，适合 Markdown 的 `---` 等分隔语义。
+ */
+export interface PdfHrElement {
+    type: 'hr';
+    /** 线宽（pt），默认 0.5 */
+    lineWidth?: number;
+    /** 上方留白（pt），默认 4 */
+    spacingBefore?: number;
+    /** 下方留白（pt），默认 4 */
+    spacingAfter?: number;
+    color?: string;
 }
 
 /** 矩形元素 */
@@ -287,6 +316,7 @@ export type PdfElement =
     | PdfRunsElement
     | PdfImageElement
     | PdfLineElement
+    | PdfHrElement
     | PdfRectElement
     | PdfTableElement
     | PdfPageBreakElement;
@@ -322,6 +352,10 @@ export interface PdfDocumentSpec {
     defaultSize?: number;
     /** 默认正文颜色 */
     defaultColor?: string;
+    /** 纸张尺寸（自动分页模式），默认 A4 */
+    pageSize?: PdfPageSize;
+    /** 页边距（pt，自动分页模式），默认 56（约 2cm） */
+    margin?: number | { top?: number; right?: number; bottom?: number; left?: number };
 }
 
 /** 内嵌字体集合 */

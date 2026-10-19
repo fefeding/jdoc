@@ -59,6 +59,13 @@ export interface PaginateOptions {
 /** 强制分页标记：元素带此属性时在其之前断页 */
 export const PAGE_BREAK_ATTR = 'data-oe-pagebreak';
 
+/**
+ * 「与下段同页」时，标题下至少要露出的下一段高度（磅）
+ *
+ * 中文正文单倍行距约 15.6pt（见 w:docGrid），取 16pt 作为「首行」的估算值。
+ */
+const KEEP_NEXT_LEAD = 16;
+
 /** 页码文本（页根上的 data-oe-page 属性也用它） */
 export function pageLabel(index: number): string {
     return String(index + 1);
@@ -109,6 +116,19 @@ interface Slot {
     own: number;
     /** 从上一个块之后到本块顶部占用的额外高度（含上边距） */
     gap: number;
+    /** 标题块：需要与其后第一个块保持同页（Word 的「与下段同页」） */
+    isHeading: boolean;
+}
+
+/**
+ * 是否标题块
+ *
+ * 查看模式是 jdoc 渲染的原生 h1~h6；编辑模式没有 h 标签，标题是
+ * `.oe-block[data-type="heading"]`。两种形态都要认，否则编辑模式分页会退化。
+ */
+function isHeadingNode(node: HTMLElement): boolean {
+    if (/^H[1-6]$/.test(node.tagName)) return true;
+    return node.dataset?.type === 'heading';
 }
 
 /**
@@ -150,7 +170,7 @@ export function paginate(nodes: HTMLElement[], options: PaginateOptions = {}): H
         const rect = node.getBoundingClientRect();
         const top = rect.top - hostRect.top;
         const bottom = rect.bottom - hostRect.top;
-        slots.push({ node, own: Math.max(0, bottom - top), gap: Math.max(0, top - prevBottom) });
+        slots.push({ node, own: Math.max(0, bottom - top), gap: Math.max(0, top - prevBottom), isHeading: isHeadingNode(node) });
         prevBottom = bottom;
     }
     host.remove();
@@ -193,12 +213,25 @@ export function paginate(nodes: HTMLElement[], options: PaginateOptions = {}): H
 
     newPage();
 
-    for (const slot of slots) {
+    for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i];
         // 显式分页符：先收尾当前页，标记元素本身不渲染
         if (slot.node.getAttribute(PAGE_BREAK_ATTR) !== null) {
             slot.node.remove();
             newPage();
             continue;
+        }
+        // 「与下段同页」（Word 的 keepNext）：标题不能孤立在页尾。
+        // 只判断标题自己放不放得下是不够的——标题塞得下、紧随其后的正文塞不下时，
+        // 标题会被留在页尾而正文跑到下一页，Word/WPS 则把标题推到下一页页首。
+        // 注意只要求「标题 + 下一段首行」能放下：下一段本身可以跨页续排，若按整段
+        // 高度判定，长段落（必然要跨页）会把标题也顶走，反而多出空白页。
+        if (slot.isHeading && used > 0) {
+            const next = slots[i + 1];
+            const hasNext = !!next && next.node.getAttribute(PAGE_BREAK_ATTR) === null;
+            const lead = hasNext ? Math.min(next!.own, KEEP_NEXT_LEAD) : 0;
+            const need2 = used + slot.gap + slot.own + (hasNext ? next!.gap + lead : 0);
+            if (need2 > avail) newPage();
         }
         const need = used ? used + slot.gap + slot.own : slot.own;
         // 当前页已有内容且塞不下：断页重来；空页就装不下（超高表格/代码块）则标记后放行

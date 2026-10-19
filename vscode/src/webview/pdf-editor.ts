@@ -72,7 +72,11 @@ export interface OverlayEditor {
     readonly tool: Tool;
     enable(): void;
     disable(): void;
-    /** 页 DOM 就绪后绘制该页叠加物 */
+    /**
+     * 页 DOM 就绪后绘制该页叠加物
+     *
+     * @param pageIndex 页序，**0 起**（与库层 `overlays[]` 下标一致）
+     */
     paint(pageIndex: number, pageEl: HTMLElement, cssWidth: number, pageWidthPt: number, pageHeightPt: number): void;
     /** 页几何变化后丢弃缓存，下一次 paint 重建 */
     invalidate(pageIndex: number): void;

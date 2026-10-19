@@ -5,8 +5,9 @@
 //    滚动区（否则缩小后留白、放大后被裁），而且会让 contenteditable 的光标定位、
 //    XLSX 的 sticky 冻结行列发生偏移。`zoom` 直接参与布局计算，缩放后滚动区、
 //    冻结行列与光标都保持自洽——VS Code webview 就是 Chromium，原生支持 `zoom`。
-// 2. 默认「适应宽度」：内容比可视区宽时按比例缩小，避免宽表格 / 宽文档出屏外。
-//    但上限锁在 100%——文档类内容被拉伸会失真，不如交给用户手动放大。
+// 2. 默认「适应宽度」：按可视区宽度等比缩放——窄页面放大铺满、宽页面缩小，两头都
+//    会真正生效。放大封顶 FIT_MAX_ZOOM（而非锁死 100%），否则 A4 在宽屏下永远停在
+//    100%、点了「适应」看起来毫无反应；封顶则避免宽屏上字被放得过大。
 // 3. 用户手动设定倍率后保持该倍率（切窗口大小不跟随），只有打开新文档时才复位，
 //    与 pptx-editor 的行为一致。
 
@@ -14,6 +15,14 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
 /** fit 时在可视宽度里预留的留白，避免纸面紧贴滚动条 */
 const FIT_GUTTER = 32;
+/**
+ * fit 可达到的最大倍率。
+ *
+ * A4 约 794px，在 1440 视口下适应宽度约为 1.48（字号舒适）；再宽的屏幕若真按
+ * 比例铺满，1920 要 2.09、2560 要 2.9，字会大到一屏只看几行。这里封顶 1.5：
+ * 窄页面照样能明显放大，宽屏也不会夸张。手动放大仍可到 MAX_ZOOM(4)。
+ */
+const FIT_MAX_ZOOM = 1.5;
 
 export interface ZoomBinding {
     /** 被缩放的元素 */
@@ -50,18 +59,28 @@ export function createZoom(): ZoomController {
     /** null 表示自动适应宽度 */
     let userZoom: number | null = null;
     let zoom = 1;
-    let onChange: ((zoom: number, auto: boolean) => void) | null = null;
+    let onChange: Array<(zoom: number, auto: boolean) => void> = [];
 
     /**
      * 纸张的自然（未缩放）宽度。
-     * getBoundingClientRect 返回的是缩放后的视觉宽度，需除以当前倍率还原；
-     * offsetWidth 在 zoom 下的语义依赖浏览器实现，用 rect/zoom 更稳妥。
+     *
+     * 必须用 offsetWidth，不能用 `getBoundingClientRect().width / zoom`：后者是
+     * **自引用**写法——分母正是要算出来的 zoom。一旦 paper 解析失败、退化成撑满
+     * 容器的元素（解析提示、被重建的中间态），fit 就退化成
+     * `(container - gutter) * zoom / container` 的收缩反馈：每绑定一次倍率就乘
+     * 一个略小于 1 的系数，多次触发后一路收敛到 MIN_ZOOM（实测出现过 20%，
+     * 页面被缩成一条）。offsetWidth 量的是元素**自身坐标系**的布局宽度，不随
+     * 祖先 zoom 浮动，是稳定的自然宽度，也让 fit 变成幂等。
+     *
+     * 例外：paper 就是 target 自身时（XLSX 网格，zoom 直接作用其上），
+     * offsetWidth 会随 zoom 变化，此时除回 zoom。
      */
     function naturalWidth(): number {
         const el = paper && paper.isConnected ? paper : target;
         if (!el || !el.isConnected) return 0;
-        const w = el.getBoundingClientRect().width;
-        return w > 0 ? w / (zoom || 1) : 0;
+        const w = el.offsetWidth;
+        if (w <= 0) return 0;
+        return el === target ? w / (zoom || 1) : w;
     }
 
     function fitZoom(): number {
@@ -69,7 +88,7 @@ export function createZoom(): ZoomController {
         if (!container || !nat) return 1;
         const avail = container.clientWidth - FIT_GUTTER;
         if (avail <= 0) return 1;
-        return clamp(avail / nat, MIN_ZOOM, 1);
+        return clamp(avail / nat, MIN_ZOOM, FIT_MAX_ZOOM);
     }
 
     function apply(): void {
@@ -79,7 +98,7 @@ export function createZoom(): ZoomController {
             const z = Math.round(zoom * 1e4) / 1e4;
             target.style.zoom = z === 1 ? '' : String(z);
         }
-        onChange?.(zoom, userZoom == null);
+        onChange.forEach((fn) => fn(zoom, userZoom == null));
     }
 
     function fit(): void {
@@ -131,12 +150,12 @@ export function createZoom(): ZoomController {
         getZoom: () => zoom,
         isAuto: () => userZoom == null,
         setOnChange: (fn) => {
-            onChange = fn;
+            onChange.push(fn);
         },
         destroy: () => {
             window.removeEventListener('wheel', onWheel);
             window.removeEventListener('resize', onResize);
-            onChange = null;
+            onChange = [];
         }
     };
 }

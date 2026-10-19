@@ -266,24 +266,75 @@ async function extractVectors(
         } else if (op === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
         else if (op === OPS.rectangle) addRectPath(a[0] as number, a[1] as number, a[2] as number, a[3] as number);
         else if (op === OPS.constructPath) {
-            const ops = a[0] as unknown as number[];
-            const coords = a[1] as unknown as number[];
-            let p = 0;
-            sub = [];
-            for (const code of ops) {
-                if (code === 0) {
-                    pushPoint(coords[p], coords[p + 1]);
-                    p += 2;
-                } else if (code === 1) {
-                    pushPoint(coords[p], coords[p + 1]);
-                    p += 2;
-                } else if (code === 2) {
-                    p += 6; // 曲线：用终点近似（表格还原不需要曲线精度）
-                } else if (code === 3) {
-                    p += 4;
-                } else if (code === 4) {
-                    closed = true;
+            // pdfjs 6.x：args = [drawOp, [交错数组(op,x,y,...)], minMax]
+            //   子操作码 DrawOPS：0=moveTo 1=lineTo 2=curveTo(6参) 3=quadraticCurveTo(4参) 4=closePath
+            //   `re` 矩形在 evaluator 层已展开为 moveTo/lineTo/closePath 序列；
+            //   绘制语义（stroke/fill）合并在 a[0]，后面没有独立的 stroke/fill op。
+            //   交错数组包在 a[1][0]（对应 canvas 层 constructPath 的 `let [path] = data`）
+            // pdfjs <=5：args = [ops 数组(0..6), coords 数组]
+            //   0=moveTo 1=lineTo 2=curveTo 3=curveTo2 4=curveTo3 5=closePath 6=rectangle
+            if (a[0] && typeof (a[0] as ArrayLike<number>).length === 'number' && typeof a[0] !== 'number') {
+                const ops = a[0] as unknown as number[];
+                const coords = a[1] as unknown as number[];
+                let p = 0;
+                for (const code of ops) {
+                    if (code === 0) {
+                        flush();
+                        pushPoint(coords[p], coords[p + 1]);
+                        p += 2;
+                    } else if (code === 1) {
+                        pushPoint(coords[p], coords[p + 1]);
+                        p += 2;
+                    } else if (code === 2) {
+                        p += 6;
+                    } else if (code === 3 || code === 4) {
+                        p += 4;
+                    } else if (code === 5) {
+                        closed = true;
+                    } else if (code === 6) {
+                        flush();
+                        addRectPath(coords[p], coords[p + 1], coords[p + 2], coords[p + 3]);
+                        p += 4;
+                    }
                 }
+            } else {
+                const raw = a[1] as unknown as unknown[] | undefined;
+                const flat = (Array.isArray(raw) ? raw[0] : raw) as ArrayLike<number> | undefined;
+                if (flat && typeof flat.length === 'number') {
+                    let p = 0;
+                    while (p < flat.length) {
+                        const code = flat[p++];
+                        if (code === 0) {
+                            flush();
+                            pushPoint(flat[p], flat[p + 1]);
+                            p += 2;
+                        } else if (code === 1) {
+                            pushPoint(flat[p], flat[p + 1]);
+                            p += 2;
+                        } else if (code === 2) {
+                            p += 6;
+                        } else if (code === 3) {
+                            p += 4;
+                        } else if (code === 4) {
+                            closed = true;
+                        } else {
+                            break; // 未知子操作：跳过剩余部分，避免坐标错位
+                        }
+                    }
+                }
+                // v6：a[0] 携带绘制操作（stroke/fill 系），constructPath 结束即绘制完成
+                const drawOp = a[0] as unknown as number | undefined;
+                const isDrawOp =
+                    typeof drawOp === 'number' &&
+                    (drawOp === OPS.stroke ||
+                        drawOp === OPS.closeStroke ||
+                        drawOp === OPS.fill ||
+                        drawOp === OPS.eoFill ||
+                        drawOp === OPS.fillStroke ||
+                        drawOp === OPS.eoFillStroke ||
+                        drawOp === OPS.closeFillStroke ||
+                        drawOp === OPS.closeEOFillStroke);
+                if (isDrawOp) flush();
             }
         } else if (
             op === OPS.stroke ||

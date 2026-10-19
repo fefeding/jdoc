@@ -43,9 +43,10 @@ export async function registerPdfFontkit(): Promise<FontkitModule> {
 /**
  * 各平台常见中文字体候选路径
  *
- * 刻意只列单字体文件（.ttf/.otf），不含 .ttc 字体集合：
  * pdf-lib 的 embedFont 只接受字体字节，无法指定 TTC 内的某个字面，
- * 直接嵌 .ttc 大概率失败。探测时会对每个候选做一次真实嵌入验证，失败即换下一个。
+ * 因此优先列出单字体文件（.ttf/.otf）；.ttc 候选排在末位，
+ * 由探测时的真实嵌入验证兜底（失败自动换下一个，不会产出缺字形的坏 PDF）。
+ * DejaVu 等西文字体不含 CJK 字形，刻意不列，避免探测到后静默丢字。
  */
 const SYSTEM_FONT_CANDIDATES: Record<string, string[]> = {
     darwin: [
@@ -67,8 +68,7 @@ const SYSTEM_FONT_CANDIDATES: Record<string, string[]> = {
         '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
         '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
         '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
-        '/usr/share/fonts/truetype/arphic/uming.ttc',
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+        '/usr/share/fonts/truetype/arphic/uming.ttc'
     ]
 };
 

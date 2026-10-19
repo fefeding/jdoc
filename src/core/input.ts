@@ -11,6 +11,8 @@
 /** 统一的文件输入类型：二进制缓冲区、Blob/File、或 data URL / base64 字符串 */
 export type DocInput = ArrayBuffer | ArrayBufferView | Uint8Array | Blob | string;
 
+import type { DocFormat } from './errors';
+
 /** 去掉 data URL 前缀，提取纯 base64 负载 */
 function stripDataUrlPrefix(value: string): string {
     const match = /^data:[^,]*?(;base64)?,(.*)$/s.exec(value.trim());
@@ -147,8 +149,6 @@ export function assertNonEmpty(bytes: Uint8Array | ArrayBuffer, format: string, 
     }
 }
 
-import type { DocFormat } from './errors';
-
 /** Markdown 强特征：出现任意一个即可判定为 Markdown */
 const MD_STRONG = [
     /^#{1,6}\s+\S/m,            // 标题
@@ -195,13 +195,13 @@ export async function detectFormat(input: DocInput): Promise<DocFormat | null> {
 
             // OOXML 各格式靠内部标记部件区分：
             //   docx -> word/document.xml   xlsx -> xl/workbook.xml   pptx -> ppt/presentation.xml
-            const text = await new TextDecoder('latin1').decode(bytes.slice(0, Math.min(bytes.length, 8192)));
+            const text = new TextDecoder('latin1').decode(bytes.slice(0, Math.min(bytes.length, 8192)));
             if (text.includes('word/')) return 'docx';
             if (text.includes('xl/')) return 'xlsx';
             if (text.includes('ppt/')) return 'pptx';
 
             // 中央目录可能在文件末尾，尾部再找一次
-            const tail = await new TextDecoder('latin1').decode(bytes.slice(Math.max(0, bytes.length - 65536)));
+            const tail = new TextDecoder('latin1').decode(bytes.slice(Math.max(0, bytes.length - 65536)));
             if (tail.includes('word/')) return 'docx';
             if (tail.includes('xl/')) return 'xlsx';
             if (tail.includes('ppt/')) return 'pptx';

@@ -103,6 +103,21 @@ export const PDF_CSS = `
 .pdf-ov-h.h-sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
 .pdf-ov-h.h-w  { left: -5px; top: 50%; margin-top: -4px; cursor: ew-resize; }
 .pdf-ov-del { position: absolute; right: -9px; top: -9px; width: 18px; height: 18px; border-radius: 50%; background: var(--jc-danger, #d13438); color: #fff; font-size: 13px; line-height: 16px; text-align: center; cursor: pointer; user-select: none; }
+
+/* ---------- 全文搜索 ---------- */
+/* 单独一行（与编辑栏对称），不挤占顶部导航栏 */
+.pdf-search-bar { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 4px 10px; background: var(--jc-surface); border-bottom: 1px solid var(--jc-border); }
+.pdf-search-bar[hidden] { display: none; }
+.pdf-search-input { width: 220px; height: 24px; border: 1px solid var(--jc-border); border-radius: 4px; background: var(--jc-surface); color: var(--jc-text); font: inherit; font-size: 12px; padding: 0 8px; }
+.pdf-search-input:focus { outline: 1px solid var(--jc-focus); outline-offset: -1px; }
+.pdf-search-input.no-match { border-color: var(--jc-danger, #d13438); }
+.pdf-search-count { color: var(--jc-muted); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 38px; text-align: center; }
+.pdf-search-bar .pdf-btn { width: 22px; height: 22px; }
+.pdf-search-bar .pdf-btn:disabled { opacity: .3; }
+/* 命中点：透明文本层之上，不抢事件 */
+.pdf-search-layer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.pdf-search-hit { position: absolute; background: rgba(255, 212, 0, .45); border-radius: 2px; }
+.pdf-search-hit.current { background: rgba(255, 140, 0, .65); box-shadow: 0 0 0 1px rgba(255, 140, 0, .9); }
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -129,7 +144,8 @@ const ICON = {
     next: 'M9 6l6 6-6 6',
     page: 'M7 3h7l5 5v13H7zM14 3v5h5',
     rotate: 'M4.5 12a7.5 7.5 0 1 1 2.2 5.3M4.5 12V6.5M4.5 12H10',
-    edit: 'M4 20h4l10-10-4-4L4 16zM13.5 6.5l4 4'
+    edit: 'M4 20h4l10-10-4-4L4 16zM13.5 6.5l4 4',
+    search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4.3-4.3'
 };
 
 /** PDF 阅读器实例 */
@@ -175,6 +191,16 @@ export function createPdfViewer(
     const thumbs = el('div', 'pdf-thumbs');
     const content = el('div', 'jc-content pdf-content');
 
+    const btn = (icon: string, title: string, fn: () => void): HTMLButtonElement => {
+        const b = el('button', 'pdf-btn');
+        b.type = 'button';
+        b.title = title;
+        b.setAttribute('aria-label', title);
+        b.appendChild(svgIcon(icon));
+        b.addEventListener('click', fn);
+        return b;
+    };
+
     // ---------- 叠加编辑层 ----------
     // 必须在 append 之前建好：它的工具栏要插在 bar 之后单独一行
     let editing = false;
@@ -195,18 +221,21 @@ export function createPdfViewer(
     const editBar = editor.bar;
     editBar.hidden = true;
 
-    body.append(thumbs, content);
-    app.append(bar, editBar, body);
+    // ---------- 全文搜索栏（独立一行，与编辑栏对称） ----------
+    const searchBar = el('div', 'pdf-search-bar');
+    searchBar.hidden = true;
+    const searchInput = el('input', 'pdf-search-input') as HTMLInputElement;
+    searchInput.type = 'text';
+    searchInput.placeholder = '搜索全文…';
+    searchInput.setAttribute('aria-label', '搜索');
+    const searchCount = el('span', 'pdf-search-count', '');
+    const searchPrev = btn(ICON.prev, '上一个匹配', () => gotoHit(-1));
+    const searchNext = btn(ICON.next, '下一个匹配', () => gotoHit(1));
+    const searchClose = btn('M6 6l12 12M18 6L6 18', '关闭搜索', () => toggleSearch(false));
+    searchBar.append(searchInput, searchCount, searchPrev, searchNext, searchClose);
 
-    const btn = (icon: string, title: string, fn: () => void): HTMLButtonElement => {
-        const b = el('button', 'pdf-btn');
-        b.type = 'button';
-        b.title = title;
-        b.setAttribute('aria-label', title);
-        b.appendChild(svgIcon(icon));
-        b.addEventListener('click', fn);
-        return b;
-    };
+    body.append(thumbs, content);
+    app.append(bar, editBar, searchBar, body);
 
     const toggleBtn = btn(ICON.menu, '折叠 / 展开缩略图栏', () => {
         thumbs.hidden = !thumbs.hidden;
@@ -228,6 +257,8 @@ export function createPdfViewer(
     const viewBtn = btn(ICON.page, '单页 / 连续滚动', () => setPaged(!state.paged));
     const rotateBtn = btn(ICON.rotate, '顺时针旋转 90°', () => rotate());
     const editBtn = btn(ICON.edit, '编辑：叠加签名 / 图片 / 文本 / 手绘', () => setEditing(!editing));
+    const searchBtn = btn(ICON.search, '搜索全文', () => toggleSearch());
+    searchBtn.dataset.tool = 'search';
     const title = el('div', 'title');
 
     /** 标题：文件名 + 未保存标记（叠加编辑的未保存态由 webview 自行维护） */
@@ -261,6 +292,7 @@ export function createPdfViewer(
         viewBtn,
         rotateBtn,
         editBtn,
+        searchBtn,
         el('div', 'spring'),
         title
     );
@@ -276,7 +308,9 @@ export function createPdfViewer(
         paged: true,
         pages: [] as HTMLElement[],
         rendered: new Set<number>(),
-        thumbsRendered: new Set<number>()
+        thumbsRendered: new Set<number>(),
+        /** 每页文本项（PDF pt transform），预取后用于搜索；下标 0 起 */
+        textItems: [] as Array<Array<{ str: string; transform: number[]; width: number; height: number }> | null>
     };
 
     let wrap: HTMLElement | null = null;
@@ -342,8 +376,9 @@ export function createPdfViewer(
         const host = state.pages[index - 1];
         if (!host) return;
         state.rendered.add(index);
-        // 下面会 replaceChildren 重建页内容，旧叠加层节点随之失效
-        editor.invalidate(index);
+        // 下面会 replaceChildren 重建页内容，旧叠加层节点随之失效。
+        // 编辑层内部一律用 0 起页序（与库层 overlays[] 的下标一致）
+        editor.invalidate(index - 1);
         try {
             let pg = page;
             let baseVp = base;
@@ -396,8 +431,10 @@ export function createPdfViewer(
             }
             // 叠加编辑层挂在页内（canvas / 文本层之上），坐标换算由 editor 自己做。
             // 尺寸单位：cssWidth 为布局 px，宽高为 PDF 点（baseVp 是 scale=1 的视口）。
-            editor.paint(index, host, Math.round(baseVp.width * scale), baseVp.width, baseVp.height);
+            editor.paint(index - 1, host, Math.round(baseVp.width * scale), baseVp.width, baseVp.height);
             onStatus(`共 ${state.total} 页`);
+            // 搜索高亮依赖坐标换算，页（重）渲染后需要按当前命中重画
+            if (query && hits.length) void paintSearch();
         } catch (err: any) {
             state.rendered.delete(index);
             if (disposed) return;
@@ -495,6 +532,7 @@ export function createPdfViewer(
         relayout();
         void renderPage(state.current);
         void renderThumb(state.current);
+        if (query) void paintSearch();
     }
 
     function goTo(index: number, scroll = true): void {
@@ -538,6 +576,7 @@ export function createPdfViewer(
         state.thumbsRendered.clear();
         buildThumbs();
         relayout();
+        if (query) void paintSearch();
     }
 
     /** 连续滚动模式下按视口位置反推当前页 */
@@ -586,6 +625,189 @@ export function createPdfViewer(
         }
     }
 
+    // ---------- 全文搜索 ----------
+    let query = '';
+    /** 命中点：{ page: 0 起以外的 1 起页序, item: 文本项, subStart/subLen: 在 item.str 内的子串偏移 } */
+    let hits: Array<{ page: number; item: any; subStart: number; subLen: number }> = [];
+    let activeHit = -1;
+    let searchTimer: number | null = null;
+
+    function updateCount(): void {
+        searchCount.textContent = hits.length ? `${activeHit + 1}/${hits.length}` : '0/0';
+    }
+
+    /** 打开文档后预取每页文本项（PDF pt transform），搜索时不必再 parse 一遍 */
+    async function prefetchText(): Promise<void> {
+        if (!state.doc) return;
+        state.textItems = new Array(state.total).fill(null);
+        await Promise.all(
+            Array.from({ length: state.total }, async (_, i) => {
+                try {
+                    const pg = await state.doc.getPage(i + 1);
+                    const tc = await pg.getTextContent();
+                    state.textItems[i] = ((tc.items || []) as any[])
+                        .filter((it: any) => typeof it?.str === 'string' && it.str)
+                        .map((it: any) => ({ str: it.str, transform: it.transform || [], width: it.width || 0, height: it.height || 0 }));
+                } catch {
+                    state.textItems[i] = [];
+                }
+            })
+        );
+        if (disposed) return;
+        if (query) void paintSearch();
+    }
+
+    /** 把命中画到对应页：复用文本层同一套坐标换算（含旋转），高亮矩形轴对齐近似 */
+    async function paintSearch(): Promise<void> {
+        if (disposed) return;
+        for (const host of state.pages) host.querySelector('.pdf-search-layer')?.remove();
+        if (!query || !hits.length) return;
+        const byPage = new Map<number, typeof hits>();
+        for (const h of hits) {
+            if (!byPage.has(h.page)) byPage.set(h.page, []);
+            byPage.get(h.page)!.push(h);
+        }
+        for (const [page, list] of byPage) {
+            const host = state.pages[page - 1];
+            if (!host) continue;
+            const sized = await ensureSize(page);
+            if (disposed) return;
+            const layer = el('div', 'pdf-search-layer');
+            for (const h of list) {
+                const [vx, vy] = sized.base.convertToViewportPoint(h.item.transform[4] || 0, h.item.transform[5] || 0);
+                const fs = Math.abs(h.item.transform[3] || h.item.height || 0) || 10;
+                const itemLeft = vx * sized.cssScale;
+                const itemTop = Math.max(0, vy - fs) * sized.cssScale;
+                const denom = Math.max(1, h.item.str.length);
+                const subLeft = itemLeft + (h.item.width || 0) * (h.subStart / denom) * sized.cssScale;
+                const subW = (h.item.width || 0) * (h.subLen / denom) * sized.cssScale;
+                const div = el('div', 'pdf-search-hit' + (hits[activeHit] === h ? ' current' : ''));
+                div.style.left = `${subLeft}px`;
+                div.style.top = `${itemTop}px`;
+                div.style.width = `${Math.max(2, subW)}px`;
+                div.style.height = `${fs * sized.cssScale}px`;
+                layer.appendChild(div);
+            }
+            host.appendChild(layer);
+        }
+    }
+
+    function runSearch(q: string): void {
+        query = q.trim();
+        hits = [];
+        activeHit = -1;
+        if (!query) {
+            searchInput.classList.remove('no-match');
+            searchCount.textContent = '';
+            searchPrev.disabled = true;
+            searchNext.disabled = true;
+            void paintSearch();
+            return;
+        }
+        const re = (() => {
+            try {
+                return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            } catch {
+                return null;
+            }
+        })();
+        if (!re) {
+            void paintSearch();
+            return;
+        }
+        for (let i = 0; i < state.textItems.length; i++) {
+            const items = state.textItems[i];
+            if (!items || !items.length) continue;
+            // 拼接本页文本：相邻 item 间补一个空格（近似词边界），并记录字符 -> item 映射
+            let text = '';
+            const spans: Array<{ start: number; end: number; item: any }> = [];
+            for (const it of items) {
+                const start = text.length;
+                if (start > 0) text += ' ';
+                const realStart = text.length;
+                text += it.str;
+                spans.push({ start: realStart, end: text.length, item: it });
+            }
+            re.lastIndex = 0;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(text))) {
+                const s = m.index;
+                const e = m.index + m[0].length;
+                for (const sp of spans) {
+                    if (sp.end <= s || sp.start >= e) continue;
+                    const subStart = Math.max(0, s - sp.start);
+                    const subLen = Math.min(e, sp.end) - Math.max(s, sp.start);
+                    if (subLen > 0) hits.push({ page: i + 1, item: sp.item, subStart, subLen });
+                }
+                if (m.index === re.lastIndex) re.lastIndex++;
+            }
+        }
+        const has = hits.length > 0;
+        searchInput.classList.toggle('no-match', !has);
+        searchPrev.disabled = !has;
+        searchNext.disabled = !has;
+        if (has) {
+            activeHit = 0;
+            updateCount();
+            void paintSearch().then(() => gotoHit(0, true));
+        } else {
+            searchCount.textContent = '0/0';
+            void paintSearch();
+        }
+    }
+
+    function gotoHit(delta: number, initial = false): void {
+        if (!hits.length) return;
+        if (!initial) activeHit = (activeHit + delta + hits.length) % hits.length;
+        updateCount();
+        const h = hits[activeHit];
+        void paintSearch().then(() => {
+            const host = state.pages[h.page - 1];
+            if (!host) return;
+            const div = host.querySelector('.pdf-search-layer .pdf-search-hit.current') as HTMLElement | null;
+            if (state.current !== h.page) goTo(h.page);
+            if (div) requestAnimationFrame(() => div.scrollIntoView({ block: 'center' }));
+        });
+    }
+
+    function clearSearch(): void {
+        query = '';
+        hits = [];
+        activeHit = -1;
+        searchInput.value = '';
+        searchInput.classList.remove('no-match');
+        searchCount.textContent = '';
+        searchPrev.disabled = true;
+        searchNext.disabled = true;
+        void paintSearch();
+    }
+
+    function toggleSearch(force?: boolean): void {
+        const on = force === undefined ? searchBar.hidden : force;
+        searchBar.hidden = !on;
+        searchBtn.classList.toggle('on', on);
+        if (on) {
+            searchInput.focus();
+            if (query) runSearch(query);
+        } else {
+            clearSearch();
+        }
+    }
+
+    searchInput.addEventListener('input', () => {
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(() => runSearch(searchInput.value), 200);
+    });
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            gotoHit(e.shiftKey ? -1 : 1);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            toggleSearch(false);
+        }
+    });
+
     // ---------- 打开 / 关闭 ----------
     function close(): void {
         disposed = true;
@@ -599,6 +821,10 @@ export function createPdfViewer(
         editor.reset(new Uint8Array(0));
         editBar.hidden = !editing;
         editBtn.classList.toggle('on', editing);
+        searchBar.hidden = true;
+        searchBtn.classList.remove('on');
+        clearSearch();
+        state.textItems = [];
         if (onScroll) content.removeEventListener('scroll', onScroll);
         onScroll = null;
         if (onResize) window.removeEventListener('resize', onResize);
@@ -693,6 +919,8 @@ export function createPdfViewer(
         goTo(1);
         await renderPage(1);
         onStatus(`共 ${state.total} 页`);
+        // 后台预取文本项，搜索时无需再 parse
+        void prefetchText();
     }
 
     return {

@@ -170,24 +170,34 @@ export function createOutline(handlers: OutlineHandlers): OutlineView {
     };
 }
 
+/** 滚动联动的句柄 */
+export interface ActiveHeadingTracker {
+    /** 立即重算当前高亮（缩放 / 布局变化后调用，这些场景不触发 scroll） */
+    refresh(): void;
+    /** 解除监听 */
+    dispose(): void;
+}
+
 /**
  * 滚动联动：滚动内容区时高亮当前视口顶部的标题
  *
  * @param scrollEl 内容滚动容器
  * @param ids 锚点 id 列表（与正文顺序一致）
- * @returns 解除监听的函数
+ * @returns 句柄，可主动 refresh 或解除监听
  */
 export function trackActiveHeading(
     scrollEl: HTMLElement,
     ids: string[],
     onChange: (id: string | null) => void
-): () => void {
-    if (!ids.length) return () => undefined;
+): ActiveHeadingTracker {
+    if (!ids.length) return { refresh: () => undefined, dispose: () => undefined };
     let ticking = false;
     let last: string | null = null;
 
     const pick = (): void => {
         ticking = false;
+        // 阈值用视觉像素：scrollEl 与标题元素的 rect 同处视觉坐标系，
+        // 缩放后两者同步缩放，比较依然成立，无需再除 zoom。
         const top = scrollEl.getBoundingClientRect().top;
         let active: string | null = ids[0];
         for (const id of ids) {
@@ -209,5 +219,8 @@ export function trackActiveHeading(
     };
 
     scrollEl.addEventListener('scroll', onScroll, { passive: true });
-    return () => scrollEl.removeEventListener('scroll', onScroll);
+    return {
+        refresh: () => pick(),
+        dispose: () => scrollEl.removeEventListener('scroll', onScroll)
+    };
 }

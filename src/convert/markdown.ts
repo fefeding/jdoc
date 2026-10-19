@@ -46,15 +46,19 @@ export interface BlocksToMarkdownOptions {
 // Markdown -> blocks
 // ---------------------------------------------------------------------------
 
-let sharedMarked: Marked | undefined;
+/** 实例缓存：按选项组合分别构建，避免第一次调用的选项“焊死”后续所有调用 */
+const markedCache = new Map<string, Marked>();
 function getMarked(options: MarkdownToBlocksOptions): Marked {
-    if (!sharedMarked) {
-        sharedMarked = new Marked({ gfm: options.gfm !== false, breaks: false });
-        sharedMarked.use(
+    const key = `${options.gfm !== false}|${options.math !== false}|${options.diagrams !== false}`;
+    let instance = markedCache.get(key);
+    if (!instance) {
+        instance = new Marked({ gfm: options.gfm !== false, breaks: false });
+        instance.use(
             markdownExtensions({ enableMath: options.math !== false, enableDiagrams: options.diagrams !== false })
         );
+        markedCache.set(key, instance);
     }
-    return sharedMarked;
+    return instance;
 }
 
 /** 把若干行内 token 转成 run 序列 */
@@ -139,9 +143,9 @@ function listToBlock(token: Tokens.List): DocxBlock {
     const itemRuns = (item: Tokens.ListItem): DocxListItem => {
         const inline = (item.tokens || []).filter((t) => t.type !== 'list');
         const nested = (item.tokens || []).find((t) => t.type === 'list') as Tokens.List | undefined;
-        const runs = inlineToRuns(inline);
-        if (nested) (runs as DocxRun[] & { children?: DocxListItem[] }).children = nested.items.map(itemRuns);
-        return runs as DocxListItem;
+        const runs: DocxRun[] & { children?: DocxListItem[] } = inlineToRuns(inline);
+        if (nested) runs.children = nested.items.map(itemRuns);
+        return runs;
     };
     return { type: 'list', ordered: token.ordered, items: token.items.map(itemRuns) };
 }
@@ -251,7 +255,8 @@ export function markdownToBlocks(markdown: string | Uint8Array, options: Markdow
 function runsToMarkdown(runs: DocxRun[], inlineCode: boolean): string {
     let out = '';
     for (const r of runs) {
-        let text = r.text ?? '';
+        if (!r.text) continue;
+        let text = r.text;
         if (r.code && inlineCode) text = '`' + text + '`';
         else {
             if (r.bold) text = `**${text}**`;
@@ -262,6 +267,16 @@ function runsToMarkdown(runs: DocxRun[], inlineCode: boolean): string {
         out += text;
     }
     return out;
+}
+
+/** 引用块 -> Markdown（每行补 `> ` 前缀，无引用内容时至少输出 `>`） */
+function quoteToMarkdown(runs: DocxRun[] | undefined, text: string | undefined, inlineCode: boolean): string {
+    const content = runs ? runsToMarkdown(runs, inlineCode) : text ?? '';
+    if (!content.trim()) return '>';
+    return content
+        .split('\n')
+        .map((line) => (line.trim() ? '> ' + line : '>'))
+        .join('\n');
 }
 
 /** 单元格 -> 纯文本（用于 Markdown 表格） */
@@ -291,7 +306,8 @@ function blockToMarkdownLine(block: DocxBlock, inlineCode: boolean): string {
         case 'pageBreak':
             return '<!-- pagebreak -->';
         case 'quote':
-            return block.runs ? runsToMarkdown(block.runs, inlineCode) : block.text ?? '';
+            // 引用块：保持 `> ` 前缀（内部换行按引用语法逐行补前缀）
+            return quoteToMarkdown(block.runs, block.text, inlineCode);
         case 'textBox':
             return block.paragraphs.map((p) => blockToMarkdownLine(p, inlineCode)).join('\n');
         case 'list':
@@ -310,8 +326,9 @@ function renderList(list: Extract<DocxBlock, { type: 'list' }>, depth: number, i
     const indent = '  '.repeat(depth);
     const lines: string[] = [];
     list.items.forEach((item, index) => {
-        const runs = Array.isArray(item) ? (item as DocxRun[]) : [];
-        const children = (runs as DocxRun[] & { children?: DocxListItem[] }).children;
+        // DocxListItem 允许 string 形态（等价于 [{text}]），统一归一为 runs
+        const runs: DocxRun[] & { children?: DocxListItem[] } = typeof item === 'string' ? [{ text: item }] : (item as DocxRun[]);
+        const children = runs.children;
         const prefix = list.ordered ? `${index + 1}. ` : '- ';
         lines.push(indent + prefix + runsToMarkdown(runs, inlineCode));
         if (children?.length) {
@@ -359,11 +376,6 @@ function normalizeAssets(assets: BlocksToMarkdownOptions['assets']): Record<stri
     return assets as Record<string, DocAsset>;
 }
 
-/** 是否为需要单列成行的块 */
-function isInline(block: DocxBlock): boolean {
-    return block.type === 'paragraph' || block.type === 'heading' || block.type === 'quote';
-}
-
 /**
  * 把文档块模型渲染为 Markdown 文本
  * @param blocks - 块序列或完整文档
@@ -379,15 +391,14 @@ export function blocksToMarkdown(
     assetLookup = assetTable;
     try {
         const parts: string[] = [];
-        let prev: DocxBlock | undefined;
 
         for (const block of blocks) {
             const text = blockToMarkdownLine(block, inlineCode);
-            const needsGap =
-                prev && !isInline(prev) && !isInline(block) && prev.type !== 'list' && block.type !== 'list';
-            if (needsGap && parts.length) parts.push('');
+            // 相邻块之间一律空行：列表后的段落缺空行会被 CommonMark 当作
+            // 列表项的 lazy continuation，相邻列表会合并、相邻段落会软换行合并，
+            // 统一空行才能保证块边界在往返后不丢。
+            if (parts.length) parts.push('');
             parts.push(text);
-            prev = block;
         }
         return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim();
     } finally {

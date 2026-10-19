@@ -111,7 +111,8 @@ function inlineRuns(nodes: HtmlNode[], inherited: Partial<DocxRun> = {}): DocxRu
                 }
                 case 'span': {
                     const css = attr(node, 'style') || '';
-                    const colorMatch = /color\s*:\s*([^;]+)/i.exec(css);
+                    // 只认独立的 color 声明，避免 background-color 误命中
+                    const colorMatch = /(?:^|;)\s*color\s*:\s*([^;]+)/i.exec(css);
                     if (colorMatch) style.color = colorMatch[1].trim();
                     break;
                 }
@@ -162,7 +163,25 @@ function childrenToBlocks(nodes: HtmlNode[]): DocxBlock[] {
             });
         } else if (tag === 'p') {
             flush();
-            blocks.push({ type: 'paragraph', runs: inlineRuns(children), text: textContent(node).trim() });
+            // p 内直接嵌 img：拆成 段落/图片 序列，避免图片作为行内节点被丢弃
+            if (children.some((c) => c.nodeName === 'img')) {
+                let buffer: DocxRun[] = [];
+                for (const c of children) {
+                    if (c.nodeName === 'img') {
+                        if (buffer.length) {
+                            blocks.push({ type: 'paragraph', runs: buffer });
+                            buffer = [];
+                        }
+                        const img = imageFromNode(c);
+                        if (img.src) blocks.push(img);
+                    } else {
+                        buffer.push(...inlineRuns([c]));
+                    }
+                }
+                if (buffer.length) blocks.push({ type: 'paragraph', runs: buffer });
+            } else {
+                blocks.push({ type: 'paragraph', runs: inlineRuns(children), text: textContent(node).trim() });
+            }
         } else if (tag === 'ul' || tag === 'ol') {
             flush();
             blocks.push(listToBlock(node));
@@ -208,9 +227,9 @@ function listToBlock(node: HtmlNode): Extract<DocxBlock, { type: 'list' }> {
         const liChildren = (child as { childNodes?: HtmlNode[] }).childNodes || [];
         const inlineNodes = liChildren.filter((n) => n.nodeName !== 'ul' && n.nodeName !== 'ol');
         const nested = liChildren.find((n) => n.nodeName === 'ul' || n.nodeName === 'ol');
-        const runs = inlineRuns(inlineNodes);
-        if (nested) (runs as DocxRun[] & { children?: DocxListItem[] }).children = listToBlock(nested).items;
-        items.push(runs as DocxListItem);
+        const runs: DocxRun[] & { children?: DocxListItem[] } = inlineRuns(inlineNodes);
+        if (nested) runs.children = listToBlock(nested).items;
+        items.push(runs);
     }
     return { type: 'list', ordered, items };
 }
@@ -259,7 +278,7 @@ function isHeaderCell(cell: DocxCell): boolean {
 }
 
 /** 图片节点 -> DocxImage */
-function imageFromNode(node: HtmlNode): DocxBlock {
+function imageFromNode(node: HtmlNode): Extract<DocxBlock, { type: 'image' }> {
     const src = attr(node, 'src') || '';
     const alt = attr(node, 'alt');
     const width = attr(node, 'width');

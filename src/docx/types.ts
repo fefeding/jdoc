@@ -281,6 +281,14 @@ export interface DocxSection {
     marginLeft: number;
     /** 右边距（磅） */
     marginRight: number;
+    /**
+     * 文档网格行距（磅），来自 w:docGrid/@w:linePitch（twips/20）
+     *
+     * 中文 Word/WPS 常用「行网格」（w:docGrid w:type="lines"）：每行行高对齐到
+     * linePitch 的整数倍。不还原它，行距会明显偏小，每页能塞下更多内容，
+     * 分页落点比 Word/WPS 整体前移。
+     */
+    gridLinePitch?: number;
 }
 
 /** 完整 DOCX 文档（JSON 契约） */

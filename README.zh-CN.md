@@ -224,6 +224,31 @@ rows: [
 支持的元素类型：`text` / `heading` / `image` / `line` / `rect` / `table` / `pageBreak`。
 坐标采用**顶部原点**（与 HTML 一致），只需给出距左边距 / 距顶边距的距离。
 
+#### 编辑既有 PDF
+
+`editPdf(input, spec)` 在既有 PDF 上追加内容并保存：原文件的对象结构、内容流、矢量图形与
+内嵌字体全部原样保留，只往页面内容流末尾追加绘制指令。另有 `mergePdfs(inputs)` 与
+`splitPdf(input, { from, to })`。
+
+```javascript
+const bytes = await editPdf(file, {
+  overlays: [
+    [{ type: 'rect', x: 40, y: 60, width: 200, height: 18, fill: '#ffe08a', opacity: 0.5 }],
+    [{ type: 'text', x: 40, y: 120, text: 'Approved', size: 14, color: '#334155' }]
+  ],
+  rotate: [{ page: 0, degrees: 90 }],
+  removePages: [4],
+  pageOrder: [2, 0, 1]
+});
+```
+
+`overlays` 以下标（0 起）对应页序，同页内按数组顺序叠放；`removePages` 与 `pageOrder` 都作用
+于最终页集合（先删后重排）。页面管理在叠加绘制之前完成，因此叠加坐标始终对应调整后的页面。
+中文需通过 `spec.fonts` 内嵌中文字体，约束与 `jsonToPdf` 相同。
+
+这是**扁平化叠加**而非批注：内容被画进页面内容流，之后无法再单独移除——与「盖章后导出」的
+常见预期一致。
+
 ### PPTX
 
 | 函数 | 返回 |

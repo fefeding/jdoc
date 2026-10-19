@@ -208,7 +208,12 @@ function paragraphStyle(block: DocxBlock): string {
     }
     if (para.spacingBefore) styles.push(`margin-top:${para.spacingBefore}pt`);
     if (para.spacingAfter) styles.push(`margin-bottom:${para.spacingAfter}pt`);
-    if (para.lineSpacing && para.lineSpacing !== 1) styles.push(`line-height:${para.lineSpacing}`);
+    // Word 的 w:lineRule="auto" 里，w:line 是「单倍行距」的倍数，而单倍行距由字体
+    // 行高决定（约 1.2 × 字号），并非字号本身。CSS 的无单位 line-height 却是相对
+    // font-size 的，直接照搬会让行距偏小约 20%（中文文档尤明显）。
+    if (para.lineSpacing && para.lineSpacing !== 1) {
+        styles.push(`line-height:${Math.round(para.lineSpacing * 1.2 * 10000) / 10000}`);
+    }
     return styles.length ? ` style="${escapeHtml(styles.join(';'))}"` : '';
 }
 
@@ -349,6 +354,13 @@ export function docxToHtmlString(
         pageClose = '</div></div>';
     }
 
-    const style = options.includeStyle === false ? '' : `<style>${DOCX_HTML_STYLE}</style>`;
+    // 中文 Word/WPS 几乎都会开「行网格」（w:docGrid w:type="lines"），未显式设行距的
+    // 段落其单倍行距就是 linePitch。不还原它会用 CSS 的 1.6 倍，行距偏小、每页塞进
+    // 更多内容，分页落点整体比 Word/WPS 前移。这里只改默认值，显式带 lineSpacing 的
+    // 段落仍由 paragraphStyle 的内联样式覆盖。
+    // 写成 CSS 规则而非 .docx-body 的内联样式：分页场景会把块搬到新建的 .docx-body
+    // 上，内联样式随之丢失，而随 HTML 返回的 <style> 会被提取后长期生效。
+    const gridCss = section?.gridLinePitch ? `.docx-body{line-height:${section.gridLinePitch}pt}` : '';
+    const style = options.includeStyle === false ? '' : `<style>${DOCX_HTML_STYLE}${gridCss}</style>`;
     return `${style}${pageOpen}${body}${pageClose}`;
 }

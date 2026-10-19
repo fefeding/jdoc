@@ -29,6 +29,7 @@ import type {
     PdfPageSize,
     PdfRun,
     PdfRunsElement,
+    PdfTableCell,
     PdfTableElement,
     PdfTextElement
 } from './types';
@@ -263,6 +264,25 @@ async function readImageBytes(
     return toUint8Array(src as string);
 }
 
+/**
+ * 自动分页的流式状态：绘制函数逐行询问剩余空间，不足即换页。
+ *
+ * 由 generatePdf 的自动分页循环创建并注入 DrawContext；显式 pages 模式无 flow，
+ * 绘制函数保持原有「一次画完、返回总高」的行为。
+ */
+interface FlowState {
+    /** 当前页（换页时被循环替换） */
+    page: ReturnType<PDFDocument['addPage']>;
+    /** 页顶边距（顶部原点的基准） */
+    marginTop: number;
+    /** 当前页内容光标（自内容区顶部起算，pt） */
+    cursorY: number;
+    /** 单页可用高度（pageHeight - 上边距 - 下边距） */
+    usableHeight: number;
+    /** 确保剩余空间足够容纳 need；不足则换页。返回是否发生了换页 */
+    ensure: (need: number) => boolean;
+}
+
 /** 绘制上下文 */
 interface DrawContext {
     doc: PDFDocument;
@@ -276,6 +296,18 @@ interface DrawContext {
     originY: number;
     defaultSize: number;
     defaultColor: RGB;
+    /** 自动分页流状态：存在时绘制函数逐行换页而非整块挪页 */
+    flow?: FlowState;
+}
+
+/** 当前绘制目标页（flow 模式下随换页更新） */
+function currentPage(ctx: DrawContext): DrawContext['page'] {
+    return ctx.flow ? ctx.flow.page : ctx.page;
+}
+
+/** 顶部原点光标（不含元素 y 偏移；flow 模式取流光标） */
+function topCursor(ctx: DrawContext, elementY = 0): number {
+    return ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : ctx.originY + elementY;
 }
 
 /** 在页面上绘制文本（含换行与对齐），返回占用高度 */
@@ -301,7 +333,13 @@ function drawTextElement(
     const width = element.width ?? ctx.contentWidth;
     const lines = wrapText(element.text ?? '', font, size, width);
 
-    let y = ctx.originY + (element.y ?? 0);
+    const startTop = topCursor(ctx, element.y ?? 0);
+    let y = startTop;
+
+    // 标题保持整块不拆页（Word 标题样式不跨页拆行）
+    if (ctx.flow && isHeading) ctx.flow.ensure(lines.length * lineHeight);
+
+    let localY = y;
     for (const line of lines) {
         let x = ctx.originX + (element.x ?? 0);
         if (element.align === 'center' || element.align === 'right') {
@@ -315,18 +353,24 @@ function drawTextElement(
             x += element.align === 'center' ? offset / 2 : Math.max(0, offset);
         }
 
-        ctx.page.drawText(line, {
+        if (ctx.flow) {
+            ctx.flow.ensure(lineHeight);
+            localY = ctx.flow.marginTop + ctx.flow.cursorY;
+        }
+
+        currentPage(ctx).drawText(line, {
             x,
             // 顶部原点 -> pdf-lib 左下原点
-            y: ctx.pageHeight - y - size,
+            y: ctx.pageHeight - localY - size,
             size,
             font,
             color: parseColor(element.color, ctx.defaultColor)
         });
-        y += lineHeight;
+        if (ctx.flow) ctx.flow.cursorY += lineHeight;
+        localY += lineHeight;
     }
 
-    return y - (ctx.originY + (element.y ?? 0));
+    return (ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : localY) - startTop;
 }
 
 /** 取某 run 对应的 pdf-lib 字体（bold / italic 组合） */
@@ -356,7 +400,11 @@ function measureRun(ctx: DrawContext, run: PdfRun, text: string, size: number): 
 function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
     const size = element.size ?? ctx.defaultSize;
     const lineHeight = (element.lineHeight ?? 1.35) * size;
-    const width = element.width ?? ctx.contentWidth;
+    const indentLeft = element.indentLeft ?? 0;
+    const indentRight = element.indentRight ?? 0;
+    const firstIndent = element.indentFirstLine ?? 0;
+    const width = element.width ?? ctx.contentWidth - indentLeft - indentRight;
+    const baseX = ctx.originX + (element.x ?? 0) + indentLeft;
 
     /** 渲染片段：一段同一样式的文本（可能是单字、一个西文词、一段空白） */
     interface Piece {
@@ -405,55 +453,77 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
         flushWord();
     }
 
-    let y = ctx.originY + (element.y ?? 0);
+    /** 一行：片段序列 + 是否首行（首行缩进收窄可用宽） */
+    interface Line {
+        pieces: Piece[];
+        first: boolean;
+    }
+    const lines: Line[] = [];
     let line: Piece[] = [];
     let lineWidth = 0;
-
-    const flushLine = () => {
-        if (!line.length) {
-            y += lineHeight;
-            return;
+    let lineFirst = true;
+    const pushLine = () => {
+        lines.push({ pieces: line, first: lineFirst });
+        line = [];
+        lineWidth = 0;
+        lineFirst = false;
+    };
+    for (const piece of pieces) {
+        if (piece.text === '\n') {
+            pushLine();
+            continue;
         }
-        const lineTextWidth = line.reduce((sum, p) => sum + measureRun(ctx, p.run, p.text, p.run.size ?? size), 0);
-        let x = ctx.originX + (element.x ?? 0);
+        const lineAvail = width - (lineFirst ? firstIndent : 0);
+        const w = measureRun(ctx, piece.run, piece.text, piece.run.size ?? size);
+        if (lineWidth + w > lineAvail && line.length) {
+            pushLine();
+        }
+        line.push(piece);
+        lineWidth += w;
+    }
+    pushLine();
+
+    const drawLine = (l: Line, localY: number) => {
+        const lineTextWidth = l.pieces.reduce((sum, p) => sum + measureRun(ctx, p.run, p.text, p.run.size ?? size), 0);
+        let x = baseX + (l.first ? firstIndent : 0);
         if (element.align === 'center' || element.align === 'right') {
             const offset = width - lineTextWidth;
             x += element.align === 'center' ? offset / 2 : Math.max(0, offset);
         }
-        for (const p of line) {
+        for (const p of l.pieces) {
             const rs = p.run.size ?? size;
             const w = measureRun(ctx, p.run, p.text, rs);
             const color = p.run.color ? parseColor(p.run.color, ctx.defaultColor) : ctx.defaultColor;
             if (p.run.code || p.run.link) {
                 const bg = p.run.code ? parseColor('#F2F2F2') : undefined;
                 if (bg) {
-                    ctx.page.drawRectangle({
+                    currentPage(ctx).drawRectangle({
                         x: x - 1,
-                        y: ctx.pageHeight - y - rs,
+                        y: ctx.pageHeight - localY - rs,
                         width: w + 2,
                         height: rs + 2,
                         color: bg
                     });
                 }
-                ctx.page.drawText(p.text, {
+                currentPage(ctx).drawText(p.text, {
                     x,
-                    y: ctx.pageHeight - y - rs,
+                    y: ctx.pageHeight - localY - rs,
                     size: rs,
                     font: fontForRun(ctx, p.run, rs),
                     color: p.run.link ? parseColor('#1565C0', ctx.defaultColor) : color
                 });
                 if (p.run.link) {
-                    ctx.page.drawLine({
-                        start: { x, y: ctx.pageHeight - y - 2 },
-                        end: { x: x + w, y: ctx.pageHeight - y - 2 },
+                    currentPage(ctx).drawLine({
+                        start: { x, y: ctx.pageHeight - localY - 2 },
+                        end: { x: x + w, y: ctx.pageHeight - localY - 2 },
                         thickness: 0.5,
                         color: parseColor('#1565C0', ctx.defaultColor)
                     });
                 }
             } else {
-                ctx.page.drawText(p.text, {
+                currentPage(ctx).drawText(p.text, {
                     x,
-                    y: ctx.pageHeight - y - rs,
+                    y: ctx.pageHeight - localY - rs,
                     size: rs,
                     font: fontForRun(ctx, p.run, rs),
                     color
@@ -461,32 +531,40 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
             }
             x += w;
         }
-        y += lineHeight;
-        line = [];
-        lineWidth = 0;
     };
 
-    for (const piece of pieces) {
-        if (piece.text === '\n') {
-            flushLine();
-            continue;
-        }
-        const w = measureRun(ctx, piece.run, piece.text, piece.run.size ?? size);
-        if (lineWidth + w > width && line.length) {
-            flushLine();
-        }
-        line.push(piece);
-        lineWidth += w;
-    }
-    flushLine();
+    const startTop = topCursor(ctx, element.y ?? 0);
+    let localY = startTop;
 
-    return y - (ctx.originY + (element.y ?? 0)) + (element.spacingAfter ?? 4);
+    for (let i = 0; i < lines.length; i++) {
+        const l = lines[i];
+        if (ctx.flow) {
+            // widow/orphan：首行不独留页尾（orphan）、末行不独留页首（widow）
+            if (i === 0 && lines.length > 1) ctx.flow.ensure(Math.min(2, lines.length) * lineHeight);
+            if (i === lines.length - 2 && lines.length > 2) ctx.flow.ensure(2 * lineHeight);
+            ctx.flow.ensure(lineHeight);
+            localY = ctx.flow.marginTop + ctx.flow.cursorY;
+        }
+        drawLine(l, localY);
+        if (ctx.flow) ctx.flow.cursorY += lineHeight;
+        localY += lineHeight;
+    }
+
+    const used = (ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : localY) - startTop;
+    // 段后间距在 flow 模式下由自动分页循环统一进给，不占元素内容高
+    return used + (ctx.flow ? 0 : (element.spacingAfter ?? 4));
 }
 
-/** 绘制表格，返回占用高度 */
+/**
+ * 绘制表格，返回占用高度
+ *
+ * 单元格文本按列宽换行、行高按内容自适应；flow 模式下按行跨页，
+ * 跨页后重复表头行（与 Word「标题行重复」行为一致）。
+ */
 function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
     const fontSize = element.fontSize ?? 10;
     const padding = element.padding ?? 4;
+    const lineH = fontSize * 1.35;
     const hasHeader = element.header !== false && element.rows.length > 0;
     const columnCount = element.rows.reduce((max, row) => Math.max(max, row.length), 0);
     if (!columnCount) return 0;
@@ -498,16 +576,21 @@ function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
     const borderColor = element.borderColor === 'none' ? undefined : parseColor(element.borderColor || '#CCCCCC');
     const headerFill = element.headerFill ? parseColor(element.headerFill) : undefined;
 
-    let y = ctx.originY + (element.y ?? 0);
+    const startTop = topCursor(ctx, element.y ?? 0);
     const startX = ctx.originX + (element.x ?? 0);
 
-    element.rows.forEach((row, rowIndex) => {
-        const isHeader = hasHeader && rowIndex === 0;
-        // 行高：优先用指定值，否则按最大字号内容估算
-        const rowHeight = element.rowHeight ?? fontSize * 1.9;
-
+    /**
+     * 画一行表格。
+     * @param y 该行顶部光标（顶部原点）
+     * @param rowHeight 行高
+     * @param row 单元格数据
+     * @param isHeader 是否表头（加粗 + 底纹）
+     * @param rowLines 每个单元格已换行的文本
+     */
+    const drawRow = (y: number, rowHeight: number, row: PdfTableCell[], isHeader: boolean, rowLines: string[][]) => {
+        const page = currentPage(ctx);
         if (isHeader && headerFill) {
-            ctx.page.drawRectangle({
+            page.drawRectangle({
                 x: startX,
                 y: ctx.pageHeight - y - rowHeight,
                 width: widths.reduce((sum, w) => sum + w, 0),
@@ -521,7 +604,7 @@ function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
             const cellWidth = widths[colIndex] ?? widths[widths.length - 1] ?? ctx.contentWidth / columnCount;
 
             if (borderColor) {
-                ctx.page.drawRectangle({
+                page.drawRectangle({
                     x,
                     y: ctx.pageHeight - y - rowHeight,
                     width: cellWidth,
@@ -532,31 +615,71 @@ function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
                 });
             }
 
-            const text = typeof cell === 'string' ? cell : cellToPlainText(cell);
-            if (text) {
-                const font = isHeader ? ctx.fonts.bold : ctx.fonts.normal;
+            const font = isHeader ? ctx.fonts.bold : ctx.fonts.normal;
+            const lines = rowLines[colIndex] ?? [];
+            // 多行文本在单元格内垂直居中
+            const textBlock = lines.length * lineH;
+            const offsetY = y + (rowHeight - textBlock) / 2;
+            lines.forEach((text, li) => {
                 let textWidth: number;
                 try {
                     textWidth = font.widthOfTextAtSize(text, fontSize);
                 } catch {
                     textWidth = text.length * fontSize * 0.5;
                 }
-                ctx.page.drawText(text, {
-                    x: x + Math.max(padding, (cellWidth - textWidth) / 2),
-                    y: ctx.pageHeight - y - rowHeight / 2 - fontSize * 0.35,
+                const drawX = x + Math.max(padding, (cellWidth - textWidth) / 2);
+                page.drawText(text, {
+                    x: drawX,
+                    y: ctx.pageHeight - offsetY - li * lineH - fontSize - (lineH - fontSize) / 2,
                     size: fontSize,
                     font,
                     color: ctx.defaultColor
                 });
-            }
+            });
 
             x += cellWidth;
         });
+    };
 
-        y += rowHeight;
+    /** 预排版一行：每单元格按各自列宽换行，并求该行高 */
+    const layoutRow = (row: PdfTableCell[], isHeader: boolean): { rowHeight: number; rowLines: string[][] } => {
+        const font = isHeader ? ctx.fonts.bold : ctx.fonts.normal;
+        const rowLines = row.map((cell, colIndex) => {
+            const cellWidth = widths[colIndex] ?? widths[widths.length - 1] ?? ctx.contentWidth / columnCount;
+            const text = typeof cell === 'string' ? cell : cellToPlainText(cell);
+            return wrapText(text ?? '', font, fontSize, Math.max(8, cellWidth - padding * 2));
+        });
+        const maxLines = rowLines.reduce((m, ls) => Math.max(m, ls.length), 0);
+        const rowHeight = element.rowHeight ?? maxLines * lineH + padding * 2;
+        return { rowHeight, rowLines };
+    };
+
+    let localY = startTop;
+
+    element.rows.forEach((row, rowIndex) => {
+        const isHeader = hasHeader && rowIndex === 0;
+        const { rowHeight, rowLines } = layoutRow(row, isHeader);
+
+        if (ctx.flow) {
+            // 表头与首条数据行保持同页（避免表头孤悬页尾）
+            const bind = isHeader && element.rows.length > 1 ? rowHeight + (layoutRow(element.rows[1], false).rowHeight) : rowHeight;
+            const moved = ctx.flow.ensure(bind);
+            if (moved && hasHeader && rowIndex > 0) {
+                // 跨页：重复表头行
+                const head = layoutRow(element.rows[0], true);
+                drawRow(ctx.flow.marginTop + ctx.flow.cursorY, head.rowHeight, element.rows[0], true, head.rowLines);
+                ctx.flow.cursorY += head.rowHeight;
+            }
+            localY = ctx.flow.marginTop + ctx.flow.cursorY;
+        }
+
+        drawRow(localY, rowHeight, row, isHeader, rowLines);
+
+        if (ctx.flow) ctx.flow.cursorY += rowHeight;
+        localY += rowHeight;
     });
 
-    return y - (ctx.originY + (element.y ?? 0));
+    return (ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : localY) - startTop;
 }
 
 /** 表格单元格 -> 纯文本（嵌套元素取其文本拼接） */
@@ -568,6 +691,19 @@ function cellToPlainText(cell: PdfElement[]): string {
         })
         .join(' ')
         .trim();
+}
+
+/** 元素段前间距（pt，自动分页时由循环层进给） */
+function spacingBeforeOf(element: PdfElement): number {
+    const el = element as { spacingBefore?: number };
+    return el.spacingBefore ?? 0;
+}
+
+/** 元素段后间距（pt；runs 元素默认 4 与原行为一致） */
+function spacingAfterOf(element: PdfElement): number {
+    if (element.type === 'runs') return element.spacingAfter ?? 4;
+    const el = element as { spacingAfter?: number };
+    return el.spacingAfter ?? 0;
 }
 
 /** 绘制单个元素，返回占用高度 */
@@ -586,6 +722,24 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
                 dashArray: element.dash
             });
             return element.lineWidth ?? 1;
+        }
+
+        case 'hr': {
+            // 流式分隔线：在当前内容位置画一条横贯内容区的细线
+            const thickness = element.lineWidth ?? 0.5;
+            const before = element.spacingBefore ?? 4;
+            const after = element.spacingAfter ?? 4;
+            const total = before + thickness + after;
+            if (ctx.flow) ctx.flow.ensure(total);
+            const y = ctx.pageHeight - topCursor(ctx) - before;
+            currentPage(ctx).drawLine({
+                start: { x: ctx.originX, y },
+                end: { x: ctx.originX + ctx.contentWidth, y },
+                thickness,
+                color: parseColor(element.color, rgb(0.6, 0.6, 0.6))
+            });
+            if (ctx.flow) ctx.flow.cursorY += total;
+            return total;
         }
 
         case 'rect': {
@@ -635,12 +789,14 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
                 const image: PDFImage = kind === 'png' ? await ctx.doc.embedPng(bytes) : await ctx.doc.embedJpg(bytes);
                 const width = element.width ?? image.width;
                 const height = element.height ?? image.height;
-                ctx.page.drawImage(image, {
+                if (ctx.flow) ctx.flow.ensure(height);
+                currentPage(ctx).drawImage(image, {
                     x: ctx.originX + (element.x ?? 0),
-                    y: ctx.pageHeight - (ctx.originY + (element.y ?? 0)) - height,
+                    y: ctx.pageHeight - topCursor(ctx, element.y ?? 0) - height,
                     width,
                     height
                 });
+                if (ctx.flow) ctx.flow.cursorY += height;
                 return height;
             } catch {
                 return 0;
@@ -755,10 +911,10 @@ export async function generatePdf(
                 await renderPage(pageSpec.elements || spec.elements || [], pageSpec);
             }
         } else {
-            // 自动分页：内容超出可用高度时另起一页
+            // 自动分页：行级流式排版，内容逐行溢出即另起一页
             const elements = spec.elements || [];
-            const [pageWidth, pageHeight] = resolvePageSize(undefined, false);
-            const margin = resolveMargin(undefined);
+            const [pageWidth, pageHeight] = resolvePageSize(spec.pageSize, false);
+            const margin = resolveMargin(spec.margin);
             const usableHeight = pageHeight - margin.top - margin.bottom;
 
             let page = doc.addPage([pageWidth, pageHeight]);
@@ -774,25 +930,44 @@ export async function generatePdf(
                 defaultSize,
                 defaultColor
             };
-            let cursorY = 0;
 
+            const newPage = () => {
+                page = doc.addPage([pageWidth, pageHeight]);
+                ctx = { ...ctx, page };
+                flow.page = page;
+                flow.cursorY = 0;
+            };
+            const flow: FlowState = {
+                page,
+                marginTop: margin.top,
+                cursorY: 0,
+                usableHeight,
+                ensure(need: number) {
+                    // 页首不换页（元素高于整页时避免死循环）
+                    if (this.cursorY + need <= this.usableHeight || this.cursorY === 0) return false;
+                    newPage();
+                    return true;
+                }
+            };
+
+            // 段间距：Word 规则为「前段 spacingAfter + 本段 spacingBefore」相加
+            let prevAfter = 0;
             for (const element of elements) {
                 if (element.type === 'pageBreak') {
-                    page = doc.addPage([pageWidth, pageHeight]);
-                    ctx = { ...ctx, page, originY: margin.top };
-                    cursorY = 0;
+                    newPage();
+                    prevAfter = 0;
                     continue;
                 }
 
-                const used = await drawElement({ ...ctx, originY: margin.top + cursorY }, element);
-                if (cursorY + used > usableHeight && cursorY > 0) {
-                    // 放不下就换页重绘一次（只重试一次，避免元素本身高于整页时死循环）
-                    page = doc.addPage([pageWidth, pageHeight]);
-                    ctx = { ...ctx, page, originY: margin.top };
-                    cursorY = await drawElement({ ...ctx, originY: margin.top }, element);
-                } else {
-                    cursorY += used;
+                const before = spacingBeforeOf(element);
+                const after = spacingAfterOf(element);
+                const gap = prevAfter + before;
+                if (gap > 0) {
+                    flow.cursorY += Math.min(gap, Math.max(0, usableHeight - flow.cursorY));
                 }
+
+                await drawElement({ ...ctx, flow }, element);
+                prevAfter = after;
             }
         }
 

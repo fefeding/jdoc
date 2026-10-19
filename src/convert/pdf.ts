@@ -45,7 +45,6 @@ interface Line {
     size: number;
     items: PdfTextItem[];
     text: string;
-    bold: boolean;
 }
 
 /** 行首列表符号/编号 */
@@ -83,12 +82,14 @@ export async function pdfToBlocks(
         for (const group of lineGroups) {
             const lines = groupLines(group, bodySize);
             if (quality === 'layout' && page.vectors?.length) {
-                extractTables(lines, page.vectors, bodySize, pageBlocks);
+                extractTables(lines, page.vectors, pageBlocks);
             }
             pageBlocks.push(...linesToBlocks(lines, bodySize));
         }
         allBlocks.push(...pageBlocks);
-        if (options.pageBreaks && page.index < (document.pageCount || 0)) {
+        // 非末页才补分页符，避免文档结尾多一个空页标记
+        // 注意 parse.ts 的 page.index 是 1-based（1..pageCount）
+        if (options.pageBreaks && page.index < (document.pageCount || 1)) {
             allBlocks.push({ type: 'pageBreak' });
         }
     }
@@ -108,11 +109,10 @@ function groupLines(items: PdfTextItem[], bodySize: number): Line[] {
     for (const item of sorted) {
         let line = lines.find((l) => Math.abs(l.y - item.y) <= tol && Math.abs(l.y - item.y) <= Math.max(tol, l.size * 0.6));
         if (!line) {
-            line = { y: item.y, x: item.x, size: item.fontSize, items: [], text: '', bold: false };
+            line = { y: item.y, x: item.x, size: item.fontSize, items: [], text: '' };
             lines.push(line);
         }
         line.items.push(item);
-        if (/bold/i.test(item.fontName || '')) line.bold = true;
         line.size = Math.max(line.size, item.fontSize);
     }
     // 行内按 x 排序并拼出文本（依据 x 间隔判断是否需要空格）
@@ -219,7 +219,7 @@ function linesToBlocks(lines: Line[], bodySize: number): DocxBlock[] {
 }
 
 /** 用矢量线还原表格，把表格区域内的文本行转成表格块 */
-function extractTables(lines: Line[], vectors: PdfVector[], _bodySize: number, out: DocxBlock[]): void {
+function extractTables(lines: Line[], vectors: PdfVector[], out: DocxBlock[]): void {
     const hLines = vectors.filter((v) => v.horizontal && Math.abs(v.x2 - v.x1) > 10);
     const vLines = vectors.filter((v) => v.vertical && Math.abs(v.y2 - v.y1) > 10);
     if (hLines.length < 2 || vLines.length < 2) return;
@@ -243,6 +243,8 @@ function extractTables(lines: Line[], vectors: PdfVector[], _bodySize: number, o
     if (!inside.length) return;
 
     // 每个行 -> 行带；每个 item -> 列带
+    // 注意坐标系：PDF 的 y 向上为正，hY 升序数组里 hY[0] 是最靠下的横线，
+    // 因此 rows[0] 对应页面最底部的行带，构建完后反转才是从上到下的阅读顺序
     const rows: string[][] = hY.slice(0, -1).map(() => vX.slice(0, -1).map(() => ''));
     for (const line of inside) {
         const r = hY.findIndex((y) => y > line.y) - 1;
@@ -255,7 +257,10 @@ function extractTables(lines: Line[], vectors: PdfVector[], _bodySize: number, o
         }
     }
     if (rows.length && rows[0].length) {
-        out.push({ type: 'table', header: true, rows: rows as never });
+        rows.reverse();
+        // 纯空白字符的单元格归一为空串（pdfjs 可能拆出独立空格 item）
+        const cleaned = rows.map((row) => row.map((cell) => cell.trim()));
+        out.push({ type: 'table', header: true, rows: cleaned });
     }
     // 从行集合中移除已归入表格的文本，避免重复
     for (const line of inside) {

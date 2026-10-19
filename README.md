@@ -114,6 +114,32 @@ Styles: `font` (`bold` / `color` / `size` / `name`), `fill`, `align`, `valign`, 
 Element types: `text`, `heading`, `image`, `line`, `rect`, `table`, `pageBreak`.
 Coordinates use a **top-left origin** (same mental model as HTML): give offsets from the left and top margins.
 
+#### Editing an existing PDF
+
+`editPdf(input, spec)` appends content to an existing PDF and saves it — the original object
+structure, content streams, vector art and embedded fonts are kept as-is; only drawing
+operators are appended. Also `mergePdfs(inputs)` and `splitPdf(input, { from, to })`.
+
+```javascript
+const bytes = await editPdf(file, {
+  overlays: [
+    [{ type: 'rect', x: 40, y: 60, width: 200, height: 18, fill: '#ffe08a', opacity: 0.5 }],
+    [{ type: 'text', x: 40, y: 120, text: 'Approved', size: 14, color: '#334155' }]
+  ],
+  rotate: [{ page: 0, degrees: 90 }],
+  removePages: [4],
+  pageOrder: [2, 0, 1]
+});
+```
+
+`overlays` is indexed by page (0-based) and objects are stacked in array order; `removePages`
+and `pageOrder` both act on the final page set (delete first, then reorder). Page management
+runs before overlays are drawn, so overlay coordinates always refer to the resulting pages.
+Chinese text needs a CJK font via `spec.fonts` — same constraint as `jsonToPdf`.
+
+This is *flattening*, not annotation: overlays are drawn into the page content and cannot be
+removed later, which matches the usual "stamp, then export" expectation.
+
 ### PPTX
 
 `pptxToHtml`, `pptxToJson`, `pptxToStandard`, `pptxToFiles`, `jsonToPptx`, `PPTXComposer`, `editPptx`

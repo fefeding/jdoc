@@ -14,7 +14,7 @@ import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
 import { createXlsxEditor, type XlsxEditor } from './xlsx';
 import { b64ToBytes, bytesToB64, h, escapeHtml } from './util';
-import { createOutline, buildOutline, trackActiveHeading, type OutlineView } from './outline';
+import { createOutline, buildOutline, trackActiveHeading, type OutlineView, type ActiveHeadingTracker } from './outline';
 import { paginate, waitImages, type PageMetrics } from './paging';
 import type { DocFormat, EditorMode, HostToWebview, WebviewToHost } from '../../protocol';
 
@@ -39,8 +39,8 @@ let zoomBoundTo: HTMLElement | null = null;
 
 /** 左侧目录栏（XLSX 无大纲，整条隐藏） */
 let outline: OutlineView | null = null;
-/** 滚动联动解绑函数 */
-let untrack: (() => void) | null = null;
+/** 滚动联动句柄（refresh 用于缩放后重算高亮） */
+let untrack: ActiveHeadingTracker | null = null;
 /** 查看模式渲染代数：丢弃过期的异步分页结果 */
 let viewGen = 0;
 
@@ -84,12 +84,20 @@ function buildShell(): void {
     app.append(toolbarEl, h('div', { class: 'oe-body' }, [outline.el, contentEl]), h('div', { class: 'oe-statusbar' }, [statusEl, createZoomCluster(zoom)]));
     root.append(app);
 
-    // 编辑器在增删行列 / 切工作表 / undo 时会整体重建内容根，需重新绑定缩放目标
-    new MutationObserver(() => bindZoom()).observe(contentEl, { childList: true });
+    // 缩放会改变内容高度与各标题的视口位置，但缩放本身不触发 scroll 事件，
+    // 必须主动重算一次，否则侧栏高亮会停在上一个标题上。
+    zoom.setOnChange(() => untrack?.refresh());
+
+    // 编辑器在增删行列 / 切工作表 / undo 时会整体重建内容根，需重新绑定缩放目标。
+    // 必须监听 subtree：XLSX 重建的是 .oe-xl 内部的 .oe-grid，contentEl 的直接子节点
+    // 并没变，只看 childList 会漏掉，缩放就再也绑不回新网格上。
+    new MutationObserver(() => bindZoom()).observe(contentEl, { childList: true, subtree: true });
 }
 
 /** 把带缩放的文档滚动到视口内（大纲点击用） */
 function scrollToAnchor(el: HTMLElement): void {
+    // rect 与 scrollTop 同属「视觉」坐标系：CSS zoom 生效后，滚动容器的 scrollTop
+    // 也按缩放后的距离计，两者直接相加即为目标在滚动内容中的位置，不需要再除 zoom。
     const top = el.getBoundingClientRect().top - contentEl.getBoundingClientRect().top + contentEl.scrollTop;
     contentEl.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' });
     el.classList.add('oe-flash');
@@ -98,7 +106,7 @@ function scrollToAnchor(el: HTMLElement): void {
 
 /** 依据当前内容重建左侧目录并接上滚动联动 */
 function refreshOutline(): void {
-    untrack?.();
+    untrack?.dispose();
     untrack = null;
     if (!outline) return;
     if (format !== 'docx') {
@@ -137,22 +145,40 @@ function metricsOf(section: DocxSection | undefined): PageMetrics {
 /** 把缩放绑定到当前内容根（查看 / 编辑 / 内容重建后都要重新绑定） */
 function bindZoom(): void {
     const el = contentEl.firstElementChild as HTMLElement | null;
-    if (el === zoomBoundTo) return;
-    zoomBoundTo = el;
     if (!el) {
+        zoomBoundTo = null;
         zoom.bind({ target: null });
         return;
     }
     // XLSX 缩放作用在网格表上：.oe-xl 是 height:100% 的 flex 容器，缩放它会把整个
     // 面板（含工作表标签与冻结区）按倍率压缩，和滚动区对不上。只缩表格本身，
     // 滚动容器 .oe-grid-wrap 保持满高，冻结行列仍按 sticky 正常吸附。
+    let target: HTMLElement;
+    let container: HTMLElement;
+    let paper: HTMLElement;
     if (el.classList.contains('oe-xl')) {
+        // .oe-grid 每次重绘（增删行列 / 切工作表 / undo）都会被整体重建，
+        // 而 .oe-xl 这个根节点不变。若拿 .oe-xl 当「已绑定」判据，缩放会一直
+        // 挂在已被替换掉的旧 grid 上，表现为缩放对 XLSX 完全无效。
         const grid = el.querySelector<HTMLElement>('.oe-grid');
-        zoom.bind({ target: grid, container: el.querySelector<HTMLElement>('.oe-grid-wrap'), paper: grid });
-        return;
+        if (!grid) return; // 网格还没建好，等下一次内容变化再绑
+        target = grid;
+        container = el.querySelector<HTMLElement>('.oe-grid-wrap') ?? el;
+        paper = grid;
+    } else {
+        // DOCX 必须以真实纸面为基准：若退化成 el（内容根），它的宽度就是容器宽，
+        // fit 会算出「缩一点点」的无意义倍率。纸面未就绪时先不绑，等内容变化
+        // 再来一次（观察器监听 subtree，纸面插入必然触发）。
+        const page = el.querySelector<HTMLElement>('.oe-page');
+        if (!page) return;
+        target = el;
+        container = contentEl;
+        paper = page;
     }
-    const first = el.querySelector<HTMLElement>('.oe-page');
-    zoom.bind({ target: el, container: contentEl, paper: first ?? el });
+    // 只有「同一个、且仍在文档里的」target 才算已绑定：旧 target 被替换后必须重绑
+    if (zoomBoundTo === target && target.isConnected) return;
+    zoomBoundTo = target;
+    zoom.bind({ target, container, paper });
 }
 
 // ---------- 模式 ----------
