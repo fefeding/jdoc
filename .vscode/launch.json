@@ -1,0 +1,60 @@
+{
+  // 在仓库根目录（jdoc）按 F5 直接拉起子目录 vscode/ 里的插件（jdoc-viewer）进行调试。
+  // 前置任务负责：先构建根目录的 @fefeding/jdoc（webview 依赖 dist/jdoc.browser.js），
+  // 再用 esbuild 构建 vscode/dist（扩展宿主 + 三个 webview 产物）。
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension (build)",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/vscode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/vscode/dist/extension.js"
+      ],
+      "preLaunchTask": "jdoc-vscode: build",
+      "presentation": {
+        "group": "jdoc",
+        "order": 1
+      }
+    },
+    {
+      "name": "Run Extension (watch)",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/vscode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/vscode/dist/extension.js"
+      ],
+      "preLaunchTask": "jdoc-vscode: watch",
+      "presentation": {
+        "group": "jdoc",
+        "order": 2
+      }
+    },
+    {
+      "name": "Run Extension (sample docx)",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/vscode",
+        "${workspaceFolder}/examples/过载保护优化方案.docx"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/vscode/dist/extension.js"
+      ],
+      "preLaunchTask": "jdoc-vscode: build",
+      "presentation": {
+        "group": "jdoc",
+        "order": 3
+      }
+    }
+  ]
+}

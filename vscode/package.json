@@ -65,6 +65,12 @@
         "title": "切换文档",
         "category": "jdoc",
         "icon": "$(files)"
+      },
+      {
+        "command": "jdoc.convert",
+        "title": "转换格式为…",
+        "category": "jdoc",
+        "icon": "$(arrow-swap)"
       }
     ],
     "menus": {
@@ -93,12 +99,22 @@
           "command": "jdoc.exportCopy",
           "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
           "group": "navigation"
+        },
+        {
+          "command": "jdoc.convert",
+          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "group": "navigation@3"
         }
       ],
       "explorer/context": [
         {
           "command": "jdoc.preview",
           "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "group": "navigation"
+        },
+        {
+          "command": "jdoc.convert",
+          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
           "group": "navigation"
         }
       ],

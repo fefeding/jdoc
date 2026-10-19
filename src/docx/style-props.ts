@@ -240,3 +240,16 @@ export function quoteStyleOf(styleName: string | undefined): boolean {
     const name = styleName.toLowerCase().trim();
     return name === 'quote' || name === 'intense quote' || name === 'blockquote' || name === '引用';
 }
+
+/**
+ * 样式名 -> 目录条目层级；undefined 表示不是目录条目样式
+ *
+ * Word/WPS 的目录条目使用 `toc 1` / `toc 2` / `toc 3` 段落样式（中文版可能叫
+ * `目录 1`）。据此可把一串缓存段落折叠成单个 toc 块，还原带点线导引的目录。
+ */
+export function tocLevelOf(styleName: string | undefined): number | undefined {
+    if (!styleName) return undefined;
+    const match = /^toc\s*([1-9])$/.exec(styleName.toLowerCase().trim()) || /^目录\s*([1-9])$/.exec(styleName.trim());
+    if (!match) return undefined;
+    return Number(match[1]);
+}

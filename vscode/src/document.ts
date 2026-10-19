@@ -71,12 +71,18 @@ export class JdocDocument implements vscode.CustomDocument {
         this._onDidChange.fire({ contentChanged: dirty });
     }
 
-    /** 给 webview 的载荷：原始字节 + 最新字节（均为 base64）。 */
-    snapshot(): { format: DocFormat; mode: EditorMode; originalBytes: string; bytes: string } {
+    /**
+     * 给 webview 的载荷：最新字节（base64）。
+     *
+     * 只编码一份：未编辑时 `_current` 与 `_original` 是同一个数组，而 base64 编码与字符串
+     * 分配都随文件体积线性增长（100MB 文档 → 134MB 字符串、约 0.4s），多编一份纯属浪费。
+     * `originalBytes` 也一并去掉——sendInit 从未发送过它，pptx 端一直是靠
+     * `msg.originalBytes ?? msg.bytes` 的回退在用 bytes。
+     */
+    snapshot(): { format: DocFormat; mode: EditorMode; bytes: string } {
         return {
             format: this.format,
             mode: this._mode,
-            originalBytes: Buffer.from(this._original).toString('base64'),
             bytes: Buffer.from(this._current).toString('base64')
         };
     }

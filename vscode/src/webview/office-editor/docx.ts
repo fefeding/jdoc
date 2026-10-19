@@ -20,6 +20,7 @@ import type {
 } from '@fefeding/jdoc';
 import { EditorBase, type EditorHooks } from './framework';
 import { h, escapeHtml } from './util';
+import { paginate, waitImages, A4_PORTRAIT, type PageMetrics } from './paging';
 import { icon } from './icons';
 
 type TextBlock = DocxParagraph | { type: 'heading'; level: number; text?: string; runs?: DocxRun[] } | { type: 'quote'; text?: string; runs?: DocxRun[] } | { type: 'code'; text: string };
@@ -82,6 +83,8 @@ function readEditable(el: HTMLElement): { text: string; runs?: DocxRun[] } {
                 push(child.nodeValue || '', fmt);
             } else if (child.nodeType === Node.ELEMENT_NODE) {
                 const e = child as HTMLElement;
+                // 只读装饰（如标题章节号）不产出 run，否则会被当成正文存回模型
+                if (e.getAttribute('contenteditable') === 'false') return;
                 const tag = e.tagName.toLowerCase();
                 if (tag === 'br') {
                     push('\n', fmt);
@@ -116,7 +119,7 @@ function readEditable(el: HTMLElement): { text: string; runs?: DocxRun[] } {
         });
     };
     walk(el, {});
-    const text = (el as HTMLElement).innerText || '';
+    const text = plainTextOf(el);
     return hasFormat && runs.length ? { text, runs } : { text };
 }
 
@@ -163,9 +166,32 @@ function alignStyle(align?: string): string {
     return `text-align:${align};`;
 }
 
+/** DocxSection -> 纸张设置；缺省 A4 纵向 1 英寸页边距 */
+function metricsOf(section: DocxSection | undefined): PageMetrics {
+    if (!section || !(section.width > 0) || !(section.height > 0)) return { ...A4_PORTRAIT };
+    return {
+        width: section.width,
+        height: section.height,
+        marginTop: section.marginTop,
+        marginBottom: section.marginBottom,
+        marginLeft: section.marginLeft,
+        marginRight: section.marginRight
+    };
+}
+
+/** 标题章节号 span 的类名（解析自 numbering，只展示不进模型） */
+const H_NUM_CLASS = 'oe-h-num';
+
+/** 去掉只读装饰（章节号）后的纯文本：contenteditable 的 innerText 含装饰节点 */
+function plainTextOf(el: HTMLElement): string {
+    const clone = el.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('[contenteditable="false"]').forEach((node) => node.remove());
+    return clone.innerText || '';
+}
+
 export class DocxEditor extends EditorBase {
     private model: DocxModel = { blocks: [] };
-    private sheetEl: HTMLElement | null = null;
+    private docEl: HTMLElement | null = null;
     private current = -1; // 选中块索引
     private past: DocxBlock[][] = [];
     private future: DocxBlock[][] = [];
@@ -174,6 +200,8 @@ export class DocxEditor extends EditorBase {
     private fmtBtns: Record<string, HTMLButtonElement> = {};
     private savedRange: Range | null = null;
     private selHandler: (() => void) | null = null;
+    /** 重渲染代数：丢弃过期的图片重排结果，防异步竞态 */
+    private renderGen = 0;
 
     async load(bytes: Uint8Array): Promise<void> {
         const parsed = await docxToJson(bytes, { assets: 'inline' });
@@ -204,7 +232,7 @@ export class DocxEditor extends EditorBase {
     }
 
     destroy(): void {
-        this.sheetEl = null;
+        this.docEl = null;
         if (this.selHandler) document.removeEventListener('selectionchange', this.selHandler);
         this.selHandler = null;
     }
@@ -277,19 +305,54 @@ export class DocxEditor extends EditorBase {
         if (!content) return;
         content.innerHTML = '';
         const doc = h('div', { class: 'oe-doc' });
-        const sheet = h('div', { class: 'sheet' });
-        this.sheetEl = sheet;
+        this.docEl = doc;
+        // 先把全部块渲染成游离节点，再按纸张高度装箱成多页（与查看模式观感一致）
+        const nodes: HTMLElement[] = [];
         this.model.blocks.forEach((block, i) => {
-            sheet.append(this.renderBlock(block, i));
-            sheet.append(this.renderInsertBar(i));
+            nodes.push(this.renderBlock(block, i));
+            nodes.push(this.renderInsertBar(i));
         });
         if (!this.model.blocks.length) {
-            sheet.append(h('div', { class: 'oe-hint', text: '空文档。用工具栏插入内容，或点击下方 + 号。' }));
-            sheet.append(this.renderInsertBar(-1));
+            nodes.push(h('div', { class: 'oe-hint', text: '空文档。用工具栏插入内容，或点击下方 + 号。' }));
+            nodes.push(this.renderInsertBar(-1));
         }
-        doc.append(sheet);
+        doc.appendChild(this.buildPages(nodes));
         content.append(doc);
         this.updateUndoRedo();
+        // 分页已就绪，先刷新大纲；图片解码完成后再重排一次（重排内部会再通知）
+        this.notifyContentChanged();
+        void this.repaginate();
+    }
+
+    /** 按纸张设置把游离节点装箱成多页 */
+    private buildPages(nodes: HTMLElement[]): HTMLElement {
+        return paginate(nodes, {
+            metrics: metricsOf(this.model.section),
+            pageClass: 'oe-page oe-page-edit',
+            bodyClass: 'oe-page-body',
+            pageNumber: true,
+            mount: this.contentEl
+        });
+    }
+
+    /**
+     * 图片解码完成后按最终高度重排分页
+     *
+     * 首轮分页时图片高度为 0，会把图表当成零高度块塞进当前页。必须在图片就绪后
+     * 再切一次；重排只搬动节点不改内容，所以不会打断用户正在进行的编辑。
+     */
+    private async repaginate(): Promise<void> {
+        const doc = this.docEl;
+        if (!doc || !doc.isConnected) return;
+        const my = ++this.renderGen;
+        const pages = doc.firstElementChild as HTMLElement | null;
+        if (!pages) return;
+        await waitImages(pages);
+        if (!doc.isConnected || my !== this.renderGen) return;
+        const nodes = Array.from(pages.querySelectorAll<HTMLElement>(':scope > .oe-page > .oe-page-body > *'));
+        if (!nodes.length) return;
+        doc.replaceChild(this.buildPages(nodes), pages);
+        this.notifyContentChanged();
     }
 
     private renderInsertBar(afterIdx: number): HTMLElement {
@@ -307,8 +370,12 @@ export class DocxEditor extends EditorBase {
     private renderBlock(block: DocxBlock, index: number): HTMLElement {
         const dataset: Record<string, string> = { type: block.type, idx: String(index) };
         if (block.type === 'heading') dataset.level = String((block as { level: number }).level);
+        // 显式分页符：交给分页器在此处断页（标记元素自身不渲染）
+        if (block.type === 'pageBreak') dataset.oePagebreak = '1';
         const wrap = h('div', { class: 'oe-block' + (index === this.current ? ' sel' : ''), dataset });
         wrap.addEventListener('mousedown', () => this.select(index));
+        // 分页符块本身不占版面，只留一个不可见的锚点给分页器识别
+        if (block.type === 'pageBreak') return wrap;
         const grip = h('div', { class: 'oe-grip' });
         grip.append(
             h('button', { title: '上移', html: icon('up'), onclick: (e: Event) => { e.stopPropagation(); this.moveBlock(-1); } }),
@@ -344,6 +411,8 @@ export class DocxEditor extends EditorBase {
             }
             case 'hr':
                 return h('div', {}, [h('hr')]);
+            case 'toc':
+                return this.renderToc(block as { entries?: { level?: number; text?: string; page?: number }[] });
             case 'pageBreak':
                 return h('div', { text: '— 分页符 —' });
             case 'textBox': {
@@ -358,6 +427,26 @@ export class DocxEditor extends EditorBase {
             default:
                 return h('div', { text: (block as { text?: string }).text || '' });
         }
+    }
+
+    /**
+     * 目录块 -> 只读渲染
+     *
+     * 目录条目是 TOC 域的缓存结果（含 Word 自己算的页码），没有可编辑的正文形态。
+     * 这里按层级缩进 + 点线导引 + 右对齐页码还原观感，但不进 contenteditable，
+     * 避免用户改了条目却仍以旧值往返写回。
+     */
+    private renderToc(block: { entries?: { level?: number; text?: string; page?: number }[] }): HTMLElement {
+        const box = h('div', { class: 'oe-toc' });
+        for (const entry of block.entries || []) {
+            const level = Math.min(Math.max(entry.level || 1, 1), 3);
+            const row = h('div', { class: 'oe-toc-row', dataset: { level: String(level) } });
+            row.append(h('span', { class: 'oe-toc-text', text: entry.text || '' }));
+            row.append(h('span', { class: 'oe-toc-dots' }));
+            if (entry.page !== undefined) row.append(h('span', { class: 'oe-toc-page', text: String(entry.page) }));
+            box.append(row);
+        }
+        return box;
     }
 
     private renderList(list: DocxList, index: number): HTMLElement {
@@ -458,9 +547,16 @@ export class DocxEditor extends EditorBase {
             class: 'oe-edit',
             contenteditable: 'true',
             style: alignStyle(align),
-            html: runsToInner((block as { runs?: DocxRun[] }).runs, (block as { text?: string }).text),
             dataset: { ph: kind === 'code' ? '代码…' : kind === 'heading' ? '标题' : kind === 'quote' ? '引用' : '输入正文…' }
         });
+        // 章节号是解析自 numbering 的只读装饰（contenteditable=false），
+        // 既能显示 Word/WPS 的编号，又不会被编辑进正文或存回模型
+        const number = kind === 'heading' ? (block as { number?: string }).number : undefined;
+        if (number) {
+            ed.appendChild(h('span', { class: H_NUM_CLASS, contenteditable: 'false', text: number }));
+            ed.appendChild(document.createTextNode(' '));
+        }
+        ed.insertAdjacentHTML('beforeend', runsToInner((block as { runs?: DocxRun[] }).runs, (block as { text?: string }).text));
         this.bindEditable(ed, () => {
             const r = readEditable(ed);
             if (r.runs) {
@@ -537,7 +633,7 @@ export class DocxEditor extends EditorBase {
     private select(index: number): void {
         if (this.current === index) return;
         this.current = index;
-        this.sheetEl?.querySelectorAll('.oe-block').forEach((el) => {
+        this.docEl?.querySelectorAll('.oe-block').forEach((el) => {
             el.classList.toggle('sel', Number((el as HTMLElement).dataset.idx) === index);
         });
     }
@@ -644,7 +740,7 @@ export class DocxEditor extends EditorBase {
         this.checkpoint();
         (b as DocxParagraph).align = a as DocxParagraph['align'];
         // 局部更新样式，避免重建丢失焦点
-        const el = this.sheetEl?.querySelector(`.oe-block[data-idx="${this.current}"] .oe-edit`) as HTMLElement | null;
+        const el = this.docEl?.querySelector(`.oe-block[data-idx="${this.current}"] .oe-edit`) as HTMLElement | null;
         if (el) el.style.textAlign = a === 'left' ? '' : a;
         this.markDirty();
     }
@@ -719,7 +815,7 @@ export class DocxEditor extends EditorBase {
 
     private focusBlock(index: number): void {
         window.setTimeout(() => {
-            const ed = this.sheetEl?.querySelector(`.oe-block[data-idx="${index}"] .oe-edit`) as HTMLElement | null;
+            const ed = this.docEl?.querySelector(`.oe-block[data-idx="${index}"] .oe-edit`) as HTMLElement | null;
             ed?.focus();
         }, 0);
     }

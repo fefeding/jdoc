@@ -14,6 +14,7 @@ import {
     ExternalHyperlink,
     HeadingLevel,
     ImageRun,
+    LeaderType,
     LevelFormat,
     PageBreak,
     Packer,
@@ -21,6 +22,7 @@ import {
     Table,
     TableCell,
     TableRow,
+    TabStopType,
     TextRun,
     VerticalAlign,
     WidthType,
@@ -66,6 +68,9 @@ const PAGE_SIZES: Record<string, { width: number; height: number }> = {
 
 /** 引用块段落样式 ID（样式名固定为 Quote，供解析端识别） */
 const QUOTE_STYLE_ID = 'JdocQuote';
+
+/** 目录条目段落样式 ID：id 用自定义值以免与文档已有样式冲突，name 必须是 "toc N" */
+const tocStyleId = (level: number): string => `JdocToc${level}`;
 
 /** 有序列表 numbering reference */
 const ORDERED_REF = 'jdoc-ordered';
@@ -515,6 +520,23 @@ async function buildBlockParagraphs(
         case 'pageBreak':
             return [new Paragraph({ children: [new PageBreak()] })];
 
+        case 'toc':
+            // 目录条目按「标题 + 右对齐制表位（点线导引）+ 页码」写出，并套用名为
+            // "toc N" 的段落样式：解析端靠样式名把这一串段落折叠回 toc 块，往返才闭合。
+            // docx 库把 TextRun 文本里的 \t 序列化为 <w:tab/>，正好落在右对齐制表位上。
+            return block.entries.map((entry) => {
+                const level = Math.min(Math.max(entry.level, 1), 3);
+                const text = entry.page !== undefined ? `${entry.text}\t${entry.page}` : entry.text;
+                return new Paragraph({
+                    style: tocStyleId(level),
+                    children: [new TextRun({ text } as TextRunOptionsLike)],
+                    indent: { left: (level - 1) * 320 },
+                    tabStops: entry.page !== undefined
+                        ? [{ type: TabStopType.RIGHT, position: 8300, leader: LeaderType.DOT }]
+                        : undefined
+                });
+            });
+
         case 'hr':
             return [
                 new Paragraph({
@@ -620,7 +642,7 @@ export async function generateDocx(
         : { width: rawSize.width, height: rawSize.height, orientation: 'portrait' as const };
 
     const document = new Document({
-        // 声明引用样式：解析端按样式名 Quote 还原 quote 块
+        // 声明引用样式：解析端按样式名 Quote 还原 quote 块；toc 1-3 同理还原目录块
         styles: {
             paragraphStyles: [
                 {
@@ -630,7 +652,16 @@ export async function generateDocx(
                     quickFormat: true,
                     run: { italics: true, color: '4A4A4A' },
                     paragraph: { indent: { left: 360 }, spacing: { before: 120, after: 120 } }
-                }
+                },
+                ...[1, 2, 3].map((level) => ({
+                    id: tocStyleId(level),
+                    // 样式名必须与 Word 内置的 "toc N" 一致，解析端据此识别目录条目
+                    name: `toc ${level}`,
+                    basedOn: 'Normal',
+                    quickFormat: true,
+                    run: { size: 22 },
+                    paragraph: { spacing: { before: 0, after: 0, line: 300 } }
+                }))
             ]
         },
         creator: doc.metadata?.creator || doc.metadata?.author || 'jdoc',

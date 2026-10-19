@@ -9,10 +9,10 @@
   "type": "module",
   "exports": {
     ".": {
-      "import": "./dist/jdoc.esm.js",
-      "require": "./dist/jdoc.cjs",
+      "types": "./dist/index.d.ts",
       "browser": "./dist/jdoc.browser.js",
-      "types": "./dist/index.d.ts"
+      "import": "./dist/jdoc.esm.js",
+      "require": "./dist/jdoc.cjs"
     },
     "./package.json": "./package.json"
   },
@@ -49,12 +49,14 @@
   "license": "MIT",
   "dependencies": {
     "@fefeding/ppt-parser": "1.0.28",
+    "@pdf-lib/fontkit": "^1.1.1",
     "docx": "^9.12.0",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.2",
     "katex": "^0.19.0",
     "marked": "^18.1.1",
     "mermaid": "^12.2.0",
+    "parse5": "^8.0.1",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.4.299"
   },

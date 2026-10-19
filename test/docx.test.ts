@@ -107,6 +107,64 @@ describe('docx：JSON -> DOCX -> JSON 往返', () => {
     });
 });
 
+describe('docx：目录块', () => {
+    const tocDoc: DocxDocument = {
+        blocks: [
+            { type: 'heading', level: 1, text: '季度报告' },
+            {
+                type: 'toc',
+                entries: [
+                    { level: 1, text: '季度报告', page: 1 },
+                    { level: 1, text: '收入', page: 2 },
+                    { level: 2, text: '分区域', page: 3 }
+                ]
+            }
+        ]
+    };
+
+    it('目录块往返保留条目层级与页码', async () => {
+        const { blocks } = await docxToJson(await jsonToDocx(tocDoc));
+        const toc = blocks.find((b) => b.type === 'toc') as
+            | { type: 'toc'; entries: { level: number; text: string; page?: number }[] }
+            | undefined;
+        expect(toc).toBeDefined();
+        expect(toc!.entries).toHaveLength(3);
+        expect(toc!.entries[0]).toMatchObject({ level: 1, text: '季度报告', page: 1 });
+        expect(toc!.entries[2]).toMatchObject({ level: 2, text: '分区域', page: 3 });
+    });
+
+    it('目录条目不再退化成普通段落', async () => {
+        const { blocks } = await docxToJson(await jsonToDocx(tocDoc));
+        // 3 条目录如果全被当成段落，说明 "toc N" 样式没写出去
+        expect(blocks.filter((b) => b.type === 'paragraph')).toHaveLength(0);
+    });
+
+    it('目录进入全文文本', async () => {
+        const text = await docxToText(await jsonToDocx(tocDoc));
+        expect(text).toContain('分区域');
+        expect(text).toContain('3');
+    });
+
+    it('HTML 渲染出点线导引与层级缩进', () => {
+        const html = blocksToHtml(tocDoc.blocks);
+        expect(html).toContain('docx-toc-row');
+        expect(html).toContain('data-level="2"');
+        expect(html).toContain('docx-toc-dots');
+        expect(html).toContain('docx-toc-page');
+    });
+});
+
+describe('docx：标题章节号', () => {
+    it('标题的自动编号以 number 字段暴露，可渲染到正文', () => {
+        const html = blocksToHtml([
+            { type: 'heading', level: 1, number: '1.', text: '背景' },
+            { type: 'heading', level: 2, number: '3.1.', text: '排队时间' }
+        ]);
+        expect(html).toContain('<span class="docx-h-num">1.</span>背景');
+        expect(html).toContain('<span class="docx-h-num">3.1.</span>排队时间');
+    });
+});
+
 describe('docx：HTML 输出', () => {
     it('解析时返回可直接插入的 HTML', async () => {
         const bytes = await jsonToDocx(sample);

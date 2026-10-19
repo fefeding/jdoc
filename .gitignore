@@ -4,7 +4,11 @@ dist-examples/
 coverage/
 *.log
 .DS_Store
-.vscode/
+# 共享的 VS Code 调试配置（.vscode/launch.json、tasks.json）需要入库
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
 .idea/
 test/fixtures/tmp/
 

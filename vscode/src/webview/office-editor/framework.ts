@@ -6,6 +6,8 @@ export interface EditorHooks {
     /** 编辑产出新字节；null 表示放弃编辑回到导入态（host 用原始字节并清除未保存标记）。 */
     onSync(bytes: Uint8Array | null): void;
     onToast(message: string, kind?: 'info' | 'warn' | 'error'): void;
+    /** 内容整体重建（载入 / undo / 结构操作）后触发，外壳据此刷新左侧大纲与分页。 */
+    onContentChanged?(): void;
 }
 
 /**
@@ -81,6 +83,11 @@ export abstract class EditorBase {
 
     protected toast(message: string, kind: 'info' | 'warn' | 'error' = 'info'): void {
         this.hooks.onToast(message, kind);
+    }
+
+    /** 内容整体重建后通知外壳（刷新左侧大纲 / 重新分页） */
+    protected notifyContentChanged(): void {
+        this.hooks.onContentChanged?.();
     }
 
     /** 放弃编辑回到导入态：通知 host 用原始字节并清除未保存标记（undo 回到最初态时用）。 */

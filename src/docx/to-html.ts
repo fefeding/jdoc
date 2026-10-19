@@ -24,7 +24,8 @@ import type {
     DocxImage,
     DocxListItem,
     DocxRun,
-    DocxTable
+    DocxTable,
+    DocxToc
 } from './types';
 
 /** HTML 转义 */
@@ -173,6 +174,18 @@ function tableToHtml(block: DocxTable, assets?: AssetTable): string {
     return `<table${tableStyle}>${colgroup}${body}</table>`;
 }
 
+/** 目录块 -> HTML（层级缩进 + 点线导引 + 右对齐页码） */
+function tocToHtml(block: DocxToc): string {
+    const rows = block.entries
+        .map((entry) => {
+            const level = Math.min(Math.max(entry.level, 1), 3);
+            const page = entry.page !== undefined ? `<span class="docx-toc-page">${escapeHtml(String(entry.page))}</span>` : '';
+            return `<div class="docx-toc-row" data-level="${level}"><span class="docx-toc-text">${escapeHtml(entry.text)}</span><span class="docx-toc-dots"></span>${page}</div>`;
+        })
+        .join('');
+    return `<nav class="docx-toc" aria-label="目录">${rows}</nav>`;
+}
+
 /** 段落级属性 -> inline style */
 function paragraphStyle(block: DocxBlock): string {
     const para = block as {
@@ -219,7 +232,11 @@ export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
     switch (block.type) {
         case 'heading': {
             const level = block.level >= 1 && block.level <= 6 ? block.level : 3;
-            return `<h${level}${paragraphStyle(block)}>${contentToHtml(block.text, block.runs)}</h${level}>`;
+            // 章节号由 numbering 生成、不在文本里，这里前置还原（标题与目录条目才对得上）
+            const number = block.number
+                ? `<span class="docx-h-num">${escapeHtml(block.number)}</span>`
+                : '';
+            return `<h${level}${paragraphStyle(block)}>${number}${contentToHtml(block.text, block.runs)}</h${level}>`;
         }
         case 'paragraph':
             return `<p${paragraphStyle(block)}>${contentToHtml(block.text, block.runs) || '&nbsp;'}</p>`;
@@ -272,6 +289,8 @@ export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
             return '<hr style="page-break-after:always;border:none;border-top:1px dashed #ccc"/>';
         case 'hr':
             return '<hr/>';
+        case 'toc':
+            return tocToHtml(block);
         default:
             return '';
     }
@@ -280,11 +299,13 @@ export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
 /** 默认样式表（便于开箱即用，也可忽略自带样式自行渲染） */
 export const DOCX_HTML_STYLE = `.docx-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;font-size:11pt;line-height:1.6;color:#1f2328}
 .docx-page{background:#fff;margin:24px auto;box-shadow:0 1px 6px rgba(0,0,0,.2);box-sizing:border-box}
-.docx-body h1{font-size:20pt;margin:20px 0 10px}
-.docx-body h2{font-size:17pt;margin:18px 0 9px}
-.docx-body h3{font-size:15pt;margin:16px 0 8px}
-.docx-body h4{font-size:13pt;margin:14px 0 7px}
-.docx-body h5,.docx-body h6{font-size:12pt;margin:12px 0 6px}
+.docx-body h1,.docx-body h2,.docx-body h3,.docx-body h4,.docx-body h5,.docx-body h6{font-weight:700;line-height:1.35;color:#1f2328;break-after:avoid}
+.docx-body h1{font-size:20pt;margin:22px 0 12px}
+.docx-body h2{font-size:16pt;margin:20px 0 10px}
+.docx-body h3{font-size:14pt;margin:18px 0 9px}
+.docx-body h4{font-size:12.5pt;margin:16px 0 8px}
+.docx-body h5,.docx-body h6{font-size:11.5pt;margin:14px 0 7px;font-weight:600}
+.docx-h-num{margin-right:.45em;white-space:nowrap}
 .docx-body p{margin:0}
 .docx-body blockquote{margin:8px 0;padding:4px 12px;border-left:3px solid #d0d7de;color:#57606a}
 .docx-body table{margin:10px 0;font-size:10.5pt}
@@ -292,6 +313,14 @@ export const DOCX_HTML_STYLE = `.docx-body{font-family:-apple-system,BlinkMacSys
 .docx-body img{max-width:100%}
 .docx-textbox{margin:8px 0;font-size:10pt;line-height:1.45}
 .docx-textbox p{margin:0}
+.docx-toc{margin:6px 0 14px}
+.docx-toc-row{display:flex;align-items:baseline;gap:.3em;padding:2px 0;line-height:1.5}
+.docx-toc-row[data-level="1"]{font-weight:600;margin-top:4px}
+.docx-toc-row[data-level="2"]{padding-left:1.6em}
+.docx-toc-row[data-level="3"]{padding-left:3.2em;font-size:.95em}
+.docx-toc-text{white-space:pre}
+.docx-toc-dots{flex:1 1 auto;border-bottom:1px dotted currentColor;opacity:.45;transform:translateY(-.28em);min-width:1.5em}
+.docx-toc-page{white-space:nowrap}
 `;
 
 /**

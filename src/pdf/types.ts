@@ -44,6 +44,22 @@ export interface PdfTextItem {
     hasEOL?: boolean;
 }
 
+/** 矢量线段（PDF 坐标系：原点左下、单位 pt），由 operator list 解析而来 */
+export interface PdfVector {
+    /** 线段起点 X */
+    x1: number;
+    /** 线段起点 Y */
+    y1: number;
+    /** 线段终点 X */
+    x2: number;
+    /** 线段终点 Y */
+    y2: number;
+    /** 是否为水平线（|y1-y2| 极小） */
+    horizontal: boolean;
+    /** 是否为垂直线（|x1-x2| 极小） */
+    vertical: boolean;
+}
+
 /** 页面 */
 export interface PdfPage {
     /** 页号（1 起） */
@@ -58,6 +74,8 @@ export interface PdfPage {
     text?: string;
     /** 文本片段（含坐标） */
     items?: PdfTextItem[];
+    /** 矢量线段（表格线等），仅当解析选项 `vectors: true` 时返回 */
+    vectors?: PdfVector[];
 }
 
 /** 解析结果文档 */
@@ -88,6 +106,8 @@ export interface PdfParseOptions {
     text?: boolean;
     /** 是否返回带坐标的文本片段，默认 false（体积较大） */
     items?: boolean;
+    /** 是否额外返回矢量线段（表格线/分隔线），用于版面分析与表格还原，默认 false */
+    vectors?: boolean;
     /** 只解析指定页（1 起），缺省全部 */
     pages?: number[];
     /** 最大返回页数（配合分页预览场景） */
@@ -131,6 +151,48 @@ export interface PdfTextElement {
     width?: number;
     /** 行高倍数，默认 1.35 */
     lineHeight?: number;
+}
+
+/** 富文本片段（同一行内可混排多段不同样式的文本） */
+export interface PdfRun {
+    /** 文本片段内容（不含换行） */
+    text: string;
+    /** 字号（pt），缺省跟随元素 size */
+    size?: number;
+    bold?: boolean;
+    italic?: boolean;
+    /** 颜色，#RRGGBB 或关键字 */
+    color?: string;
+    /** 等宽（行内代码）样式，渲染时加灰色底纹 */
+    code?: boolean;
+    /** 超链接地址，渲染时加下划线并着色 */
+    link?: string;
+    /** 删除线 */
+    strike?: boolean;
+}
+
+/**
+ * 富文本元素：一段由多个 run 组成的段落，支持内联样式混排。
+ *
+ * 与 `PdfTextElement` 的区别：text 只能整段单一字号/颜色，runs 可逐片段混排。
+ * 生成端会自行按宽度断行（中文按字、西文按空格），因此调用方无需预先换行。
+ */
+export interface PdfRunsElement {
+    type: 'runs';
+    runs: PdfRun[];
+    /** 距左边距（pt，默认 0） */
+    x?: number;
+    /** 距顶边距（pt，默认 0） */
+    y?: number;
+    /** 缺省字号（pt，默认跟随文档 defaultSize） */
+    size?: number;
+    align?: PdfAlign;
+    /** 文本框宽度（pt），缺省用内容区宽度 */
+    width?: number;
+    /** 行高倍数，默认 1.35 */
+    lineHeight?: number;
+    /** 段后间距（pt），默认 4 */
+    spacingAfter?: number;
 }
 
 /** 标题元素 */
@@ -222,6 +284,7 @@ export interface PdfPageBreakElement {
 export type PdfElement =
     | PdfTextElement
     | PdfHeadingElement
+    | PdfRunsElement
     | PdfImageElement
     | PdfLineElement
     | PdfRectElement

@@ -1,6 +1,26 @@
 import * as vscode from 'vscode';
 import { JdocDocument } from './document';
+import { convert, type ConvertTarget } from '@fefeding/jdoc';
 import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
+
+/** 可被转换命令识别的源格式（与扩展名对应） */
+const SUPPORTED_EXT = /\.(docx|pdf|md|markdown|html|htm|txt)$/;
+/** 各目标格式对应的展示名 / 扩展名 / 保存过滤器 */
+const TARGET_META: Record<ConvertTarget, { label: string; ext: string; filter: Record<string, string[]> }> = {
+    docx: { label: 'Word 文档 (.docx)', ext: 'docx', filter: { Word: ['docx'] } },
+    pdf: { label: 'PDF 文档 (.pdf)', ext: 'pdf', filter: { PDF: ['pdf'] } },
+    md: { label: 'Markdown (.md)', ext: 'md', filter: { Markdown: ['md', 'markdown'] } },
+    html: { label: 'HTML 网页 (.html)', ext: 'html', filter: { HTML: ['html', 'htm'] } }
+};
+/** 文件扩展名 -> 源格式（传给 convert 的 from 参数） */
+function extToFormat(path: string): ConvertTarget | 'txt' | undefined {
+    if (/\.docx$/i.test(path)) return 'docx';
+    if (/\.pdf$/i.test(path)) return 'pdf';
+    if (/\.markdown?$/i.test(path)) return 'md';
+    if (/\.html?$/i.test(path)) return 'html';
+    if (/\.txt$/i.test(path)) return 'txt';
+    return undefined;
+}
 
 const VIEW_TYPE = 'jdoc.documentEditor';
 
@@ -254,6 +274,59 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         if (this._activeDoc) await this.saveAs(this._activeDoc);
     }
 
+    /**
+     * 文档格式转换入口：把选中的文件转换成另一种格式（docx / pdf / md / html 互转）。
+     * 通过 QuickPick 选择目标格式，转换后在扩展宿主（Node）完成并另存为新文件。
+     */
+    public async convertUri(uri?: vscode.Uri): Promise<void> {
+        const target = uri || vscode.window.activeTextEditor?.document.uri;
+        if (!target) {
+            vscode.window.showInformationMessage(loc('extension.pickConvert', 'Select a file to convert with jdoc.'));
+            return;
+        }
+        const sourceName = target.path.split('/').pop() || 'document';
+        const from = extToFormat(target.path);
+        if (!from) {
+            vscode.window.showWarningMessage(loc('extension.unsupported', 'Unsupported file format for conversion.'));
+            return;
+        }
+
+        const items = (Object.keys(TARGET_META) as ConvertTarget[])
+            .filter((k) => k !== from)
+            .map((k) => ({ label: TARGET_META[k].label, target: k }));
+        const picked = await vscode.window.showQuickPick(items, {
+            placeHolder: loc('extension.convertTo', 'Convert "{0}" to which format?', sourceName),
+            title: loc('extension.convertTitle', 'jdoc: 转换文档格式')
+        });
+        if (!picked) return;
+
+        const meta = TARGET_META[picked.target];
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: loc('extension.converting', 'Converting document…') },
+            async () => {
+                try {
+                    const data = await vscode.workspace.fs.readFile(target);
+                    const result = await convert(data, picked.target, { from });
+                    const base = sourceName.replace(/\.[^.]+$/, '');
+                    const dir = target.path.replace(/[^/]+$/, '');
+                    const outUri = await vscode.window.showSaveDialog({
+                        defaultUri: target.with({ path: dir + base + '.' + meta.ext }),
+                        saveLabel: loc('extension.saveResult', 'Save converted file'),
+                        filters: meta.filter
+                    });
+                    if (!outUri) return;
+                    const bytes = typeof result === 'string' ? new TextEncoder().encode(result) : result;
+                    await vscode.workspace.fs.writeFile(outUri, bytes);
+                    vscode.window.showInformationMessage(
+                        loc('extension.converted', 'Converted and saved: {0}', outUri.fsPath)
+                    );
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(loc('extension.convertFailed', 'Conversion failed: {0}', String(err?.message || err)));
+                }
+            }
+        );
+    }
+
     private getWebviewHtml(webview: vscode.Webview, format: DocFormat): string {
         // pptx -> 幻灯片编辑器；docx/xlsx -> office 编辑器；pdf/md/txt -> 只读查看器
         const scriptFile =
@@ -331,6 +404,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand('jdoc.revert', () => provider.revertActive()),
         vscode.commands.registerCommand('jdoc.exportCopy', () => provider.exportActive()),
+        vscode.commands.registerCommand('jdoc.convert', (uri?: vscode.Uri) => provider.convertUri(uri)),
         // 标题栏（editor/title）里的查看/编辑与文档切换
         vscode.commands.registerCommand('jdoc.viewMode', () => provider.setActiveMode('view')),
         vscode.commands.registerCommand('jdoc.editMode', () => provider.setActiveMode('edit')),

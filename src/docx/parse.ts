@@ -38,6 +38,7 @@ import {
     quoteStyleOf,
     readParagraphProps,
     readRunProps,
+    tocLevelOf,
     type StyleParagraphProps,
     type StyleRunProps,
     type ThemeFonts
@@ -64,7 +65,8 @@ import type {
     DocxRun,
     DocxSection,
     DocxTable,
-    DocxTextBox
+    DocxTextBox,
+    DocxTocEntry
 } from './types';
 
 /** EMU 转磅：1 磅 = 12700 EMU */
@@ -78,13 +80,33 @@ interface RelEntry {
     external: boolean;
 }
 
+/** numbering.xml 里某一级的编号定义 */
+interface NumberingLevel {
+    /** 起始值（w:start，默认 1） */
+    start: number;
+    /** 编号格式（decimal / bullet / lowerLetter / chineseCounting ...） */
+    format: string;
+    /** 编号模板（w:lvlText，如 "%1." / "%1.%2." / "•"） */
+    text: string;
+}
+
+/** numId -> 各级的编号定义（按 ilvl 下标，缺失补默认） */
+type NumberingTable = Map<string, NumberingLevel[]>;
+
 /** 解析上下文 */
 interface ParseContext {
     zip: JSZip;
     styles: StylesIndex;
     rels: Map<string, RelEntry>;
     /** numId -> 各级 numFmt（bullet / decimal / ...） */
-    numbering: Map<string, string[]>;
+    numbering: NumberingTable;
+    /**
+     * 自动编号计数器：numId -> 各 ilvl 当前序号
+     *
+     * Word 的章节号（"1." / "3.1."）由 numbering 生成，文本里并不存在，
+     * 必须边遍历边累加才能还原：命中某级就 +1，并把它更深的各级重置回起始值。
+     */
+    numberingCounters: Map<string, number[]>;
     messages: string[];
     /** 图片部件路径 -> data URL */
     imageCache: Map<string, string>;
@@ -133,24 +155,30 @@ function parseRels(xml: string): Map<string, RelEntry> {
     return rels;
 }
 
-/** 解析 word/numbering.xml：numId -> 各层级 numFmt */
-function parseNumbering(xml: string): Map<string, string[]> {
-    const result = new Map<string, string[]>();
+/** 解析 word/numbering.xml：numId -> 各级编号定义（start / numFmt / lvlText） */
+function parseNumbering(xml: string): NumberingTable {
+    const result: NumberingTable = new Map();
     if (!xml) return result;
 
     const roots = parseXml(xml);
-    // abstractNumId -> numFmt[]
-    const abstractFormats = new Map<string, string[]>();
+    // abstractNumId -> 各级定义
+    const abstractLevels = new Map<string, NumberingLevel[]>();
     for (const abstractNum of findAll(roots, 'abstractNum')) {
         const abstractId = attr(abstractNum, 'abstractNumId');
         if (!abstractId) continue;
-        const formats: string[] = [];
+        const levels: NumberingLevel[] = [];
         for (const lvl of childElements(abstractNum, 'lvl')) {
-            const ilvl = attr(lvl, 'ilvl');
+            const ilvl = Number(attr(lvl, 'ilvl')) || 0;
+            const startEl = firstChild(lvl, 'start');
             const numFmt = firstChild(lvl, 'numFmt');
-            formats[Number(ilvl) || 0] = (numFmt && attr(numFmt, 'val')) || 'decimal';
+            const lvlText = firstChild(lvl, 'lvlText');
+            levels[ilvl] = {
+                start: (startEl && attrNumber(startEl, 'val', 1)) || 1,
+                format: (numFmt && attr(numFmt, 'val')) || 'decimal',
+                text: (lvlText && attr(lvlText, 'val')) || ''
+            };
         }
-        abstractFormats.set(abstractId, formats);
+        abstractLevels.set(abstractId, levels);
     }
 
     for (const num of findAll(roots, 'num')) {
@@ -158,10 +186,134 @@ function parseNumbering(xml: string): Map<string, string[]> {
         const abstractNumId = firstChild(num, 'abstractNumId');
         const abstractId = abstractNumId && attr(abstractNumId, 'val');
         if (!numId) continue;
-        result.set(numId, (abstractId && abstractFormats.get(abstractId)) || ['decimal']);
+        const levels = (abstractId && abstractLevels.get(abstractId)) || [{ start: 1, format: 'decimal', text: '' }];
+        // w:lvlOverride 的 startOverride 覆盖该级起始值（编号续接场景）
+        for (const ov of childElements(num, 'lvlOverride')) {
+            const ilvl = Number(attr(ov, 'ilvl'));
+            const startEl = firstChild(ov, 'startOverride');
+            if (levels[ilvl] && startEl) levels[ilvl].start = attrNumber(startEl, 'val', levels[ilvl].start) || levels[ilvl].start;
+        }
+        result.set(numId, levels);
     }
 
     return result;
+}
+
+/** 编号格式 -> 显示文本（覆盖 Word 里常见的非十进制格式） */
+function formatNumber(value: number, format: string): string {
+    switch (format.toLowerCase()) {
+        case 'decimal':
+        case '':
+            return String(value);
+        case 'lowerletter':
+        case 'lowerlatin':
+            return alphaNumber(value, false);
+        case 'upperletter':
+        case 'upperlatin':
+            return alphaNumber(value, true);
+        case 'lowerroman':
+            return romanNumber(value).toLowerCase();
+        case 'upperroman':
+            return romanNumber(value);
+        case 'decimalzero':
+            return String(value).padStart(2, '0');
+        case 'chinesecounting':
+            return chineseNumber(value);
+        case 'chineselegal':
+            return chineseNumber(value) + '日';
+        case 'none':
+            return '';
+        default:
+            // bullet 等符号型格式不参与编号计数
+            return '';
+    }
+}
+
+/** 1 -> a，27 -> aa */
+function alphaNumber(value: number, upper: boolean): string {
+    let n = Math.max(1, Math.floor(value));
+    let out = '';
+    while (n > 0) {
+        out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
+        n = Math.floor((n - 1) / 26);
+    }
+    return upper ? out : out.toLowerCase();
+}
+
+/** 1 -> I，4 -> IV（上限 3999，超出按原值输出） */
+function romanNumber(value: number): string {
+    const table: [number, string][] = [
+        [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'],
+        [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']
+    ];
+    let n = Math.floor(value);
+    if (n < 1 || n > 3999) return String(value);
+    let out = '';
+    for (const [num, sym] of table) {
+        while (n >= num) {
+            out += sym;
+            n -= num;
+        }
+    }
+    return out;
+}
+
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+/** 1 -> 一，12 -> 十二（中文计数用于「第一节」这类标题编号） */
+function chineseNumber(value: number): string {
+    const n = Math.floor(value);
+    if (n < 1 || n > 99) return String(value);
+    if (n < 10) return CN_DIGITS[n];
+    if (n === 10) return '十';
+    const ones = n % 10;
+    return CN_DIGITS[Math.floor(n / 10)] + '十' + (ones ? CN_DIGITS[ones] : '');
+}
+
+/**
+ * 推进编号计数器并返回该段落的编号文本
+ *
+ * 命中 ilvl 时：该级 +1（首见用 start），并把更深的各级重置为起始值，
+ * 使 "3.1." 在下一个 3.x 下能重新从 1 开始——这正是 Word 的编号语义。
+ */
+function nextNumberText(ctx: ParseContext, numId: string, ilvl: number): string {
+    const levels = ctx.numbering.get(numId);
+    const level = levels?.[ilvl];
+    if (!level || level.format === 'bullet') return '';
+
+    let counters = ctx.numberingCounters.get(numId);
+    if (!counters) {
+        counters = [];
+        ctx.numberingCounters.set(numId, counters);
+    }
+    counters[ilvl] = counters[ilvl] === undefined ? level.start : counters[ilvl] + 1;
+    counters.length = ilvl + 1;
+
+    // lvlText 形如 "%1." / "%1.%2." / "第%1章"，按占位符回填各级序号
+    const template = level.text || '%1.';
+    let out = '';
+    for (let i = 0; i < template.length; i++) {
+        const ch = template[i];
+        if (ch !== '%') {
+            out += ch;
+            continue;
+        }
+        let digits = '';
+        let j = i + 1;
+        while (j < template.length && template[j] >= '0' && template[j] <= '9') {
+            digits += template[j];
+            j++;
+        }
+        if (!digits) {
+            out += ch;
+            continue;
+        }
+        i = j - 1;
+        const ref = Number(digits) - 1;
+        const refLevel = levels[ref];
+        const value = counters[ref] ?? refLevel?.start ?? 1;
+        out += refLevel ? formatNumber(value, refLevel.format) : String(value);
+    }
+    return out;
 }
 
 /** 定位部件的根元素（兼容是否带外层包裹，如 cp:coreProperties） */
@@ -679,7 +831,14 @@ async function parseParagraph(ctx: ParseContext, pEl: XmlElement): Promise<DocxB
     }
 
     if (headingLevel !== undefined) {
-        blocks.push({ type: 'heading', level: headingLevel, runs, ...copyParagraphProps(props) });
+        // 章节号来自 numbering（"1." / "3.1."），文本里并不存在，这里补一个展示字段
+        const num = readListInfo(ctx, pEl);
+        const heading: DocxBlock = { type: 'heading', level: headingLevel, runs, ...copyParagraphProps(props) } as DocxBlock;
+        if (num) {
+            const number = nextNumberText(ctx, num.numId, num.level);
+            if (number) (heading as { number?: string }).number = number;
+        }
+        blocks.push(heading);
         return blocks;
     }
 
@@ -695,11 +854,11 @@ async function parseParagraph(ctx: ParseContext, pEl: XmlElement): Promise<DocxB
     return blocks;
 }
 
-/** 读取段落的列表信息 */
+/** 读取段落的列表信息（numId + 层级）；缺 numPr 时返回 undefined */
 function readListInfo(
     ctx: ParseContext,
     pEl: XmlElement
-): { ordered: boolean; level: number } | undefined {
+): { ordered: boolean; level: number; numId: string } | undefined {
     const pPr = firstChild(pEl, 'pPr');
     const numPr = pPr ? firstChild(pPr, 'numPr') : undefined;
     if (!numPr) return undefined;
@@ -711,9 +870,9 @@ function readListInfo(
     const ilvlEl = firstChild(numPr, 'ilvl');
     const level = ilvlEl ? Number(attr(ilvlEl, 'val')) || 0 : 0;
 
-    const formats = ctx.numbering.get(numId);
-    const fmt = formats ? formats[level] || formats[0] : 'decimal';
-    return { ordered: fmt !== 'bullet', level };
+    const levels = ctx.numbering.get(numId);
+    const fmt = levels?.[level]?.format || levels?.[0]?.format || 'decimal';
+    return { ordered: fmt !== 'bullet', level, numId };
 }
 
 /** 读取单元格边框单边（w:tcBorders 的 top/left/bottom/right） */
@@ -917,18 +1076,46 @@ function parseSection(body: XmlElement): DocxSection | undefined {
 }
 
 /**
- * 遍历 w:body，把相邻的同类型列表段落合并为一个 list 块
+ * TOC 缓存段落文本 -> 目录条目
+ *
+ * Word/WPS 写出的目录条目形如 `1.\t背景\t2`（章节号 + Tab + 标题 + Tab + 页码），
+ * 嵌套层级靠样式名 toc 1/2/3 表达。页码是 PAGEREF 域的缓存结果，取最后一段 Tab 后的纯数字。
+ */
+function parseTocEntryText(raw: string): { text: string; page?: number } {
+    const parts = raw.split('\t');
+    while (parts.length > 1 && !parts[parts.length - 1].trim()) parts.pop();
+    if (!parts.length) return { text: '' };
+
+    let page: number | undefined;
+    const tail = parts[parts.length - 1].trim();
+    if (parts.length > 1 && /^\d+$/.test(tail)) {
+        page = Number(tail);
+        parts.pop();
+    }
+    // 章节号与标题之间也是 Tab（"1." \t "背景"），合并掉分隔用的 Tab
+    return { text: parts.map((part) => part.trim()).filter(Boolean).join(' '), page };
+}
+
+/**
+ * 遍历 w:body，把相邻的同类型列表段落合并为一个 list 块，
+ * 并把连续的 toc N 样式段落折叠为一个 toc 块
  */
 async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock[]> {
     const blocks: DocxBlock[] = [];
     // 当前正在累积的列表（用于合并连续列表项）
     let activeList: { type: 'list'; ordered: boolean; items: DocxListItem[] } | undefined;
     let activeLevel = 0;
+    // 当前正在累积的目录条目
+    let activeToc: DocxTocEntry[] | undefined;
 
     const flushList = () => {
         if (activeList && activeList.items.length) blocks.push(activeList);
         activeList = undefined;
         activeLevel = 0;
+    };
+    const flushToc = () => {
+        if (activeToc && activeToc.length) blocks.push({ type: 'toc', entries: activeToc });
+        activeToc = undefined;
     };
 
     for (const child of body.children) {
@@ -937,10 +1124,26 @@ async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock
 
         if (name === 'p') {
             const listInfo = readListInfo(ctx, child);
+            // 标题样式优先于列表：Word 的章节标题常同时带 numPr（章节号），
+            // 若按 numPr 判定会整篇标题被当成列表项，目录与大纲层级全部丢失。
+            const isHeading = resolveParagraphProps(ctx, child).headingLevel !== undefined;
 
             // 非列表段落直接走 parseParagraph（避免 parseRuns 跑两遍导致图片重复产出）
-            if (!listInfo) {
+            if (!listInfo || isHeading) {
                 flushList();
+                // 目录条目：toc N 样式段落折叠进当前目录，而不是当普通段落输出
+                const tocLevel = tocLevelOf(resolveParagraphProps(ctx, child).styleName);
+                if (tocLevel !== undefined) {
+                    const { styleRun } = resolveParagraphProps(ctx, child);
+                    const { runs } = await parseRuns(ctx, child, styleRun);
+                    const { text, page } = parseTocEntryText(runsToText(runs));
+                    if (text) {
+                        if (!activeToc) activeToc = [];
+                        activeToc.push({ level: tocLevel, text, page });
+                    }
+                    continue;
+                }
+                flushToc();
                 blocks.push(...(await parseParagraph(ctx, child)));
                 continue;
             }
@@ -984,6 +1187,7 @@ async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock
 
         if (name === 'tbl') {
             flushList();
+            flushToc();
             blocks.push(await parseTable(ctx, child));
             continue;
         }
@@ -992,6 +1196,7 @@ async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock
     }
 
     flushList();
+    flushToc();
     return blocks;
 }
 
@@ -1035,6 +1240,11 @@ export function blocksToText(blocks: DocxBlock[]): string {
             case 'table':
                 for (const row of block.rows) {
                     lines.push(row.map((cell) => cellToText(cell)).join('\t'));
+                }
+                break;
+            case 'toc':
+                for (const entry of block.entries) {
+                    lines.push(entry.page ? `${entry.text}\t${entry.page}` : entry.text);
                 }
                 break;
             case 'image':
@@ -1099,6 +1309,7 @@ export async function parseDocxInternal(
         styles: stylesXml ? buildStylesIndex(stylesXml, themeFonts) : emptyStylesIndex(),
         rels,
         numbering: parseNumbering(numberingXml),
+        numberingCounters: new Map(),
         messages,
         imageCache: new Map(),
         includeImages,

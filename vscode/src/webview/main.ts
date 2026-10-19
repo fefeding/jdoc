@@ -1,8 +1,10 @@
 import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml, renderMarkdownExtras } from '@fefeding/jdoc';
 import { chartRenderer } from './chart-renderer';
-import { b64ToBytes, escapeHtml } from './util';
+import { b64ToBytes, bytesToB64, escapeHtml } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
+import { createZoom, createZoomCluster } from './zoom';
+import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -15,9 +17,25 @@ let statusText: HTMLElement | null = null;
 /** 只握手一次：host 收到 ready 会再发一次 init，无条件回 ready 会形成无限循环。 */
 let readySent = false;
 
+/** 缩放：PDF / Markdown / 纯文本等只读内容共用，默认适应宽度，宽内容不会出屏外 */
+const zoom = createZoom();
+
+/** 把缩放绑定到当前渲染出的内容根 */
+function bindZoom(): void {
+    const content = document.getElementById('content');
+    if (!content) return;
+    const el = content.firstElementChild as HTMLElement | null;
+    // 提示 / 错误块无需缩放
+    if (!el || el.classList.contains('hint') || el.classList.contains('error')) {
+        zoom.bind({ target: null, container: content });
+        return;
+    }
+    zoom.bind({ target: el, container: content });
+}
+
 function applyBaseStyle(): void {
     const style = document.createElement('style');
-    style.textContent = CHROME_CSS + baseCss;
+    style.textContent = CHROME_CSS + baseCss + PDF_CSS;
     document.head.appendChild(style);
 }
 
@@ -36,9 +54,34 @@ function setStatus(text: string): void {
     if (statusText) statusText.textContent = text;
 }
 
+/** PDF 阅读器实例（仅 pdf 格式创建） */
+let pdfViewer: PdfViewer | null = null;
+
 function renderShell(): { content: HTMLElement } {
     const app = document.getElementById('app')!;
+    // 重建外壳前先拆旧实例：PDF 编辑层在 document 上挂了 pointer 监听，
+    // 不 close 会随每次 init 累积一份
+    pdfViewer?.close();
     app.innerHTML = '';
+
+    // PDF 有自己的阅读器外壳（顶部工具栏 + 左侧缩略图栏 + 正文），缩放也由它绑定
+    if (format === 'pdf') {
+        app.className = 'jc-app pdf-app';
+        const status = createStatusBar();
+        statusText = status.textEl;
+        pdfViewer = createPdfViewer(app, zoom, setStatus, (editing) => {
+            // 阅读器里手动开关编辑模式，同步给宿主，标题栏的「查看/编辑」命令才不会失配
+            vscode.postMessage({ type: 'setMode', mode: editing ? 'edit' : 'view' });
+        });
+        // 叠加编辑产出新字节：先回传字节（标脏），再请求落盘，
+        // 一步完成「生成 + 写回原文件」，不必让用户再按一次保存。
+        pdfViewer.onSave((bytes) => {
+            vscode.postMessage({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
+            vscode.postMessage({ type: 'save' });
+        });
+        app.append(status.el);
+        return { content: pdfViewer.content };
+    }
 
     // 不画顶栏：标题 / 面包屑 / 未保存点由 VS Code 编辑器标题栏呈现，webview 再画一份只会重复。
     const content = document.createElement('div');
@@ -48,34 +91,52 @@ function renderShell(): { content: HTMLElement } {
     statusText = status.textEl;
     app.className = 'jc-app';
     app.append(content, status.el);
+    // 缩放簇挂在状态栏尾部（createStatusBar 里已有一个 grow 占位，簇会自然靠右）
+    status.el.append(createZoomCluster(zoom));
     return { content };
 }
 
 async function renderContent(): Promise<void> {
     const content = document.getElementById('content')!;
+    // PDF 无论查看还是编辑都走阅读器外壳，编辑模式只是叠加一层 overlay 工具层
+    if (format === 'pdf' && pdfViewer) {
+        try {
+            await pdfViewer.open(currentBytes);
+            pdfViewer.setEditing(mode === 'edit', false);
+        } catch (err: any) {
+            pdfViewer.content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
+            setStatus('渲染失败');
+            vscode.postMessage({ type: 'error', message: String(err?.message || err) });
+        }
+        return;
+    }
     if (mode === 'edit') {
         // PPTX / DOCX / XLSX 已各自使用独立编辑器入口（pptx-editor.js / office-editor.js）；
-        // 能走到这里的仅 PDF / MD / TXT，按只读处理。切走时作废进行中的 PDF 渲染任务。
-        pdfToken += 1;
-        if (pdfDoc) {
-            void pdfDoc.destroy?.();
-            pdfDoc = null;
-        }
-        const name = format === 'md' ? 'Markdown' : format === 'txt' ? '纯文本' : 'PDF';
-        content.innerHTML = `<div class="hint">${name}为只读查看，暂不支持编辑。</div>`;
+        // 能走到这里的仅 MD / TXT，按只读处理。
+        const name = format === 'md' ? 'Markdown' : '纯文本';
+        const hint = document.createElement('div');
+        hint.className = 'hint';
+        hint.textContent = `${name}为只读查看，暂不支持编辑。`;
+        content.replaceChildren(hint);
         setStatus('只读预览');
+        bindZoom();
         return;
     }
     try {
+        if (format === 'pdf') {
+            // 上面已处理；走到这里说明外壳没建成（理论上不会发生）
+            return;
+        }
         if (format === 'pptx') await renderPptx(content, currentBytes);
         else if (format === 'docx') await renderDocx(content, currentBytes);
         else if (format === 'xlsx') await renderXlsx(content, currentBytes);
-        else if (format === 'pdf') await renderPdf(content, currentBytes);
         else if (format === 'md') await renderMarkdown(content, currentBytes);
         else if (format === 'txt') await renderText(content, currentBytes);
+        bindZoom();
     } catch (err: any) {
         content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
         setStatus('渲染失败');
+        bindZoom();
         vscode.postMessage({ type: 'error', message: String(err?.message || err) });
     }
 }
@@ -164,155 +225,6 @@ async function renderText(content: HTMLElement, bytes: Uint8Array): Promise<void
     setStatus('纯文本预览');
 }
 
-/** 当前 PDF 渲染代数：渲染过程中切模式/重渲染时用于丢弃过期任务 */
-let pdfToken = 0;
-/** 当前打开的 pdfjs 文档，重新渲染前销毁以释放 worker 侧资源 */
-let pdfDoc: any = null;
-/** 已渲染页数计数回调 */
-let pdfProgress: ((done: number, total: number) => void) | null = null;
-
-/** 加载 pdfjs 并设置有效 worker（extension 注入 window.__JDC_PDF_WORKER__） */
-async function loadPdfjs(): Promise<any> {
-    // 与 jdoc 内部使用同一说明符，命中同一模块实例
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    const worker = (window as any).__JDC_PDF_WORKER__;
-    if (worker && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
-        pdfjs.GlobalWorkerOptions.workerSrc = worker;
-    }
-    return pdfjs;
-}
-
-/** 单页栅格化到 canvas，并在其上叠一层透明文本层（供选中/复制） */
-async function renderPdfPage(page: any, host: HTMLElement, cssWidth: number): Promise<void> {
-    const base = page.getViewport({ scale: 1 });
-    const cssScale = cssWidth / base.width;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const viewport = page.getViewport({ scale: cssScale * dpr });
-
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.floor(viewport.width));
-    canvas.height = Math.max(1, Math.floor(viewport.height));
-    canvas.style.width = `${Math.round(base.width * cssScale)}px`;
-    canvas.style.height = `${Math.round(base.height * cssScale)}px`;
-
-    host.classList.remove('pending');
-    host.style.width = `${Math.round(base.width * cssScale)}px`;
-    host.style.height = `${Math.round(base.height * cssScale)}px`;
-    host.replaceChildren(canvas);
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('无法创建 canvas 上下文');
-    await page.render({ canvasContext: ctx, viewport }).promise;
-
-    // 透明文本层：视觉不可见，但可选中/复制（PDF 原点在左下，需换算到 CSS 坐标）
-    try {
-        const tc = await page.getTextContent();
-        const items = ((tc.items || []) as any[]).filter((it) => typeof it?.str === 'string' && it.str);
-        if (!items.length) return;
-        const layer = document.createElement('div');
-        layer.className = 'pdf-text-layer';
-        for (const it of items) {
-            const t = (it.transform || []) as number[];
-            const span = document.createElement('span');
-            span.textContent = it.str;
-            span.style.left = `${(t[4] || 0) * cssScale}px`;
-            const fs = Math.abs(t[3] || it.height || 0) || 10;
-            span.style.top = `${(base.height - (t[5] || 0) - fs) * cssScale}px`;
-            span.style.fontSize = `${fs * cssScale}px`;
-            layer.appendChild(span);
-        }
-        host.appendChild(layer);
-    } catch {
-        // 文本层失败不影响图形渲染
-    }
-}
-
-async function renderPdf(content: HTMLElement, bytes: Uint8Array): Promise<void> {
-    const token = ++pdfToken;
-    const stale = () => token !== pdfToken;
-
-    const hint = document.createElement('div');
-    hint.className = 'hint';
-    hint.textContent = '正在打开 PDF…';
-    content.replaceChildren(hint);
-    setStatus('正在打开 PDF…');
-
-    const pdfjs = await loadPdfjs();
-    // pdfjs 会把 data 转移给 worker（原 ArrayBuffer 会被 detach），必须传副本
-    const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-    if (stale()) {
-        void doc.destroy?.();
-        return;
-    }
-    if (pdfDoc && pdfDoc !== doc) void pdfDoc.destroy?.();
-    pdfDoc = doc;
-
-    const total = doc.numPages || 0;
-    const wrap = document.createElement('div');
-    wrap.className = 'pdf-pages';
-    let done = 0;
-    setStatus(`共 ${total} 页，按需渲染中…（0/${total}）`);
-    pdfProgress = (d, t) => {
-        if (stale()) return;
-        setStatus(`共 ${t} 页，按需渲染中…（${d}/${t}）`);
-    };
-    content.replaceChildren(wrap);
-
-    // 页面宽度按容器可用宽度自适应（上限 1000px）
-    const cssWidth = Math.max(320, Math.min(1000, (content.clientWidth || 900) - 40));
-
-    const renderOne = async (index: number) => {
-        if (stale()) return;
-        const host = wrap.querySelector<HTMLElement>(`.pdf-page[data-page="${index}"]`);
-        if (!host || !host.classList.contains('pending')) return;
-        try {
-            const page = await doc.getPage(index);
-            if (stale()) return;
-            await renderPdfPage(page, host, cssWidth);
-        } catch (err: any) {
-            if (stale()) return;
-            host.classList.remove('pending');
-            host.textContent = `第 ${index} 页渲染失败：${String(err?.message || err)}`;
-        } finally {
-            if (!stale()) {
-                done += 1;
-                pdfProgress?.(done, total);
-            }
-        }
-    };
-
-    // 先按首页比例撑出占位（避免滚动时布局跳动），进入视口前后再真正渲染
-    const first = await doc.getPage(1);
-    if (stale()) return;
-    const v1 = first.getViewport({ scale: 1 });
-    const phHeight = Math.round((cssWidth * v1.height) / v1.width);
-    for (let i = 1; i <= total; i++) {
-        const p = document.createElement('div');
-        p.className = 'pdf-page pdf-canvas-page pending';
-        p.dataset.page = String(i);
-        p.style.width = `${cssWidth}px`;
-        p.style.height = `${phHeight}px`;
-        p.textContent = `第 ${i} 页`;
-        wrap.appendChild(p);
-    }
-
-    const io = new IntersectionObserver(
-        (entries) => {
-            for (const e of entries) {
-                if (!e.isIntersecting) continue;
-                const el = e.target as HTMLElement;
-                io.unobserve(el);
-                void renderOne(Number(el.dataset.page));
-            }
-        },
-        { root: null, rootMargin: '800px 0px' }
-    );
-    wrap.querySelectorAll('.pdf-page').forEach((el) => io.observe(el));
-
-    // 首屏立即渲染，避免等 observer 回调
-    await renderOne(1);
-}
-
 window.addEventListener('message', (e) => {
     const msg = e.data as HostToWebview;
     switch (msg.type) {
@@ -322,6 +234,8 @@ window.addEventListener('message', (e) => {
             currentBytes = b64ToBytes(msg.bytes);
             applyBaseStyle();
             renderShell();
+            pdfViewer?.setTitle(msg.title || '');
+            zoom.fit(); // 新文档：缩放复位到适应宽度
             void renderContent();
             if (!readySent) {
                 readySent = true;
@@ -332,7 +246,13 @@ window.addEventListener('message', (e) => {
             void renderContent();
             break;
         case 'setMode':
+            // 标题栏的「查看 / 编辑」命令：PDF 切到编辑模式就是打开 overlay 工具层
+            mode = msg.mode;
+            void renderContent();
+            break;
         case 'saved':
+            pdfViewer?.markSaved();
+            break;
         case 'info':
             break;
     }

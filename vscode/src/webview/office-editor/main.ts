@@ -3,14 +3,19 @@
 //
 // 数据流：host 发 init(bytes) → view 用 docxToHtml/xlsxToHtml 只读渲染；edit 用块式/网格
 // 编辑器载入 blocks/sheets 模型 → 编辑 → jsonToDocx/jsonToXlsx 生成字节 → sync 回 host 保存。
-import { docxToHtml, xlsxToHtml } from '@fefeding/jdoc';
+//
+// 外壳：左侧目录/编号索引栏（大纲）+ 右侧内容区。DOCX 两个模式都按纸张高度分页，
+// 每页独立成盒并带页码，观感对齐 Word/WPS；XLSX 是网格工作表，不分页、无大纲。
+import { docxToHtml, xlsxToHtml, type DocxSection } from '@fefeding/jdoc';
 import { officeCss } from './style';
 import { CHROME_CSS } from '../chrome';
+import { createZoom, createZoomCluster } from '../zoom';
 import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
 import { createXlsxEditor, type XlsxEditor } from './xlsx';
 import { b64ToBytes, bytesToB64, h, escapeHtml } from './util';
-import { icon } from '../icons';
+import { createOutline, buildOutline, trackActiveHeading, type OutlineView } from './outline';
+import { paginate, waitImages, type PageMetrics } from './paging';
 import type { DocFormat, EditorMode, HostToWebview, WebviewToHost } from '../../protocol';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
@@ -28,6 +33,17 @@ let toolbarEl: HTMLElement;
 let contentEl: HTMLElement;
 let statusEl: HTMLElement;
 
+const zoom = createZoom();
+/** 当前已绑定缩放的内容根，用于跳过重复绑定 */
+let zoomBoundTo: HTMLElement | null = null;
+
+/** 左侧目录栏（XLSX 无大纲，整条隐藏） */
+let outline: OutlineView | null = null;
+/** 滚动联动解绑函数 */
+let untrack: (() => void) | null = null;
+/** 查看模式渲染代数：丢弃过期的异步分页结果 */
+let viewGen = 0;
+
 function post(msg: WebviewToHost): void {
     vscode.postMessage(msg);
 }
@@ -43,7 +59,9 @@ const hooks = {
             post({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
         }
     },
-    onToast: (message: string, kind?: 'info' | 'warn' | 'error'): void => toast(message, kind)
+    onToast: (message: string, kind?: 'info' | 'warn' | 'error'): void => toast(message, kind),
+    /** 编辑器重建内容后请外壳重建大纲 / 重新分页 */
+    onContentChanged: () => refreshOutline()
 };
 
 // ---------- 外壳 ----------
@@ -58,12 +76,83 @@ function buildShell(): void {
     contentEl = h('div', { class: 'oe-content' });
     statusEl = h('span', { class: 'grow' });
 
-    app.append(toolbarEl, contentEl, h('div', { class: 'oe-statusbar' }, [statusEl]));
+    outline = createOutline({
+        onJump: (_item, el) => scrollToAnchor(el),
+        onToggle: () => bindZoom()
+    });
+
+    app.append(toolbarEl, h('div', { class: 'oe-body' }, [outline.el, contentEl]), h('div', { class: 'oe-statusbar' }, [statusEl, createZoomCluster(zoom)]));
     root.append(app);
+
+    // 编辑器在增删行列 / 切工作表 / undo 时会整体重建内容根，需重新绑定缩放目标
+    new MutationObserver(() => bindZoom()).observe(contentEl, { childList: true });
 }
 
-function updateModeHint(): void {
-    if (statusEl && mode === 'view') statusEl.textContent = '查看模式（只读）';
+/** 把带缩放的文档滚动到视口内（大纲点击用） */
+function scrollToAnchor(el: HTMLElement): void {
+    const top = el.getBoundingClientRect().top - contentEl.getBoundingClientRect().top + contentEl.scrollTop;
+    contentEl.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' });
+    el.classList.add('oe-flash');
+    window.setTimeout(() => el.classList.remove('oe-flash'), 900);
+}
+
+/** 依据当前内容重建左侧目录并接上滚动联动 */
+function refreshOutline(): void {
+    untrack?.();
+    untrack = null;
+    if (!outline) return;
+    if (format !== 'docx') {
+        outline.update([]);
+        return;
+    }
+    const view = contentEl.firstElementChild;
+    if (!view) {
+        outline.update([]);
+        return;
+    }
+    const items = buildOutline(view as HTMLElement);
+    outline.update(items);
+    untrack = trackActiveHeading(
+        contentEl,
+        items.map((item) => item.id),
+        (id) => outline?.setActive(id)
+    );
+}
+
+/** DOCX section -> 纸张设置；缺省 A4 纵向 1 英寸页边距 */
+function metricsOf(section: DocxSection | undefined): PageMetrics {
+    if (!section || !(section.width > 0) || !(section.height > 0)) {
+        return { width: 595.28, height: 841.89, marginTop: 72, marginBottom: 72, marginLeft: 72, marginRight: 72 };
+    }
+    return {
+        width: section.width,
+        height: section.height,
+        marginTop: section.marginTop,
+        marginBottom: section.marginBottom,
+        marginLeft: section.marginLeft,
+        marginRight: section.marginRight
+    };
+}
+
+/** 把缩放绑定到当前内容根（查看 / 编辑 / 内容重建后都要重新绑定） */
+function bindZoom(): void {
+    const el = contentEl.firstElementChild as HTMLElement | null;
+    if (el === zoomBoundTo) return;
+    zoomBoundTo = el;
+    if (!el) {
+        zoom.bind({ target: null });
+        return;
+    }
+    // XLSX 缩放作用在网格表上：.oe-xl 是 height:100% 的 flex 容器，缩放它会把整个
+    // 面板（含工作表标签与冻结区）按倍率压缩，和滚动区对不上。只缩表格本身，
+    // 滚动容器 .oe-grid-wrap 保持满高，冻结行列仍按 sticky 正常吸附。
+    if (el.classList.contains('oe-xl')) {
+        const grid = el.querySelector<HTMLElement>('.oe-grid');
+        zoom.bind({ target: grid, container: el.querySelector<HTMLElement>('.oe-grid-wrap'), paper: grid });
+        return;
+    }
+    const first = el.querySelector<HTMLElement>('.oe-page');
+    zoom.bind({ target: el, container: contentEl, paper: first ?? el });
 }
 
 // ---------- 模式 ----------
@@ -80,21 +169,92 @@ async function enterView(): Promise<void> {
         editor.destroy();
         editor = null;
     }
+    const my = ++viewGen;
     toolbarEl.innerHTML = '';
     statusEl.textContent = '查看模式（只读）';
     contentEl.innerHTML = '';
+    // 解析/分页期间先给出反馈：大文档（教材、报表）在 await 期间是纯白屏，
+    // 用户会以为卡死。这里先挂一个提示，解析完成后再替换。
+    contentEl.append(h('div', { class: 'oe-hint', text: `正在解析 ${format.toUpperCase()}…` }));
     try {
-        let html = '';
-        if (format === 'docx') html = (await docxToHtml(latest)).html;
-        else if (format === 'xlsx') html = (await xlsxToHtml(latest)).html;
-        else html = `<div class="oe-hint">office-editor 仅支持 DOCX / XLSX（当前：${escapeHtml(format)}）</div>`;
-        const view = h('div', { class: 'oe-view' }, [h('div', { class: 'page', html })]);
-        contentEl.append(view);
+        if (format === 'xlsx') {
+            const html = (await xlsxToHtml(latest)).html;
+            const view = h('div', { class: 'oe-view' });
+            const page = h('div', { class: 'page' });
+            page.innerHTML = html;
+            view.append(page);
+            contentEl.replaceChildren(view);
+        } else if (format === 'docx') {
+            const { html, section } = await docxToHtml(latest);
+            const view = await renderDocxPages(html, section);
+            if (my !== viewGen) return;
+            contentEl.replaceChildren(view);
+        } else {
+            contentEl.append(h('div', { class: 'oe-hint', html: `office-editor 仅支持 DOCX / XLSX（当前：${escapeHtml(format)}）` }));
+        }
+        bindZoom();
+        refreshOutline();
     } catch (err: unknown) {
         const msg = (err as { message?: string })?.message || String(err);
         contentEl.append(h('pre', { class: 'oe-error', text: '渲染失败：' + msg }));
         post({ type: 'error', message: msg });
     }
+}
+
+/**
+ * 把 docxToHtml 产出的单页 HTML 拆成多页
+ *
+ * jdoc 的 HTML 形如 `<style>…<div class="docx-page"><div class="docx-body">块…</div></div>`，
+ * 这里剥掉最外层纸面，取出块序列按纸张高度重新装箱，每页各自套一层纸面，
+ * 于是原有的 `.docx-body` 样式（标题层级、目录点线、高亮等）原样生效。
+ */
+async function renderDocxPages(html: string, section: DocxSection | undefined): Promise<HTMLElement> {
+    const metrics = metricsOf(section);
+    // 离屏解出块序列：jdoc 自带 .docx-page 外壳，分页要自己控制纸面
+    const probe = document.createElement('div');
+    probe.innerHTML = html;
+    const body = probe.querySelector<HTMLElement>('.docx-body') ?? probe;
+
+    // jdoc 样式表随 HTML 一起回来，去重后挂到外壳头部（分页后仍需全局生效）
+    const styleText = Array.from(probe.querySelectorAll('style'))
+        .map((el) => el.textContent || '')
+        .join('\n');
+    if (styleText && !document.getElementById('docx-html-style')) {
+        const style = document.createElement('style');
+        style.id = 'docx-html-style';
+        style.textContent = styleText;
+        document.head.appendChild(style);
+    }
+
+    const nodes = Array.from(body.childNodes).filter((n): n is HTMLElement => n instanceof HTMLElement);
+    body.textContent = '';
+
+    const view = h('div', { class: 'oe-view oe-view-paged' });
+    view.appendChild(
+        paginate(nodes, {
+            metrics,
+            pageClass: 'oe-page docx-page',
+            bodyClass: 'docx-body',
+            pageNumber: true,
+            mount: contentEl
+        })
+    );
+
+    // 图片高度未就绪时分页会算错，等解码完成再按最终高度切一次
+    await waitImages(view);
+    if (!view.isConnected) return view;
+    const pages = view.firstElementChild as HTMLElement;
+    view.replaceChild(
+        paginate(nodes, {
+            metrics,
+            pageClass: 'oe-page docx-page',
+            bodyClass: 'docx-body',
+            pageNumber: true,
+            mount: contentEl
+        }),
+        pages
+    );
+    return view;
 }
 
 async function enterEdit(): Promise<void> {
@@ -118,6 +278,8 @@ async function enterEdit(): Promise<void> {
         }
         editor.mount(toolbarEl, contentEl);
         await editor.load(latest);
+        bindZoom();
+        refreshOutline();
     } catch (err: unknown) {
         const msg = (err as { message?: string })?.message || String(err);
         contentEl.append(h('pre', { class: 'oe-error', text: '加载失败：' + msg }));
@@ -140,6 +302,8 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
                 editor.destroy();
                 editor = null;
             }
+            zoomBoundTo = null; // 新文档：解除上一份文档的绑定，并把缩放复位到适应宽度
+            zoom.fit();
             await applyMode();
             if (my !== gen) return;
             break;
@@ -168,6 +332,10 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             break;
     }
 });
+
+function updateModeHint(): void {
+    if (statusEl && mode === 'view') statusEl.textContent = '查看模式（只读）';
+}
 
 // ---------- 启动 ----------
 function main(): void {

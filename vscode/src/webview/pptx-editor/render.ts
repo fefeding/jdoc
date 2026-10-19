@@ -1606,7 +1606,7 @@ function shapeGeometry(el) {
   const r = Math.min(el.width, el.height) * 0.16;
   const adj = el.adjust || {};
   switch (el.shapeType) {
-    case 'ellipse': case 'moon': case 'sun': case 'donut': case 'arc': case 'smileyFace':
+    case 'ellipse': case 'moon': case 'sun': case 'donut': case 'smileyFace':
       return { borderRadius: '50%' };
     case 'roundRect': {
       // adj = 圆角半径占短边比例（OOXML 原生千分比，默认 16667）。

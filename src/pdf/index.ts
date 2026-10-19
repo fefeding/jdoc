@@ -9,6 +9,7 @@ import { wrapError } from '../core/errors';
 import type { DocAsset } from '../core/asset';
 import { parsePdf } from './parse';
 import { generatePdf } from './generate';
+import { editPdf, mergePdfs, splitPdf } from './edit';
 import type {
     PdfDocument,
     PdfDocumentSpec,
@@ -19,6 +20,8 @@ import type {
 } from './types';
 
 export * from './types';
+export * from './edit';
+export { editPdf, mergePdfs, splitPdf };
 
 /** 解析结果 */
 export interface PdfResult {

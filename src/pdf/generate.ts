@@ -27,9 +27,12 @@ import type {
     PdfGenerateOptions,
     PdfImageElement,
     PdfPageSize,
+    PdfRun,
+    PdfRunsElement,
     PdfTableElement,
     PdfTextElement
 } from './types';
+import { registerPdfFontkit } from './fonts';
 
 /** 纸张尺寸（pt，1pt = 1/72 英寸） */
 const PAGE_SIZES: Record<string, [number, number]> = {
@@ -124,7 +127,7 @@ function resolveMargin(margin: PdfPageSpecLike['margin']): { top: number; right:
 type PdfPageSpecLike = { margin?: number | { top?: number; right?: number; bottom?: number; left?: number } };
 
 /** 字体集合：按 normal/bold/italic/boldItalic 分类 */
-interface FontBundle {
+export interface FontBundle {
     normal: PDFFont;
     bold: PDFFont;
     italic: PDFFont;
@@ -156,11 +159,14 @@ async function toFontBytes(source: string | ArrayBuffer | Uint8Array): Promise<U
 }
 
 /** 构建字体集合 */
-async function buildFonts(
+export async function buildFonts(
     doc: PDFDocument,
     fonts: PdfFontSet | undefined
 ): Promise<FontBundle> {
     if (fonts && (fonts.regular || fonts.bold)) {
+        // 内嵌自定义字体必须注册 fontkit，否则 embedFont(TTF) 会抛 "Unknown font format"
+        doc.registerFontkit((await registerPdfFontkit()) as never);
+
         const embed = async (source: string | ArrayBuffer | Uint8Array | undefined, fallback?: string) => {
             const bytes = source ? await toFontBytes(source) : fallback ? await toFontBytes(fallback) : undefined;
             return bytes ? doc.embedFont(bytes) : undefined;
@@ -321,6 +327,160 @@ function drawTextElement(
     }
 
     return y - (ctx.originY + (element.y ?? 0));
+}
+
+/** 取某 run 对应的 pdf-lib 字体（bold / italic 组合） */
+function fontForRun(ctx: DrawContext, run: PdfRun, size: number): PDFFont {
+    const bold = run.bold ?? false;
+    const italic = run.italic ?? false;
+    void size;
+    return bold && italic ? ctx.fonts.boldItalic : bold ? ctx.fonts.bold : italic ? ctx.fonts.italic : ctx.fonts.normal;
+}
+
+/** 测一段 run 文本在给定字号下的像素宽度（含字体回退容错） */
+function measureRun(ctx: DrawContext, run: PdfRun, text: string, size: number): number {
+    try {
+        return fontForRun(ctx, run, size).widthOfTextAtSize(text, size);
+    } catch {
+        return text.length * size * 0.5;
+    }
+}
+
+/**
+ * 绘制富文本段落（内联样式的多 run 混排）
+ *
+ * 先把 runs 切成语义「片段」：CJK 字符逐字成段（按字断行），西文按词成段
+ * （词内不拆），样式切换/空白也作为片段边界。随后贪心地把片段塞进当前行，
+ * 放不下就在该片段前换行，因此加粗/彩色/行内代码可落在不连续的 x 偏移上。
+ */
+function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
+    const size = element.size ?? ctx.defaultSize;
+    const lineHeight = (element.lineHeight ?? 1.35) * size;
+    const width = element.width ?? ctx.contentWidth;
+
+    /** 渲染片段：一段同一样式的文本（可能是单字、一个西文词、一段空白） */
+    interface Piece {
+        text: string;
+        run: PdfRun;
+    }
+    const pieces: Piece[] = [];
+    const isCjk = (ch: string) => /[　-〿㐀-鿿豈-﫿＀-￯]/.test(ch);
+    const isLatin = (ch: string) => /[A-Za-z0-9]/.test(ch);
+
+    for (const run of element.runs) {
+        if (!run.text) continue;
+        let word = '';
+        let wordRun: PdfRun | undefined;
+        const flushWord = () => {
+            if (word) {
+                pieces.push({ text: word, run: wordRun! });
+                word = '';
+            }
+        };
+        for (const ch of Array.from(run.text)) {
+            if (ch === '\n') {
+                flushWord();
+                pieces.push({ text: '\n', run });
+                continue;
+            }
+            if (isCjk(ch) || !/[\x00-\x7F]/.test(ch)) {
+                // CJK 与任何非 ASCII：逐字成段
+                flushWord();
+                pieces.push({ text: ch, run });
+            } else if (ch === ' ' || ch === '\t') {
+                flushWord();
+                pieces.push({ text: ' ', run });
+            } else if (isLatin(ch)) {
+                // 西文词：连同标点尽量聚合，但样式切换时先收尾
+                if (wordRun && wordRun !== run) flushWord();
+                word += ch;
+                wordRun = run;
+            } else {
+                // 其它 ASCII 标点：并入西文词缓冲（避免 "hello," 被拆开）
+                if (wordRun && wordRun !== run) flushWord();
+                word += ch;
+                wordRun = run;
+            }
+        }
+        flushWord();
+    }
+
+    let y = ctx.originY + (element.y ?? 0);
+    let line: Piece[] = [];
+    let lineWidth = 0;
+
+    const flushLine = () => {
+        if (!line.length) {
+            y += lineHeight;
+            return;
+        }
+        const lineTextWidth = line.reduce((sum, p) => sum + measureRun(ctx, p.run, p.text, p.run.size ?? size), 0);
+        let x = ctx.originX + (element.x ?? 0);
+        if (element.align === 'center' || element.align === 'right') {
+            const offset = width - lineTextWidth;
+            x += element.align === 'center' ? offset / 2 : Math.max(0, offset);
+        }
+        for (const p of line) {
+            const rs = p.run.size ?? size;
+            const w = measureRun(ctx, p.run, p.text, rs);
+            const color = p.run.color ? parseColor(p.run.color, ctx.defaultColor) : ctx.defaultColor;
+            if (p.run.code || p.run.link) {
+                const bg = p.run.code ? parseColor('#F2F2F2') : undefined;
+                if (bg) {
+                    ctx.page.drawRectangle({
+                        x: x - 1,
+                        y: ctx.pageHeight - y - rs,
+                        width: w + 2,
+                        height: rs + 2,
+                        color: bg
+                    });
+                }
+                ctx.page.drawText(p.text, {
+                    x,
+                    y: ctx.pageHeight - y - rs,
+                    size: rs,
+                    font: fontForRun(ctx, p.run, rs),
+                    color: p.run.link ? parseColor('#1565C0', ctx.defaultColor) : color
+                });
+                if (p.run.link) {
+                    ctx.page.drawLine({
+                        start: { x, y: ctx.pageHeight - y - 2 },
+                        end: { x: x + w, y: ctx.pageHeight - y - 2 },
+                        thickness: 0.5,
+                        color: parseColor('#1565C0', ctx.defaultColor)
+                    });
+                }
+            } else {
+                ctx.page.drawText(p.text, {
+                    x,
+                    y: ctx.pageHeight - y - rs,
+                    size: rs,
+                    font: fontForRun(ctx, p.run, rs),
+                    color
+                });
+            }
+            x += w;
+        }
+        y += lineHeight;
+        line = [];
+        lineWidth = 0;
+    };
+
+    for (const piece of pieces) {
+        if (piece.text === '\n') {
+            flushLine();
+            continue;
+        }
+        const w = measureRun(ctx, piece.run, piece.text, piece.run.size ?? size);
+        if (lineWidth + w > width && line.length) {
+            flushLine();
+        }
+        line.push(piece);
+        lineWidth += w;
+    }
+    flushLine();
+
+    return y - (ctx.originY + (element.y ?? 0)) + (element.spacingAfter ?? 4);
 }
 
 /** 绘制表格，返回占用高度 */
@@ -487,6 +647,9 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
             }
         }
 
+        case 'runs':
+            return drawRunsElement(ctx, element);
+
         case 'table':
             return drawTableElement(ctx, element);
 
@@ -520,7 +683,15 @@ export async function generatePdf(
         // 未内嵌字体时提前拦下中文，避免输出空白方块
         if (!fonts.embedded) {
             for (const element of collectElements(spec)) {
-                if ((element.type === 'text' || element.type === 'heading') && hasCjk(element.text ?? '')) {
+                const cjkText =
+                    element.type === 'text' || element.type === 'heading'
+                        ? element.text ?? ''
+                        : element.type === 'runs'
+                          ? element.runs.map((r) => r.text).join('')
+                          : element.type === 'table'
+                            ? element.rows.flat().map((c) => (typeof c === 'string' ? c : cellToPlainText(c))).join('')
+                            : '';
+                if (hasCjk(cjkText)) {
                     throw new JdocError(
                         '生成中文 PDF 需要内嵌字体：请通过 fonts.regular 传入中文 TTF/OTF 字节',
                         'pdf'

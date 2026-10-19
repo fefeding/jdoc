@@ -28,8 +28,8 @@ export type HostToWebview =
   | {
     type: 'init';
     mode: EditorMode;
-    /** Original file bytes (base64) — preview mode renders these faithfully. */
-    originalBytes: string;
+    /** Original file bytes (base64). Host sends only one copy, so this is usually absent. */
+    originalBytes?: string;
     /** Latest bytes (base64); equals originalBytes until the webview reports an edit. */
     bytes: string;
     title: string;

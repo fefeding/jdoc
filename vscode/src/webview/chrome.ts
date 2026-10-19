@@ -33,6 +33,11 @@ body {
   --jc-accent-soft-fg: var(--vscode-badge-foreground, var(--vscode-textLink-foreground, #9ecbff));
   --jc-hover: var(--vscode-list-hoverBackground, rgba(255,255,255,.06));
   --jc-active: var(--vscode-list-activeSelectionBackground, var(--vscode-toolbar-activeBackground, rgba(76,143,224,.24)));
+  /* 选中态前景：必须与 --jc-active 配对使用。
+     不要拿 --jc-accent 当选中文字色压在 --jc-accent-soft 上——两者分别来自
+     button-background 与 badge-background，VS Code 不保证它们之间有对比度
+     （实测同一深色主题下可低至 1.3:1，字几乎看不见）。 */
+  --jc-active-fg: var(--vscode-list-activeSelectionForeground, #e6e9ef);
   --jc-focus: var(--vscode-focusBorder, #4c8fe0);
   --jc-link: var(--vscode-textLink-foreground, #4daafc);
   --jc-code-bg: var(--vscode-textCodeBlock-background, rgba(255,255,255,.07));
@@ -57,6 +62,7 @@ body.vscode-light {
   --jc-accent-soft-fg: var(--vscode-badge-foreground, #ffffff);
   --jc-hover: var(--vscode-list-hoverBackground, #e8e8e8);
   --jc-active: var(--vscode-list-activeSelectionBackground, #e8e8e8);
+  --jc-active-fg: var(--vscode-list-activeSelectionForeground, #1f2430);
   --jc-focus: var(--vscode-focusBorder, #005fb8);
   --jc-link: var(--vscode-textLink-foreground, #005fb8);
   --jc-code-bg: var(--vscode-textCodeBlock-background, rgba(0,0,0,.05));
@@ -83,6 +89,12 @@ button, input, select, textarea { font-family: inherit; }
 }
 .jc-statusbar .jc-grow { flex: 1 1 auto; }
 .jc-statusbar .jc-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 缩放簇（zoom.ts，所有格式共用） ---------- */
+.jc-zoom { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.jc-zoom .chip { appearance: none; border: 0; background: transparent; color: inherit; font: inherit; padding: 2px 7px; border-radius: 4px; cursor: pointer; min-width: 22px; line-height: 1.4; }
+.jc-zoom .chip:hover { background: var(--jc-hover); }
+.jc-zoom .chip.on { background: var(--jc-active); color: var(--jc-text); }
 
 /* ---------- 滚动条（跟随 VS Code） ---------- */
 .jc-content::-webkit-scrollbar, .oe-content::-webkit-scrollbar, .jdoc-md ::-webkit-scrollbar { width: 10px; height: 10px; }

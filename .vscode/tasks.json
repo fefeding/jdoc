@@ -1,0 +1,113 @@
+{
+  "version": "2.0.0",
+  // 后台任务的问题匹配器必须声明在顶层 problemMatchers 里，再由任务按名字引用；
+  // 直接内联在任务的 problemMatcher 字段中会被 VS Code 判为「无法转换为问题匹配器」。
+  "problemMatchers": [
+    {
+      "name": "rollup-watch",
+      "owner": "rollup-watch",
+      "background": {
+        "activeOnStart": true,
+        "beginsPattern": {
+          "regexp": "^(\\[\\d{4}-\\d{2}-\\d{2}.*\\] waiting for changes|created )"
+        },
+        "endsPattern": {
+          "regexp": "^\\[\\d{4}-\\d{2}-\\d{2}.*\\] waiting for changes"
+        }
+      }
+    },
+    {
+      "name": "esbuild-watch",
+      "owner": "esbuild-watch",
+      "background": {
+        "activeOnStart": true,
+        "beginsPattern": {
+          "regexp": "^\\[esbuild\\] watching for changes"
+        },
+        "endsPattern": {
+          "regexp": "^\\[esbuild\\] build complete"
+        }
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "label": "jdoc-lib: build",
+      "detail": "构建根目录 @fefeding/jdoc（vscode 的 webview 产物依赖 dist/jdoc.browser.js）",
+      "type": "shell",
+      "command": "npm run build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [
+        "$tsc"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "jdoc-lib: watch",
+      "detail": "rollup 持续构建根目录 @fefeding/jdoc（改 src/ 时手动运行此任务）",
+      "type": "shell",
+      "command": "npx rollup -c rollup.config.mjs -w --environment development",
+      "isBackground": true,
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [
+        "rollup-watch"
+      ]
+    },
+    {
+      "label": "jdoc-vscode: build",
+      "detail": "先构建 jdoc 库，再一次性构建 vscode/dist（F5 默认链路）",
+      "type": "shell",
+      "command": "npm run compile",
+      "options": {
+        "cwd": "${workspaceFolder}/vscode",
+        // vscode/ 通常不单独 npm install，这里让 esbuild 回退到仓库根目录的 node_modules
+        "env": {
+          "NODE_PATH": "${workspaceFolder}/node_modules"
+        }
+      },
+      "dependsOn": [
+        "jdoc-lib: build"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "jdoc-vscode: watch",
+      "detail": "先构建 jdoc 库，再持续监听 vscode/src（改代码后在扩展开发宿主窗口 Cmd+R 刷新）",
+      "type": "shell",
+      "command": "npm run watch",
+      "isBackground": true,
+      "options": {
+        "cwd": "${workspaceFolder}/vscode",
+        "env": {
+          "NODE_PATH": "${workspaceFolder}/node_modules"
+        }
+      },
+      "dependsOn": [
+        "jdoc-lib: build"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": [
+        "esbuild-watch"
+      ]
+    },
+    {
+      "label": "jdoc-vscode: npm install",
+      "detail": "仅在需要独立安装 vscode/ 依赖时运行（仓库根目录的 esbuild 已可通过 NODE_PATH 复用）",
+      "type": "shell",
+      "command": "npm install",
+      "options": {
+        "cwd": "${workspaceFolder}/vscode"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

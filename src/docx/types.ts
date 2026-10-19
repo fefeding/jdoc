@@ -35,6 +35,8 @@ export interface DocxRun {
     highlight?: string;
     /** 超链接地址 */
     link?: string;
+    /** 行内代码（等宽样式） */
+    code?: boolean;
 }
 
 /** 段落对齐方式 */
@@ -49,6 +51,43 @@ export interface DocxHeading {
     text?: string;
     /** 富文本（与 text 二选一，text 优先） */
     runs?: DocxRun[];
+    /**
+     * 自动编号文本（如 "1." / "3.1."，来自 w:numPr + numbering.xml）
+     *
+     * 仅供展示：渲染时前置到标题前，还原 Word/WPS 里由列表编号生成的章节号。
+     * 生成端忽略该字段（重新写出编号定义超出结构化契约的范围）。
+     */
+    number?: string;
+    /** 段落级属性（对齐、缩进、间距） */
+    align?: DocxAlign;
+    indentLeft?: number;
+    indentRight?: number;
+    indentFirstLine?: number;
+    spacingBefore?: number;
+    spacingAfter?: number;
+    lineSpacing?: number;
+}
+
+/** 目录条目 */
+export interface DocxTocEntry {
+    /** 层级 1-3（对应 toc 1 / toc 2 / toc 3 样式） */
+    level: number;
+    /** 条目文本（不含页码，可能自带 "1." 这样的章节号） */
+    text: string;
+    /** 页码（TOC 域缓存的 PAGEREF 结果，缺失时留空） */
+    page?: number;
+}
+
+/**
+ * 目录块（TOC 域的缓存结果）
+ *
+ * Word/WPS 把目录存成一条 `TOC \o "1-3"` 域：域结果是一串 toc N 样式段落，
+ * 文本形如 `1.\t背景\t2`（章节号 + Tab + 标题 + Tab + 页码）。解析时把这一串
+ * 折叠为单个 toc 块，渲染时再按层级缩进 + 点线导引 + 右对齐页码还原。
+ */
+export interface DocxToc {
+    type: 'toc';
+    entries: DocxTocEntry[];
 }
 
 /** 普通段落块 */
@@ -212,7 +251,8 @@ export type DocxBlock =
     | DocxHorizontalRule
     | DocxQuote
     | DocxCode
-    | DocxTextBox;
+    | DocxTextBox
+    | DocxToc;
 
 /** 文档元数据 */
 export interface DocxMetadata {
