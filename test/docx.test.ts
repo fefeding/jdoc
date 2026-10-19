@@ -171,10 +171,24 @@ describe('docx：HTML 输出', () => {
         const { html } = await docxToHtml(bytes);
         expect(html).toContain('<h1');
         expect(html).toContain('<table');
-        expect(html).toContain('<ul>');
-        expect(html).toContain('<ol>');
+        // 列表标签可能带内联样式（编号格式 / w:ind 缩进与悬挂），故只断言标签本身
+        expect(html).toContain('<ul');
+        expect(html).toContain('<ol');
         expect(html).toContain('<blockquote');
         expect(html).toContain('docx-body');
+    });
+
+    it('列表还原 numbering 的编号格式与缩进', async () => {
+        // 中文文档的「有序列表」常是 a. b. c. / i. ii. 而非 1. 2. 3.，
+        // 且缩进写在 numbering 的 w:ind 里而非段落 pPr，都必须还原
+        const bytes = await jsonToDocx([
+            { type: 'list', ordered: true, items: ['甲', '乙'] }
+        ]);
+        const { html } = await docxToHtml(bytes);
+        const tag = (html.match(/<ol[^>]*>/) || [''])[0];
+        expect(tag).toContain('<ol');
+        expect(tag).toMatch(/padding-left:\d+pt/);
+        expect(tag).toMatch(/text-indent:-\d+pt/);
     });
 
     it('HTML 正确转义特殊字符', async () => {

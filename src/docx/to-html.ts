@@ -195,7 +195,8 @@ function listToHtml(block: DocxList): string {
     const tag = block.ordered ? 'ol' : 'ul';
     const styles: string[] = [];
     const fmt = block.numFmt ? LIST_STYLE_TYPE[block.numFmt.toLowerCase()] : undefined;
-    if (fmt) styles.push(`list-style-type:${fmt}`);
+    // disc 是 <ul> 的初始值，写出来只是冗余噪声，保持标签干净
+    if (fmt && fmt !== 'disc') styles.push(`list-style-type:${fmt}`);
     // hanging 是「编号自身占位宽度」：首行左移 hanging，正文仍停在 left 处
     if (block.indentLeft !== undefined) {
         styles.push(`padding-left:${block.indentLeft}pt`);

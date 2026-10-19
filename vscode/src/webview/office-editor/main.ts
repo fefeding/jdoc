@@ -256,30 +256,27 @@ async function renderDocxPages(html: string, section: DocxSection | undefined): 
     body.textContent = '';
 
     const view = h('div', { class: 'oe-view oe-view-paged' });
-    view.appendChild(
+    // 查看模式是只读渲染，允许按行拆块 + widow/orphan；编辑模式不开——拆块会破坏
+    // 「块 ↔ model.blocks[i]」的对应关系，contenteditable 的光标 / 选区 / undo 会失准
+    const paging = (lineBreak: boolean) =>
         paginate(nodes, {
             metrics,
             pageClass: 'oe-page docx-page',
             bodyClass: 'docx-body',
             pageNumber: true,
+            lineBreak,
             mount: contentEl
-        })
-    );
+        });
+    // 首轮绝不能拆：拆分后的后半段是新元素、不在 nodes 里，而分页要跑两轮
+    //（等图片解码后按最终高度重切），第二轮就找不到那段内容、等于凭空丢失。
+    // 首轮只做块级装箱，等图片就绪再启用行级拆分。
+    view.appendChild(paging(false));
 
     // 图片高度未就绪时分页会算错，等解码完成再按最终高度切一次
     await waitImages(view);
     if (!view.isConnected) return view;
     const pages = view.firstElementChild as HTMLElement;
-    view.replaceChild(
-        paginate(nodes, {
-            metrics,
-            pageClass: 'oe-page docx-page',
-            bodyClass: 'docx-body',
-            pageNumber: true,
-            mount: contentEl
-        }),
-        pages
-    );
+    view.replaceChild(paging(true), pages);
     return view;
 }
 
