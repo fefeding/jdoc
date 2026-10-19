@@ -59,6 +59,7 @@ import type {
     DocxCellDetail,
     DocxDocument,
     DocxImage,
+    DocxList,
     DocxListItem,
     DocxMetadata,
     DocxParagraph,
@@ -88,6 +89,8 @@ interface NumberingLevel {
     format: string;
     /** 编号模板（w:lvlText，如 "%1." / "%1.%2." / "•"） */
     text: string;
+    /** 该级的段落缩进（twips，来自 w:lvl/w:pPr/w:ind） */
+    ind?: { left?: number; hanging?: number };
 }
 
 /** numId -> 各级的编号定义（按 ilvl 下标，缺失补默认） */
@@ -172,10 +175,14 @@ function parseNumbering(xml: string): NumberingTable {
             const startEl = firstChild(lvl, 'start');
             const numFmt = firstChild(lvl, 'numFmt');
             const lvlText = firstChild(lvl, 'lvlText');
+            // 列表缩进定义在这一级的 w:pPr/w:ind 里（段落自身通常不写）
+            const lvlPPr = firstChild(lvl, 'pPr');
+            const indEl = lvlPPr ? firstChild(lvlPPr, 'ind') : undefined;
             levels[ilvl] = {
                 start: (startEl && attrNumber(startEl, 'val', 1)) || 1,
                 format: (numFmt && attr(numFmt, 'val')) || 'decimal',
-                text: (lvlText && attr(lvlText, 'val')) || ''
+                text: (lvlText && attr(lvlText, 'val')) || '',
+                ...(indEl ? { ind: { left: attrNumber(indEl, 'left', 0) || undefined, hanging: attrNumber(indEl, 'hanging', 0) || undefined } } : {})
             };
         }
         abstractLevels.set(abstractId, levels);
@@ -854,11 +861,11 @@ async function parseParagraph(ctx: ParseContext, pEl: XmlElement): Promise<DocxB
     return blocks;
 }
 
-/** 读取段落的列表信息（numId + 层级）；缺 numPr 时返回 undefined */
+/** 读取段落的列表信息（numId + 层级 + 编号格式与缩进）；缺 numPr 时返回 undefined */
 function readListInfo(
     ctx: ParseContext,
     pEl: XmlElement
-): { ordered: boolean; level: number; numId: string } | undefined {
+): { ordered: boolean; level: number; numId: string; numFmt: string; indentLeft?: number; hanging?: number } | undefined {
     const pPr = firstChild(pEl, 'pPr');
     const numPr = pPr ? firstChild(pPr, 'numPr') : undefined;
     if (!numPr) return undefined;
@@ -871,8 +878,21 @@ function readListInfo(
     const level = ilvlEl ? Number(attr(ilvlEl, 'val')) || 0 : 0;
 
     const levels = ctx.numbering.get(numId);
-    const fmt = levels?.[level]?.format || levels?.[0]?.format || 'decimal';
-    return { ordered: fmt !== 'bullet', level, numId };
+    const lvl = levels?.[level];
+    const fmt = lvl?.format || levels?.[0]?.format || 'decimal';
+    const info: { ordered: boolean; level: number; numId: string; numFmt: string; indentLeft?: number; hanging?: number } = {
+        ordered: fmt !== 'bullet',
+        level,
+        numId,
+        numFmt: fmt
+    };
+    // 缩进在 numbering 的 w:lvl/w:pPr/w:ind 里（不在段落 pPr），单位 twips
+    const ind = lvl?.ind;
+    if (ind) {
+        if (ind.left !== undefined) info.indentLeft = Math.round((ind.left / 20) * 100) / 100;
+        if (ind.hanging !== undefined) info.hanging = Math.round((ind.hanging / 20) * 100) / 100;
+    }
+    return info;
 }
 
 /** 读取单元格边框单边（w:tcBorders 的 top/left/bottom/right） */
@@ -1107,7 +1127,7 @@ function parseTocEntryText(raw: string): { text: string; page?: number } {
 async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock[]> {
     const blocks: DocxBlock[] = [];
     // 当前正在累积的列表（用于合并连续列表项）
-    let activeList: { type: 'list'; ordered: boolean; items: DocxListItem[] } | undefined;
+    let activeList: DocxList | undefined;
     let activeLevel = 0;
     // 当前正在累积的目录条目
     let activeToc: DocxTocEntry[] | undefined;
@@ -1170,8 +1190,15 @@ async function parseBody(ctx: ParseContext, body: XmlElement): Promise<DocxBlock
 
             if (!isSameList) {
                 flushList();
-                activeList = { type: 'list', ordered: listInfo.ordered, items: [] };
-                activeLevel = listInfo.level;
+                            activeList = {
+                                type: 'list',
+                                ordered: listInfo.ordered,
+                                items: [],
+                                numFmt: listInfo.numFmt,
+                                ...(listInfo.indentLeft !== undefined ? { indentLeft: listInfo.indentLeft } : {}),
+                                ...(listInfo.hanging !== undefined ? { hanging: listInfo.hanging } : {})
+                            };
+                            activeLevel = listInfo.level;
             }
 
             const text = runsToText(runs);

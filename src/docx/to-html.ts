@@ -22,6 +22,7 @@ import type {
     DocxCellDetail,
     DocxDocument,
     DocxImage,
+    DocxList,
     DocxListItem,
     DocxRun,
     DocxTable,
@@ -174,6 +175,37 @@ function tableToHtml(block: DocxTable, assets?: AssetTable): string {
     return `<table${tableStyle}>${colgroup}${body}</table>`;
 }
 
+/** Word 的 w:numFmt -> CSS list-style-type（未知格式退回 decimal） */
+const LIST_STYLE_TYPE: Record<string, string> = {
+    decimal: 'decimal',
+    decimalzero: 'decimal-leading-zero',
+    lowerletter: 'lower-alpha',
+    lowerlatin: 'lower-alpha',
+    upperletter: 'upper-alpha',
+    upperlatin: 'upper-alpha',
+    lowerroman: 'lower-roman',
+    upperroman: 'upper-roman',
+    bullet: 'disc',
+    circle: 'circle',
+    square: 'square'
+};
+
+/** 列表块 -> HTML：编号格式 + 缩进（w:ind 的 left / hanging） */
+function listToHtml(block: DocxList): string {
+    const tag = block.ordered ? 'ol' : 'ul';
+    const styles: string[] = [];
+    const fmt = block.numFmt ? LIST_STYLE_TYPE[block.numFmt.toLowerCase()] : undefined;
+    if (fmt) styles.push(`list-style-type:${fmt}`);
+    // hanging 是「编号自身占位宽度」：首行左移 hanging，正文仍停在 left 处
+    if (block.indentLeft !== undefined) {
+        styles.push(`padding-left:${block.indentLeft}pt`);
+        if (block.hanging) styles.push(`text-indent:${-block.hanging}pt`);
+    }
+    const attr = styles.length ? ` style="${escapeHtml(styles.join(';'))}"` : '';
+    const items = block.items.map((item) => listItemToHtml(item, block.ordered)).join('');
+    return `<${tag}${attr}>${items}</${tag}>`;
+}
+
 /** 目录块 -> HTML（层级缩进 + 点线导引 + 右对齐页码） */
 function tocToHtml(block: DocxToc): string {
     const rows = block.entries
@@ -249,10 +281,8 @@ export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
             return `<blockquote${paragraphStyle(block)}>${contentToHtml(block.text, block.runs)}</blockquote>`;
         case 'code':
             return `<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>${escapeHtml(block.text)}</code></pre>`;
-        case 'list': {
-            const tag = block.ordered ? 'ol' : 'ul';
-            return `<${tag}>${block.items.map((item) => listItemToHtml(item, block.ordered)).join('')}</${tag}>`;
-        }
+        case 'list':
+            return listToHtml(block);
         case 'table':
             return tableToHtml(block, assets);
         case 'image': {

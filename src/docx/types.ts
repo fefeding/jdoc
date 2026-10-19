@@ -119,6 +119,17 @@ export interface DocxList {
     ordered?: boolean;
     /** 列表项 */
     items: DocxListItem[];
+    /**
+     * 编号格式：decimal / lowerLetter / lowerRoman / bullet …
+     *
+     * Word 的有序列表未必是「1. 2. 3.」，中文文档里 a. b. c. 与 i. ii. iii. 极常见。
+     * 只保留 ordered: boolean 会一律渲染成阿拉伯数字，与原文不符。
+     */
+    numFmt?: string;
+    /** 文本左缩进（磅），来自 numbering 的 w:ind/@w:left */
+    indentLeft?: number;
+    /** 悬挂缩进（磅），编号自身占位宽度，来自 w:ind/@w:hanging */
+    hanging?: number;
 }
 
 /** 单元格边框（w:tcBorders 单边） */
