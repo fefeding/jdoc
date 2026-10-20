@@ -138,6 +138,25 @@ async function clickConvert(page) {
     check('DOCX 状态栏转换按钮点击有响应', chip?.count === 1, `count=${chip?.count} errs=${JSON.stringify(chip?.errs)}`);
     check('DOCX 状态栏按钮带 uri 且无运行时错误', chip?.uri === 'file:///tmp/t.docx' && (chip?.errs?.length ?? 0) === 0, `uri=${chip?.uri} errs=${JSON.stringify(chip?.errs)}`);
 
+    // 点击后状态栏应立刻给出反馈（不再是「点了没反应」）
+    const feedback = await page.evaluate(async () => {
+        const b = [...document.querySelectorAll('.oe-statusbar .chip')].find((x) => x.textContent.includes('转换'));
+        b.click();
+        await new Promise((r) => setTimeout(r, 120));
+        const el = document.querySelector('.oe-statusbar .grow, .oe-statusbar span');
+        return { text: (el?.textContent || '').trim() };
+    });
+    check('DOCX 点击后状态栏有反馈', feedback.text.includes('正在请求转换'), `text=${JSON.stringify(feedback.text)}`);
+
+    // 宿主回执后状态栏应提示选择目标格式
+    const ack = await page.evaluate(async () => {
+        window.postMessage({ type: 'convertAck' }, '*');
+        await new Promise((r) => setTimeout(r, 200));
+        const el = document.querySelector('.oe-statusbar .grow, .oe-statusbar span');
+        return { text: (el?.textContent || '').trim() };
+    });
+    check('DOCX 收到宿主回执后提示选择格式', ack.text.includes('选择目标格式'), `text=${JSON.stringify(ack.text)}`);
+
     // 菜单应随再次右键/点击外部而更新，且不残留
     const closed = await page.evaluate(() => document.querySelectorAll('.jc-ctxmenu').length);
     check('DOCX 点击菜单项后菜单关闭', closed === 0, `残留=${closed}`);

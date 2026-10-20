@@ -50,4 +50,6 @@ export type HostToWebview =
   | { type: 'bytes'; bytes: string; dirty: boolean }
   | { type: 'saved' }
   | { type: 'reverted' }
-  | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' };
+  | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' }
+  /** 宿主已收到转换请求、选择框即将弹出（让 webview 给出明确反馈）。 */
+  | { type: 'convertAck' };

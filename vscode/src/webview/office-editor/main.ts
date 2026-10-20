@@ -9,7 +9,7 @@
 import { docxToHtml, xlsxToHtml, type DocxSection } from '@fefeding/jdoc';
 import { officeCss } from './style';
 import { CHROME_CSS } from '../chrome';
-import { convertMenuEntry, copySelection, hasTextSelection, installContextMenu, postConvert, setCurrentDocUri, setHostPostMessage } from '../chrome';
+import { convertMenuEntry, copySelection, hasTextSelection, installContextMenu, notifyConvertAck, postConvert, setConvertStatusSink, setCurrentDocUri, setHostPostMessage } from '../chrome';
 import { createZoom, createZoomCluster } from '../zoom';
 import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
@@ -54,6 +54,10 @@ function post(msg: WebviewToHost): void {
 // chrome.ts 的转换入口需要向宿主发消息，但它不能自己调 acquireVsCodeApi()
 // （每个 webview 只能调一次，第二次会抛错），由这里注入本入口的 post 函数
 setHostPostMessage((m) => post(m as WebviewToHost));
+// 转换过程的状态提示接到状态栏：点击后立刻有反馈，失败时不再是一片死寂
+setConvertStatusSink((text) => {
+    if (statusEl) statusEl.textContent = text;
+});
 
 const hooks = {
     onSync: (bytes: Uint8Array | null): void => {
@@ -499,6 +503,10 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             break;
         case 'info':
             toast(msg.message, msg.kind || 'info');
+            break;
+        case 'convertAck':
+            // 宿主已收到转换请求、选择框即将弹出
+            notifyConvertAck();
             break;
     }
 });

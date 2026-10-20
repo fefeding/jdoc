@@ -4,7 +4,7 @@ import { b64ToBytes, bytesToB64, escapeHtml } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
-import { createConvertChip, convertMenuEntry, copySelection, hasTextSelection, installContextMenu, setCurrentDocUri, setHostPostMessage } from './chrome';
+import { createConvertChip, convertMenuEntry, copySelection, hasTextSelection, installContextMenu, notifyConvertAck, setConvertStatusSink, setCurrentDocUri, setHostPostMessage } from './chrome';
 import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
 import { highlightCodeBlocks, markdownCodeCss } from './markdown-code';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
@@ -70,6 +70,9 @@ function injectGlobalStyles(css: string): void {
 function setStatus(text: string): void {
     if (statusText) statusText.textContent = text;
 }
+
+// 转换过程的状态提示接到状态栏：点击后立刻有反馈，失败时不再是一片死寂
+setConvertStatusSink((text) => setStatus(text));
 
 /** PDF 阅读器实例（仅 pdf 格式创建） */
 let pdfViewer: PdfViewer | null = null;
@@ -319,6 +322,10 @@ window.addEventListener('message', (e) => {
             pdfViewer?.markSaved();
             break;
         case 'info':
+            break;
+        case 'convertAck':
+            // 宿主已收到转换请求、选择框即将弹出
+            notifyConvertAck();
             break;
     }
 });

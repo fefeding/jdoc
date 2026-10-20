@@ -3435,6 +3435,10 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
       case 'info':
         toast(msg.message, msg.kind || 'info');
         break;
+      case 'convertAck':
+        // 宿主已收到转换请求、选择框即将弹出
+        toast('请在弹出的列表中选择目标格式', 'info');
+        break;
     }
   } catch (e: any) {
     console.error('[pptx-webview] Message failed:', e);

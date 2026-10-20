@@ -67,6 +67,13 @@ export type HostToWebview =
   | { type: 'saved' }
   | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' }
   /**
+   * 宿主已收到 webview 的转换请求、正在弹出目标格式选择框。
+   *
+   * 用于给 webview 一个明确的回执：没有它，转换链路上任何一环（消息没送达、
+   * 选择框没弹出）都表现为「按钮点了没反应」，无从判断卡在哪一步。
+   */
+  | { type: 'convertAck' }
+  /**
    * 栅格化请求：把整份 PDF 逐页渲染成 PNG，逐页回传（见 WebviewToHost.rasterizePage）。
    *
    * 之所以由 webview 而非宿主栅格化：pdfjs 在 Node 侧渲染依赖 @napi-rs/canvas，

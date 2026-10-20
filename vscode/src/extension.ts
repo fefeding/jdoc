@@ -181,7 +181,14 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                                 target = undefined;
                             }
                         }
-                        await this.convertUri(target ?? document.uri);
+                        const finalTarget = target ?? document.uri;
+                        // 写日志：转换链路出问题时，用户在「输出 → Log (Extension Host)」
+                        // 里能直接看到请求有没有到达宿主、目标文件解析成了什么。
+                        console.log(`[jdoc] convert 请求到达，uri=${finalTarget?.toString() ?? '(none)'}`);
+                        // 先回执：让 webview 知道消息已送达、选择框即将弹出。
+                        send({ type: 'convertAck' });
+                        // 走命令路径，与 TAB 右键 / 资源管理器右键完全一致。
+                        await vscode.commands.executeCommand('jdoc.convert', finalTarget);
                         break;
                     }
                     case 'error':
