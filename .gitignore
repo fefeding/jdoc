@@ -20,3 +20,4 @@ verify-charts.mjs
 # 示例页面用临时样例文件（非源码、体积大，如 105MB 课本 PDF 与测试文档）
 examples/*.pdf
 examples/*.docx
+vscode/*.vsix
