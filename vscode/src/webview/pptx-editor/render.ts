@@ -15,7 +15,8 @@ import {
   rotatedRect,
   effectMargin,
   absoluteElementRect,
-  renderChartSVG,
+  renderChartSvg,
+  pptxChartToSpec,
   getTheme,
   ptToPx,
   normalizeColor,
@@ -1540,11 +1541,11 @@ function renderChartEl(el, ctx) {
       console.error('ECharts 图表 option 构建失败，回退 SVG：', err);
     }
   }
-  wrap.innerHTML = renderChartSVG(el, {
-    width: el.width, height: el.height,
-    palette: theme.accents,
-    textColor: theme.text, titleColor: theme.title
-  });
+  // 无 ECharts 时的回退：与 XLSX 共用同一套 SVG 绘图内核（chart/svg）
+  wrap.innerHTML = renderChartSvg(
+    pptxChartToSpec(el, { palette: theme.accents, textColor: theme.text, titleColor: theme.title }),
+    { width: el.width, height: el.height }
+  );
   return wrap;
 }
 

@@ -246,20 +246,25 @@ async function run(fmt) {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
     await page.waitForTimeout(500);
 
-    // 查看模式（DOCX 已分页：.oe-page 纸面 + 左侧目录栏；XLSX 仍是单张 .page）
+    // 查看模式（DOCX 已分页：.oe-page 纸面 + 左侧目录栏；XLSX 走 Excel 式网格）
     await init('view'); await page.waitForTimeout(1100);
     const view = await page.evaluate(() => ({
         page: !!document.querySelector('.oe-view .page'),
         pages: document.querySelectorAll('.oe-view .oe-page').length,
         pageNums: document.querySelectorAll('.oe-view .oe-page-num').length,
         outline: document.querySelectorAll('.oe-outline-item').length,
-        table: !!document.querySelector('.oe-view table')
+        table: !!document.querySelector('.oe-view table'),
+        grid: !!document.querySelector('.oe-grid'),
+        gridCells: document.querySelectorAll('.oe-grid td').length,
+        sheetTabs: document.querySelectorAll('.oe-sheet-tabs button').length,
+        charts: document.querySelectorAll('.oe-chart').length
     }));
     check(
         'view 渲染',
         fmt === 'docx'
             ? view.pages > 0 && view.pageNums === view.pages
-            : view.page && view.table
+            : view.grid && view.gridCells > 0 && view.sheetTabs > 0,
+        `grid=${view.grid} cells=${view.gridCells} tabs=${view.sheetTabs} charts=${view.charts}`
     );
 
     if (fmt === 'docx') {

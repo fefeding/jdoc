@@ -8,8 +8,10 @@
  */
 
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { wrapError } from '../core/errors';
 import { toUint8Array, type DocInput } from '../core/input';
+import { readWorkbookCharts } from './chart';
 import {
     assetToDataUrl,
     createAsset,
@@ -138,6 +140,8 @@ function readCell(cell: ExcelJS.Cell, options: XlsxParseOptions): XlsxCellObject
         value === undefined ||
         (typeof value === 'object' &&
             !Array.isArray(value) &&
+            // Date 没有自有可枚举属性，用 Object.keys 判空会把日期单元格误当空值
+            !(value instanceof Date) &&
             Object.keys(value as object).length === 0);
 
     if (!isEmpty) {
@@ -364,6 +368,29 @@ function readSheet(worksheet: ExcelJS.Worksheet, options: XlsxParseOptions, ctx?
 }
 
 /**
+ * 解析图表并挂到对应工作表
+ *
+ * 图表部件由 OOXML 直接读取（ExcelJS 不支持），失败时只记提示，不影响其它内容。
+ */
+async function attachCharts(
+    bytes: Uint8Array,
+    sheets: XlsxSheet[],
+    messages: string[]
+): Promise<void> {
+    try {
+        const zip = await JSZip.loadAsync(bytes);
+        const charts = await readWorkbookCharts(zip, sheets);
+        for (const [name, list] of charts) {
+            const sheet = sheets.find((s) => s.name === name);
+            if (!sheet) continue;
+            sheet.charts = list;
+        }
+    } catch (error) {
+        messages.push(`图表解析失败：${(error as Error)?.message || String(error)}`);
+    }
+}
+
+/**
  * 解析 XLSX 为工作簿结构
  * @param input - ArrayBuffer / Uint8Array / Buffer / Blob / base64 字符串
  * @param options - 解析选项
@@ -397,6 +424,9 @@ export async function parseXlsx(
                 if (!sheets.some((sheet) => sheet.name === name)) messages.push(`未找到工作表：${name}`);
             }
         }
+
+        // 图表：ExcelJS 不支持，需直接读 OOXML 部件（失败不影响其余内容）
+        await attachCharts(bytes, sheets, messages);
 
         const metadata = readMetadata(workbook);
         const result: XlsxWorkbook = { metadata, sheets };

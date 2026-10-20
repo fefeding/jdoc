@@ -237,10 +237,10 @@ await page.evaluate(
 );
 await page.waitForSelector('.oe-grid', { timeout: 15000 });
 await page.waitForTimeout(600);
-const gridBefore = await page.evaluate(() => document.querySelector('.oe-grid')?.style.zoom || '');
+const gridBefore = await page.evaluate(() => document.querySelector('.oe-grid-canvas')?.style.zoom || '');
 await page.click('.jc-zoom .chip[title="放大"]');
 await page.waitForTimeout(400);
-const gridAfter = await page.evaluate(() => document.querySelector('.oe-grid')?.style.zoom || '');
+const gridAfter = await page.evaluate(() => document.querySelector('.oe-grid-canvas')?.style.zoom || '');
 check('XLSX 缩放作用在网格上（重绘后不丢）', gridBefore !== gridAfter && gridAfter !== '',
     `before=${gridBefore || '(none)'} after=${gridAfter || '(none)'}`);
 

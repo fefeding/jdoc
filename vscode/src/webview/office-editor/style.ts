@@ -168,26 +168,54 @@ body {
 .oe-insert button { appearance: none; border: 1px dashed var(--oe-border); background: var(--oe-surface); color: var(--oe-muted); border-radius: 6px; padding: 2px 10px; font-size: 11px; line-height: 1.6; cursor: pointer; }
 .oe-insert button:hover { color: var(--oe-accent); border-color: var(--oe-accent); }
 
-/* ---------- XLSX 网格编辑器 ---------- */
-.oe-xl { display: flex; flex-direction: column; height: 100%; }
-.oe-xl-tabs { display: flex; gap: 2px; padding: 6px 12px 0; background: var(--oe-surface); border-bottom: 1px solid var(--oe-border); overflow-x: auto; }
-.oe-xl-tabs button { appearance: none; border: 1px solid var(--oe-border); border-bottom: 0; background: var(--oe-toolbar); color: var(--oe-muted); padding: 5px 14px; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0; white-space: nowrap; }
-.oe-xl-tabs button.active { background: var(--oe-surface); color: var(--oe-accent); font-weight: 600; }
-.oe-xl-tabs .add { color: var(--oe-accent); font-weight: 700; }
-.oe-grid-wrap { flex: 1; overflow: auto; background: var(--oe-surface); }
-.oe-grid { border-collapse: separate; border-spacing: 0; font-size: 13px; table-layout: fixed; }
-.oe-grid th, .oe-grid td { border-right: 1px solid var(--oe-border); border-bottom: 1px solid var(--oe-border); height: 26px; padding: 0; position: relative; }
-.oe-grid thead th { background: #f7f8fa; color: var(--oe-muted); font-weight: 600; text-align: center; position: sticky; top: 0; z-index: 3; user-select: none; }
-.oe-grid tbody th.oe-rownum { background: #f7f8fa; color: var(--oe-muted); font-weight: 500; text-align: center; position: sticky; left: 0; z-index: 2; user-select: none; width: 48px; }
-.oe-grid thead th.oe-corner { left: 0; z-index: 4; }
-.oe-grid td .cell { width: 100%; height: 100%; min-height: 26px; padding: 3px 6px; outline: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: cell; }
-.oe-grid td.inrange { background: var(--oe-accent-soft); }
-.oe-grid td.active { outline: 2px solid var(--oe-accent); outline-offset: -2px; }
-.oe-grid td .cell[contenteditable="true"] { background: #fff; color: #1f2328; white-space: normal; overflow: auto; cursor: text; box-shadow: inset 0 0 0 2px var(--oe-accent); }
+/* ---------- XLSX 网格编辑器（观感对齐 Excel / WPS） ---------- */
+.oe-xl { display: flex; flex-direction: column; height: 100%; background: var(--oe-surface); }
+
+/* 公式栏 */
+.oe-xl-formula { display: flex; align-items: center; gap: 0; padding: 4px 10px; background: var(--oe-toolbar); border-bottom: 1px solid var(--oe-border); }
+.oe-namebox { width: 116px; height: 26px; border: 1px solid var(--oe-border); border-radius: 4px 0 0 4px; background: var(--oe-surface); color: var(--oe-text); padding: 0 8px; font-size: 12.5px; }
+.oe-fx { width: 34px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-top: 1px solid var(--oe-border); border-bottom: 1px solid var(--oe-border); background: var(--oe-surface); color: var(--oe-muted); font-style: italic; font-size: 12px; }
+.oe-formula { flex: 1; min-width: 0; height: 26px; border: 1px solid var(--oe-border); border-left: 0; border-radius: 0 4px 4px 0; background: var(--oe-surface); color: var(--oe-text); padding: 0 8px; font-size: 12.5px; font-family: var(--vscode-editor-font-family, ui-monospace, monospace); }
+.oe-formula:focus { outline: 1px solid var(--oe-accent); outline-offset: -1px; }
+
+/* 网格 */
+.oe-grid-wrap { flex: 1; overflow: auto; background: #ffffff; outline: none; }
+.oe-grid-canvas { position: relative; display: inline-block; }
+/* 工作表恒为白底深字：文件自带的字体/填充色（深蓝标题、白字蓝底等）
+   只有在白底上才读得出来，跟 Excel / WPS 一致。UI（工具栏、标签栏）才跟随主题。 */
+.oe-grid { border-collapse: collapse; border-spacing: 0; font-size: 13px; table-layout: fixed; color: #1f2328; background: #ffffff; }
+.oe-grid th, .oe-grid td { border: 1px solid #d8dce3; height: 20px; padding: 0; position: relative; background-color: #ffffff; }
+.oe-grid thead th { background: #f7f8fa; color: #5b6270; font-weight: 600; font-size: 12px; text-align: center; position: sticky; top: 0; z-index: 3; user-select: none; }
+.oe-grid tbody th.oe-rownum { background: #f7f8fa; color: #5b6270; font-weight: 400; font-size: 12px; text-align: center; position: sticky; left: 0; z-index: 2; user-select: none; }
+.oe-grid thead th.oe-corner { left: 0; z-index: 4; position: sticky; }
+.oe-grid td .cell { padding: 1px 5px; outline: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: cell; line-height: 1.4; font-size: 13px; }
+/* 文本溢出到右侧空单元格（Excel 观感） */
+.oe-grid td .cell.spill { display: inline-block; min-width: 100%; width: auto; overflow: visible; }
+.oe-grid td .cell.wrap { white-space: pre-wrap; word-break: break-word; }
+/* 选区：半透明蒙层，不吃掉单元格填充色 */
+.oe-grid td.inrange { background-image: linear-gradient(rgba(43,108,176,.16), rgba(43,108,176,.16)); }
+.oe-grid td.active { box-shadow: inset 0 0 0 2px var(--oe-accent); }
+.oe-grid td .cell[contenteditable="true"] { background: #fff; color: #1f2328; white-space: pre-wrap; overflow: auto; cursor: text; box-shadow: inset 0 0 0 2px var(--oe-accent); }
 .oe-grid .col-res { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 1; }
-.oe-grid .fz { position: sticky; z-index: 2; }
-.oe-grid thead th.fz { z-index: 6; }
+/* 层级：滚动区(1) < 冻结单元格(3) < 冻结行号(4) < 列标(5) < 角标(6) */
+.oe-grid .fz-row { position: sticky; z-index: 3; }
+.oe-grid .fz-col { position: sticky; z-index: 3; }
 .oe-grid tbody th.oe-rownum.fz { z-index: 4; }
+.oe-grid thead th { z-index: 5; }
+.oe-grid thead th.oe-corner { z-index: 6; }
+
+/* 图表层：按锚点浮在网格上，不拦截单元格操作 */
+.oe-charts { position: absolute; left: 0; top: 0; right: 0; bottom: 0; pointer-events: none; z-index: 1; }
+.oe-chart { position: absolute; }
+.oe-chart svg { display: block; }
+
+/* 底部：工作表标签 */
+.oe-xl-bottom { display: flex; align-items: center; height: 30px; min-height: 30px; background: var(--oe-toolbar); border-top: 1px solid var(--oe-border); }
+.oe-sheet-tabs { display: flex; align-items: center; gap: 2px; padding: 0 10px; overflow-x: auto; }
+.oe-sheet-tabs button { appearance: none; border: 1px solid transparent; border-bottom: 0; background: transparent; color: var(--oe-muted); padding: 4px 14px; font-size: 12.5px; cursor: pointer; border-radius: 5px 5px 0 0; white-space: nowrap; }
+.oe-sheet-tabs button:hover { background: var(--oe-accent-soft); color: var(--oe-text); }
+.oe-sheet-tabs button.active { background: var(--oe-surface); color: var(--oe-accent); font-weight: 600; border-color: var(--oe-border); }
+.oe-sheet-tabs .add { color: var(--oe-accent); font-weight: 700; }
 
 /* ---------- toast ---------- */
 .oe-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--vscode-notifications-background, #1f2430); color: var(--vscode-notifications-foreground, #fff); border: 1px solid var(--jc-border); padding: 8px 16px; border-radius: 8px; font-size: 13px; box-shadow: var(--oe-shadow); opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; z-index: 50; max-width: 80%; }
@@ -214,8 +242,10 @@ body {
 [data-oe-theme="dark"] .oe-page .oe-insert button:hover { color:#2b6cb0; border-color:#2b6cb0; }
 [data-oe-theme="dark"] .oe-page .oe-page-num { color:#8a919c; }
 [data-oe-theme="dark"] .oe-grid thead th,
-[data-oe-theme="dark"] .oe-grid tbody th.oe-rownum { background:#2a2e36; }
-[data-oe-theme="dark"] .oe-grid td .cell[contenteditable="true"] { background:#1f2430; }
+[data-oe-theme="dark"] .oe-grid tbody th.oe-rownum { background:#eceef1; color:#4b5563; }
+[data-oe-theme="dark"] .oe-grid th, [data-oe-theme="dark"] .oe-grid td { border-color:#d8dce3; }
+[data-oe-theme="dark"] .oe-grid td .cell[contenteditable="true"] { background:#fff; color:#1f2328; }
+[data-oe-theme="dark"] .oe-grid td.inrange { background-image: linear-gradient(rgba(43,108,176,.16), rgba(43,108,176,.16)); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-oe-theme="light"]) {
     --oe-bg:#1b1d23; --oe-surface:#23262d; --oe-border:#343841; --oe-text:#e6e8ec; --oe-muted:#9aa1ac;

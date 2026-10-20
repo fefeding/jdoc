@@ -13,6 +13,8 @@ import { xlsxToHtmlString } from './to-html';
 import type { XlsxGenerateOptions, XlsxMetadata, XlsxParseOptions, XlsxSheet, XlsxWorkbook } from './types';
 
 export * from './types';
+export * from './formula';
+export * from './chart';
 
 /** 解析结果 */
 export interface XlsxResult {

@@ -121,6 +121,103 @@ export interface XlsxColumn {
     header?: string;
 }
 
+/** 图表类型（与共享渲染模块 chart/svg 的 ChartType 对齐） */
+export type XlsxChartType =
+    | 'bar'
+    | 'column'
+    | 'pie'
+    | 'line'
+    | 'area'
+    | 'doughnut'
+    | 'scatter'
+    | 'radar';
+
+/** 图表锚点单元格（行列均 0 基，与 OOXML 的 xdr:from / xdr:to 一致） */
+export interface XlsxChartAnchorCell {
+    /** 列号（0 基） */
+    col: number;
+    /** 行号（0 基） */
+    row: number;
+    /** 单元格内横向偏移（EMU，1px = 9525 EMU） */
+    colOff?: number;
+    /** 单元格内纵向偏移（EMU） */
+    rowOff?: number;
+}
+
+/** 图表锚点：双格锚点给 from/to，单格锚点给 from + ext */
+export interface XlsxChartAnchor {
+    /** 起始单元格 */
+    from: XlsxChartAnchorCell;
+    /** 结束单元格（双格锚点） */
+    to?: XlsxChartAnchorCell;
+    /** 尺寸（EMU，单格锚点） */
+    ext?: { cx: number; cy: number };
+}
+
+/** 图表数据系列 */
+export interface XlsxChartSeries {
+    /** 系列名（如「销售额(元)」） */
+    name?: string;
+    /** 系列名所在单元格引用，如 `'汇总看板'!$B$7` */
+    nameRef?: string;
+    /** 分类轴数据引用，如 `'汇总看板'!$A$8:$A$10` */
+    catRef?: string;
+    /** 分类轴缓存值 */
+    cats?: (string | number | null)[];
+    /** 数值轴数据引用，如 `'汇总看板'!$B$8:$B$10` */
+    valRef?: string;
+    /** 数值轴缓存值 */
+    vals?: (number | null)[];
+    /** 散点图 x 值引用（`c:xVal`），如 `'Sheet1'!$A$2:$A$9` */
+    xRef?: string;
+    /** 散点图 x 值缓存 */
+    xVals?: (number | null)[];
+    /** 系列颜色 #RRGGBB */
+    color?: string;
+    /** 逐点颜色（`c:dPt`），按数据点顺序 */
+    pointColors?: string[];
+}
+
+/** 图表数据标签开关 */
+export interface XlsxChartLabels {
+    /** 显示数值 */
+    value?: boolean;
+    /** 显示百分比 */
+    percent?: boolean;
+    /** 显示分类名 */
+    category?: boolean;
+}
+
+/** 图表 */
+export interface XlsxChart {
+    /** 图表类型 */
+    type: XlsxChartType;
+    /** 图表标题 */
+    title?: string;
+    /** 锚点（决定图表在表中的位置与大小） */
+    anchor: XlsxChartAnchor;
+    /** 数据系列 */
+    series: XlsxChartSeries[];
+    /** 图例位置；'none' 表示不显示 */
+    legend?: 'none' | 'l' | 'r' | 't' | 'b';
+    /** 数据标签开关 */
+    labels?: XlsxChartLabels;
+    /** 兼容字段：是否显示百分比标签（等价于 labels.percent） */
+    showPercent?: boolean;
+    /** 数值轴数字格式（如 '¥#,##0'） */
+    valNumFmt?: string;
+    /** 分组方式 */
+    grouping?: 'clustered' | 'stacked' | 'standard' | 'percentStacked';
+    /** 环形图内径百分比（10~90） */
+    holeSize?: number;
+    /** 折线图数据点标记 */
+    marker?: boolean;
+    /** 折线图平滑 */
+    smooth?: boolean;
+    /** 饼图逐点配色 */
+    varyColors?: boolean;
+}
+
 /** 工作表 */
 export interface XlsxSheet {
     /** 表名 */
@@ -137,6 +234,8 @@ export interface XlsxSheet {
     hidden?: boolean;
     /** 页面方向 */
     orientation?: 'portrait' | 'landscape';
+    /** 表内图表（浮动对象，按锚点定位） */
+    charts?: XlsxChart[];
 }
 
 /** 工作簿元数据 */

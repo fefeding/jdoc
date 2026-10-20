@@ -8,12 +8,14 @@
  */
 
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import { wrapError } from '../core/errors';
 import {
     resolveAssetBytes,
     toAssetTable,
     type AssetTable
 } from '../core/asset';
+import { writeWorkbookCharts } from './chart-write';
 import type {
     XlsxCell,
     XlsxCellObject,
@@ -352,7 +354,20 @@ export async function generateXlsx(
 
         // exceljs 的 writeBuffer 只接受 JSZip 生成选项，压缩与否由 zip 选项透传
         const buffer = (await workbook.xlsx.writeBuffer(options.zip === false ? {} : {})) as ArrayBuffer;
-        return new Uint8Array(buffer);
+        const bytes = new Uint8Array(buffer);
+
+        // 图表：exceljs 不支持，需在产出后补写图表部件（否则保存一次图表就没了）
+        const charts = spec.sheets.filter((s) => s.charts && s.charts.length);
+        if (charts.length) {
+            try {
+                const zip = await JSZip.loadAsync(bytes);
+                await writeWorkbookCharts(zip, spec.sheets);
+                return await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+            } catch {
+                // 图表写回失败不阻断保存：先给出无图表的文件
+            }
+        }
+        return bytes;
     } catch (error) {
         throw wrapError('xlsx', '生成', error);
     }

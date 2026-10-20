@@ -1,34 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4C63E8"/>
-      <stop offset="1" stop-color="#2A3CB8"/>
-    </linearGradient>
-    <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#D8DEF5"/>
-      <stop offset="1" stop-color="#B9C2EC"/>
+      <stop offset="0" stop-color="#5F7DFB"/>
+      <stop offset="1" stop-color="#2B3AC0"/>
     </linearGradient>
   </defs>
 
-  <!-- background -->
-  <rect x="0" y="0" width="512" height="512" fill="url(#bg)"/>
+  <!-- rounded tile background -->
+  <rect x="0" y="0" width="512" height="512" rx="100" fill="url(#bg)"/>
 
-  <!-- document sheet with folded corner (top-right) -->
-  <path d="M136 76 h160 l80 80 v280 a20 20 0 0 1 -20 20 H136 a20 20 0 0 1 -20 -20 V96 a20 20 0 0 1 20 -20 Z" fill="#FFFFFF"/>
-  <path d="M296 76 l80 80 h-64 a16 16 0 0 1 -16 -16 Z" fill="url(#fold)"/>
+  <!-- back sheet (depth) -->
+  <path d="M174 106 h116 l74 74 v200 a26 26 0 0 1 -26 26 H174 a26 26 0 0 1 -26 -26 V132 a26 26 0 0 1 26 -26 Z"
+        transform="translate(20 20)" fill="#FFFFFF" opacity=".26"/>
 
-  <!-- four format badges -->
-  <g font-family="Helvetica, Arial, sans-serif" font-weight="bold" text-anchor="middle">
-    <rect x="150" y="150" width="212" height="44" rx="10" fill="#D24726"/>
-    <text x="256" y="181" font-size="28" fill="#FFFFFF">PPT</text>
+  <!-- front sheet with folded corner -->
+  <path d="M174 106 h116 l74 74 v200 a26 26 0 0 1 -26 26 H174 a26 26 0 0 1 -26 -26 V132 a26 26 0 0 1 26 -26 Z" fill="#FFFFFF"/>
+  <path d="M290 106 l74 74 h-50 a24 24 0 0 1 -24 -24 Z" fill="#D8E1FF"/>
 
-    <rect x="150" y="212" width="212" height="44" rx="10" fill="#E5252A"/>
-    <text x="256" y="243" font-size="28" fill="#FFFFFF">PDF</text>
-
-    <rect x="150" y="274" width="212" height="44" rx="10" fill="#2B579A"/>
-    <text x="256" y="305" font-size="28" fill="#FFFFFF">DOC</text>
-
-    <rect x="150" y="336" width="212" height="44" rx="10" fill="#217346"/>
-    <text x="256" y="367" font-size="28" fill="#FFFFFF">XLS</text>
-  </g>
+  <!-- content lines -->
+  <rect x="190" y="234" width="132" height="22" rx="11" fill="#C4CDF0"/>
+  <rect x="190" y="282" width="132" height="22" rx="11" fill="#C4CDF0"/>
+  <rect x="190" y="330" width="84" height="22" rx="11" fill="#3D51E0"/>
 </svg>

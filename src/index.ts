@@ -17,6 +17,7 @@ export * from './core/bundle';
 export * from './pptx/index';
 export * from './docx/index';
 export * from './xlsx/index';
+export * from './chart/index';
 export * from './pdf/index';
 export * from './markdown/index';
 export * from './text/index';

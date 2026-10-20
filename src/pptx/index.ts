@@ -30,6 +30,7 @@ export { normalizeDoc, normalizeElement } from '@fefeding/ppt-parser';
 // 编辑核心与编辑器 UI 常量：供 VS Code 插件（及任何需要直接编辑 PPTX 的消费者）
 // 复用 ppt-parser 的编辑器能力。docFromPptx/docToPptx 是编辑器文档模型的序列化入口，
 // 其余为 ribbon/dialogs 所需的展示常量。
+export { pptxChartToSpec, type PptxChartTheme } from './chart';
 export {
   docFromPptx,
   docToPptx,

@@ -21,3 +21,4 @@ verify-charts.mjs
 examples/*.pdf
 examples/*.docx
 vscode/*.vsix
+examples/*.xlsx
