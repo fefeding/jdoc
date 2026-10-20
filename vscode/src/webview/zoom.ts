@@ -13,6 +13,8 @@
 // 3. 用户手动设定倍率后保持该倍率（切窗口大小不跟随），只有打开新文档时才复位，
 //    与 pptx-editor 的行为一致。
 
+import { t } from './i18n';
+
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
 /** fit 时在可视宽度里预留的留白，避免纸面紧贴滚动条 */
@@ -179,10 +181,10 @@ export function createZoomCluster(ctl: ZoomController, labels?: { fit?: string }
         return b;
     };
 
-    const outBtn = chip('−', '缩小', () => ctl.step(1 / 1.1));
-    const fitBtn = chip(labels?.fit || '适应', '适应宽度', () => ctl.fit());
-    const labelBtn = chip('100%', '实际大小（100%）', () => ctl.actual());
-    const inBtn = chip('+', '放大', () => ctl.step(1.1));
+    const outBtn = chip('−', t('zoom.out'), () => ctl.step(1 / 1.1));
+    const fitBtn = chip(labels?.fit || t('zoom.fit'), t('zoom.fitWidth'), () => ctl.fit());
+    const labelBtn = chip('100%', t('zoom.actual'), () => ctl.actual());
+    const inBtn = chip('+', t('zoom.in'), () => ctl.step(1.1));
     el.append(outBtn, fitBtn, labelBtn, inBtn);
 
     const sync = (): void => {

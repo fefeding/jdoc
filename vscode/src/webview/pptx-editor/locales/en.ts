@@ -365,6 +365,7 @@ export const en = {
   'toast.serializeFailed': 'Cannot serialize this document: {0}',
   'toast.mediaNotPlayable': 'Media cannot be played while editing',
   'toast.needSelection': 'Select an element first',
+  'toast.convertAck': 'Please choose a target format from the list',
   'confirm.applyLayout': 'Applying a layout replaces every element on this slide. Continue?',
   'confirm.deleteSlide': 'Delete this slide?',
   'confirm.deleteSlideBody': 'Slide {0} will be removed. This can be undone with Ctrl+Z.',

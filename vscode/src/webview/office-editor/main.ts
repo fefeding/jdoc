@@ -6,11 +6,12 @@
 //
 // 外壳：左侧目录/编号索引栏（大纲）+ 右侧内容区。DOCX 两个模式都按纸张高度分页，
 // 每页独立成盒并带页码，观感对齐 Word/WPS；XLSX 是网格工作表，不分页、无大纲。
-import { docxToHtml, xlsxToHtml, type DocxSection } from '@fefeding/jdoc';
+import { docxToHtml, type DocxSection } from '@fefeding/jdoc';
 import { officeCss } from './style';
 import { CHROME_CSS } from '../chrome';
 import { convertMenuEntry, copySelection, hasTextSelection, installContextMenu, notifyConvertAck, postConvert, setConvertStatusSink, setCurrentDocUri, setHostPostMessage } from '../chrome';
 import { createZoom, createZoomCluster } from '../zoom';
+import { setLocale, t } from '../i18n';
 import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
 import { createXlsxEditor, type XlsxEditor } from './xlsx';
@@ -33,6 +34,8 @@ let root: HTMLElement;
 let toolbarEl: HTMLElement;
 let contentEl: HTMLElement;
 let statusEl: HTMLElement;
+let statusBarEl: HTMLElement;
+let convertBtnEl: HTMLElement;
 
 const zoom = createZoom();
 /** 当前已绑定缩放的内容根，用于跳过重复绑定 */
@@ -92,7 +95,10 @@ function buildShell(): void {
         onToggle: () => bindZoom()
     });
 
-    app.append(toolbarEl, h('div', { class: 'oe-body' }, [outline.el, contentEl]), h('div', { class: 'oe-statusbar' }, [statusEl, convertBtn(), createZoomCluster(zoom)]));
+    statusBarEl = h('div', { class: 'oe-statusbar' });
+    convertBtnEl = convertBtn();
+    statusBarEl.append(statusEl, convertBtnEl, createZoomCluster(zoom));
+    app.append(toolbarEl, h('div', { class: 'oe-body' }, [outline.el, contentEl]), statusBarEl);
     root.append(app);
 
     // 缩放会改变内容高度与各标题的视口位置，但缩放本身不触发 scroll 事件，
@@ -116,8 +122,8 @@ function buildShell(): void {
  */
 function convertBtn(): HTMLElement {
     const btn = h('button', { class: 'chip', type: 'button' });
-    btn.textContent = '转换格式';
-    btn.title = '转换为其他格式（DOCX / PDF / Markdown / HTML）';
+    btn.textContent = t('chrome.convert');
+    btn.title = t('chrome.convertTitle');
     // 走 chrome.ts 的 postConvert：它会带上当前文档 uri，宿主才能精确定位目标文件。
     // 不能直接用 vscode.postMessage——那条路拿不到 uri。
     btn.addEventListener('click', () => postConvert());
@@ -299,19 +305,20 @@ function bindZoom(): void {
         zoom.bind({ target: null });
         return;
     }
-    // XLSX 缩放作用在网格表上：.oe-xl 是 height:100% 的 flex 容器，缩放它会把整个
-    // 面板（含工作表标签与冻结区）按倍率压缩，和滚动区对不上。只缩表格本身，
+    // XLSX 缩放作用在网格画布上：.oe-xl 是 height:100% 的 flex 容器，缩放它会把整个
+    // 面板（含工作表标签与冻结区）按倍率压缩，和滚动区对不上。只缩画布本身，
     // 滚动容器 .oe-grid-wrap 保持满高，冻结行列仍按 sticky 正常吸附。
     let target: HTMLElement;
     let container: HTMLElement;
     let paper: HTMLElement;
     if (el.classList.contains('oe-xl')) {
-        // .oe-grid 每次重绘（增删行列 / 切工作表 / undo）都会被整体重建，
-        // 而 .oe-xl 这个根节点不变。若拿 .oe-xl 当「已绑定」判据，缩放会一直
-        // 挂在已被替换掉的旧 grid 上，表现为缩放对 XLSX 完全无效。
+        // 目标取 .oe-grid-canvas：表格与浮在上面的图表层都在它内部，一起缩放、
+        // 不会错位；而 .oe-grid 每次重绘（增删行列 / 切工作表 / undo）都会被整体
+        // 重建，canvas 本身不变，缩放倍率因此能在重绘后保留。
+        const canvas = el.querySelector<HTMLElement>('.oe-grid-canvas');
         const grid = el.querySelector<HTMLElement>('.oe-grid');
-        if (!grid) return; // 网格还没建好，等下一次内容变化再绑
-        target = grid;
+        if (!canvas || !grid) return; // 网格还没建好，等下一次内容变化再绑
+        target = canvas;
         container = el.querySelector<HTMLElement>('.oe-grid-wrap') ?? el;
         paper = grid;
     } else {
@@ -330,6 +337,21 @@ function bindZoom(): void {
     zoom.bind({ target, container, paper });
 }
 
+/**
+ * 语言落地：状态栏里的文案（缩放簇、转换按钮）是创建时烘焙的，
+ * 而外壳在 init 消息到达前就建好了——init 里的 locale 才是权威值，
+ * 所以这里在拿到语言后重建一次带文案的控件。
+ */
+function applyLocale(): void {
+    if (!statusBarEl) return;
+    const oldCluster = statusBarEl.querySelector('.jc-zoom');
+    if (oldCluster) statusBarEl.replaceChild(createZoomCluster(zoom), oldCluster);
+    if (convertBtnEl) {
+        convertBtnEl.textContent = t('chrome.convert');
+        convertBtnEl.title = t('chrome.convertTitle');
+    }
+}
+
 // ---------- 模式 ----------
 async function applyMode(): Promise<void> {
     updateModeHint();
@@ -346,19 +368,20 @@ async function enterView(): Promise<void> {
     }
     const my = ++viewGen;
     toolbarEl.innerHTML = '';
-    statusEl.textContent = '查看模式（只读）';
+    statusEl.textContent = t('oe.readOnly');
     contentEl.innerHTML = '';
     // 解析/分页期间先给出反馈：大文档（教材、报表）在 await 期间是纯白屏，
     // 用户会以为卡死。这里先挂一个提示，解析完成后再替换。
-    contentEl.append(h('div', { class: 'oe-hint', text: `正在解析 ${format.toUpperCase()}…` }));
+    contentEl.append(h('div', { class: 'oe-hint', text: t('oe.parsing', format.toUpperCase()) }));
     try {
         if (format === 'xlsx') {
-            const html = (await xlsxToHtml(latest)).html;
-            const view = h('div', { class: 'oe-view' });
-            const page = h('div', { class: 'page' });
-            page.innerHTML = html;
-            view.append(page);
-            contentEl.replaceChildren(view);
+            // XLSX 查看态复用编辑器的网格渲染（只读）：列宽行高、边框、图表、
+            // 工作表标签都与 Excel 一致，不再退化成一张普通 HTML 表格
+            const x = createXlsxEditor(hooks, { readonly: true });
+            x.setStatusHandler((s) => (statusEl.textContent = s));
+            editor = x;
+            editor.mount(toolbarEl, contentEl);
+            await editor.load(latest);
         } else if (format === 'docx') {
             const { html, section } = await docxToHtml(latest);
             const view = await renderDocxPages(html, section);
@@ -468,6 +491,8 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             const my = ++gen; // 丢弃此后被更新的 init 所取代的异步结果
             format = msg.format;
             mode = msg.mode === 'edit' ? 'edit' : 'view';
+            // 语言：init 里的 locale 是权威值（外壳建得比 init 早，文案要补一次）
+            if (setLocale(msg.locale)) applyLocale();
             // 记住当前文档 uri：转换请求必须带上，否则宿主只能靠 activeTextEditor 猜
             setCurrentDocUri(msg.uri ?? null);
             latest = b64ToBytes(msg.bytes);
@@ -512,7 +537,7 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
 });
 
 function updateModeHint(): void {
-    if (statusEl && mode === 'view') statusEl.textContent = '查看模式（只读）';
+    if (statusEl && mode === 'view') statusEl.textContent = t('oe.readOnly');
 }
 
 // ---------- 启动 ----------
@@ -530,7 +555,7 @@ function main(): void {
         () => {
             const entries = [];
             if (hasTextSelection()) {
-                entries.push({ label: '复制', action: () => copySelection(), hint: '⌘C' });
+                entries.push({ label: t('main.copy'), action: () => copySelection(), hint: '⌘C' });
                 entries.push({});
             }
             entries.push(convertMenuEntry());

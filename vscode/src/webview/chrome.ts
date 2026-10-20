@@ -127,6 +127,8 @@ button, input, select, textarea { font-family: inherit; }
  * 在点击时抛异常——表现为「按钮点了没反应」，而 TAB 右键（走 VS Code 命令，不碰
  * webview API）却正常，很难定位。故统一由入口注入自己的 post 函数。
  */
+import { t } from './i18n';
+
 let hostPost: (msg: unknown) => void = () => undefined;
 
 /** 注入向宿主发消息的函数（入口在模块顶层调用一次即可） */
@@ -147,8 +149,8 @@ export function createConvertChip(): HTMLButtonElement {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'chip';
-    btn.textContent = '转换格式';
-    btn.title = '转换为其他格式（DOCX / PDF / Markdown / HTML）';
+    btn.textContent = t('chrome.convert');
+    btn.title = t('chrome.convertTitle');
     btn.addEventListener('click', () => postConvert());
     return btn;
 }
@@ -177,12 +179,12 @@ export function setConvertStatusSink(fn: ((text: string) => void) | null): void 
 
 /** 宿主已回执：目标格式选择框即将弹出 */
 export function notifyConvertAck(): void {
-    convertStatusSink?.('请在弹出的列表中选择目标格式');
+    convertStatusSink?.(t('chrome.convertAck'));
 }
 
 /** 向宿主请求转换当前文档 */
 export function postConvert(): void {
-    convertStatusSink?.('正在请求转换…');
+    convertStatusSink?.(t('chrome.convertRequesting'));
     hostPost({ type: 'convert', uri: currentDocUri ?? undefined });
 }
 
@@ -193,7 +195,7 @@ export function postConvert(): void {
  */
 export function convertMenuEntry(): ContextMenuEntry {
     return {
-        label: '转换格式…',
+        label: t('chrome.convertMenu'),
         action: () => postConvert()
     };
 }

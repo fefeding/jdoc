@@ -8,6 +8,7 @@ import { createConvertChip, convertMenuEntry, copySelection, hasTextSelection, i
 import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
 import { highlightCodeBlocks, markdownCodeCss } from './markdown-code';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
+import { t } from './i18n';
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
@@ -119,8 +120,8 @@ async function renderContent(): Promise<void> {
             await pdfViewer.open(currentBytes);
         } catch (err: any) {
             console.error('[pdf] renderContent open failed:', err);
-            pdfViewer.content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
-            setStatus('渲染失败');
+            pdfViewer.content.innerHTML = `<pre class="error">${escapeHtml(t('main.renderFailed', String(err?.message || err)))}</pre>`;
+            setStatus(t('main.failed'));
             vscode.postMessage({ type: 'error', message: String(err?.message || err) });
         }
         return;
@@ -128,12 +129,12 @@ async function renderContent(): Promise<void> {
     if (mode === 'edit') {
         // PPTX / DOCX / XLSX 已各自使用独立编辑器入口（pptx-editor.js / office-editor.js）；
         // 能走到这里的仅 MD / TXT，按只读处理。
-        const name = format === 'md' ? 'Markdown' : '纯文本';
+        const name = format === 'md' ? 'Markdown' : t('main.plainText');
         const hint = document.createElement('div');
         hint.className = 'hint';
-        hint.textContent = `${name}为只读查看，暂不支持编辑。`;
+        hint.textContent = t('main.readOnlyHint', name);
         content.replaceChildren(hint);
-        setStatus('只读预览');
+        setStatus(t('main.readOnlyStatus'));
         bindZoom();
         return;
     }
@@ -149,8 +150,8 @@ async function renderContent(): Promise<void> {
         else if (format === 'txt') await renderText(content, currentBytes);
         bindZoom();
     } catch (err: any) {
-        content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
-        setStatus('渲染失败');
+        content.innerHTML = `<pre class="error">${escapeHtml(t('main.renderFailed', String(err?.message || err)))}</pre>`;
+        setStatus(t('main.failed'));
         bindZoom();
         vscode.postMessage({ type: 'error', message: String(err?.message || err) });
     }
@@ -175,7 +176,9 @@ async function renderPptx(content: HTMLElement, bytes: Uint8Array): Promise<void
         chartRenderer.renderCharts(r.charts, wrap);
     }
     const slideCount = (r.slides || []).length;
-    setStatus(`共 ${slideCount} 页幻灯片${r.charts?.length ? `，${r.charts.length} 个图表` : ''}`);
+    let slidesStatus = t('main.slidesStatus', slideCount);
+    if (r.charts?.length) slidesStatus += t('main.chartsSuffix', r.charts.length);
+    setStatus(slidesStatus);
 }
 
 async function renderDocx(content: HTMLElement, bytes: Uint8Array): Promise<void> {
@@ -185,7 +188,7 @@ async function renderDocx(content: HTMLElement, bytes: Uint8Array): Promise<void
     body.innerHTML = html;
     content.appendChild(body);
 
-    setStatus('DOCX 文档预览');
+    setStatus(t('main.docxStatus'));
 }
 
 async function renderXlsx(content: HTMLElement, bytes: Uint8Array): Promise<void> {
@@ -195,7 +198,7 @@ async function renderXlsx(content: HTMLElement, bytes: Uint8Array): Promise<void
     body.innerHTML = html;
     content.appendChild(body);
 
-    setStatus('XLSX 表格预览');
+    setStatus(t('main.xlsxStatus'));
 }
 
 async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<void> {
@@ -221,9 +224,9 @@ async function renderMarkdown(content: HTMLElement, bytes: Uint8Array): Promise<
             (document.documentElement.getAttribute('data-oe-theme') === 'dark');
         await renderMarkdownExtras(body, { theme: dark ? 'dark' : 'default' });
     } catch (err: any) {
-        messages.push(`图表/公式渲染失败：${String(err?.message || err)}`);
+        messages.push(t('main.extrasFailed', String(err?.message || err)));
     }
-    setStatus(messages.length ? 'Markdown 预览（有清洗提示）' : 'Markdown 预览');
+    setStatus(messages.length ? t('main.mdStatusWithNotes') : t('main.mdStatus'));
     if (messages.length) {
         const note = document.createElement('div');
         note.className = 'hint';
@@ -239,7 +242,7 @@ async function renderText(content: HTMLElement, bytes: Uint8Array): Promise<void
     body.innerHTML = html;
     content.appendChild(body);
 
-    setStatus('纯文本预览');
+    setStatus(t('main.txtStatus'));
 }
 
 /**
@@ -268,7 +271,7 @@ async function rasterize(bytes: Uint8Array, scale: number): Promise<void> {
             canvas.width = Math.ceil(viewport.width);
             canvas.height = Math.ceil(viewport.height);
             const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('无法创建 canvas 2D 上下文');
+            if (!ctx) throw new Error(t('main.canvasError'));
             // 铺白底：PDF 页面本身透明，直接导出会得到透明 PNG，在部分看图器里显示为黑块
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -335,7 +338,7 @@ vscode.postMessage({ type: 'ready' });
 installContextMenu(() => {
     const entries = [];
     if (hasTextSelection()) {
-        entries.push({ label: '复制', action: () => copySelection(), hint: '⌘C' });
+        entries.push({ label: t('main.copy'), action: () => copySelection(), hint: '⌘C' });
         entries.push({});
     }
     entries.push(convertMenuEntry());

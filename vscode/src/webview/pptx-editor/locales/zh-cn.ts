@@ -361,6 +361,7 @@ export const zhCN: Record<keyof typeof en, string> = {
   'toast.serializeFailed': '无法序列化文档：{0}',
   'toast.mediaNotPlayable': '编辑状态下无法播放媒体',
   'toast.needSelection': '请先选择一个元素',
+  'toast.convertAck': '请在弹出的列表中选择目标格式',
   'confirm.applyLayout': '应用版式将替换此页上的所有元素。是否继续？',
   'confirm.deleteSlide': '删除此幻灯片？',
   'confirm.deleteSlideBody': '将删除幻灯片 {0}，可通过撤销恢复。',

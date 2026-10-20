@@ -19,10 +19,10 @@ const PDF_WORKER_URL = pathToFileURL(path.join(__dirname, 'pdf.worker.mjs')).hre
 const SUPPORTED_EXT = /\.(docx|pdf|md|markdown|html|htm|txt)$/;
 /** 各目标格式对应的展示名 / 扩展名 / 保存过滤器 */
 const TARGET_META: Record<ConvertTarget, { label: string; ext: string; filter: Record<string, string[]> }> = {
-    docx: { label: 'Word 文档 (.docx)', ext: 'docx', filter: { Word: ['docx'] } },
-    pdf: { label: 'PDF 文档 (.pdf)', ext: 'pdf', filter: { PDF: ['pdf'] } },
-    md: { label: 'Markdown (.md)', ext: 'md', filter: { Markdown: ['md', 'markdown'] } },
-    html: { label: 'HTML 网页 (.html)', ext: 'html', filter: { HTML: ['html', 'htm'] } }
+    docx: { label: loc('extension.target.docx', 'Word Document (.docx)'), ext: 'docx', filter: { Word: ['docx'] } },
+    pdf: { label: loc('extension.target.pdf', 'PDF Document (.pdf)'), ext: 'pdf', filter: { PDF: ['pdf'] } },
+    md: { label: loc('extension.target.md', 'Markdown (.md)'), ext: 'md', filter: { Markdown: ['md', 'markdown'] } },
+    html: { label: loc('extension.target.html', 'HTML Web Page (.html)'), ext: 'html', filter: { HTML: ['html', 'htm'] } }
 };
 /** 文件扩展名 -> 源格式（传给 convert 的 from 参数） */
 function extToFormat(path: string): ConvertTarget | 'txt' | undefined {
@@ -44,7 +44,14 @@ const VIEW_TYPE = 'jdoc.documentEditor';
  */
 function loc(key: string, fallback: string, ...args: string[]): string {
     const value = vscode.l10n.t(key, ...args);
-    return !value || value === key ? fallback.replace('{0}', args[0] ?? '') : value;
+    if (value && value !== key) return value;
+    // 回退文案：与 webview 端一致的 {n} 位置占位符插值（支持 {0}/{1}/…），
+    // 避免多参数消息在回退分支漏替换而残留字面量占位符。
+    if (!args.length) return fallback;
+    return fallback.replace(/\{(\d+)\}/g, (m, i) => {
+        const v = args[Number(i)];
+        return v == null ? m : String(v);
+    });
 }
 
 function getNonce(): string {
@@ -343,14 +350,14 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         }
 
         const items = [
-            { label: loc('extension.toImages', '图片（PNG，每页一张）'), target: IMAGE_TARGET },
+            { label: loc('extension.toImages', 'Images (PNG, one per page)'), target: IMAGE_TARGET },
             ...(Object.keys(TARGET_META) as ConvertTarget[])
                 .filter((k) => k !== from)
                 .map((k) => ({ label: TARGET_META[k].label, target: k }))
         ];
         const picked = await vscode.window.showQuickPick(items, {
             placeHolder: loc('extension.convertTo', 'Convert "{0}" to which format?', sourceName),
-            title: loc('extension.convertTitle', 'jdoc: 转换文档格式')
+            title: loc('extension.convertTitle', 'jdoc: Convert Document Format')
         });
         if (!picked) return;
 
@@ -407,7 +414,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         return new Promise<number>((resolve, reject) => {
             const panel = vscode.window.createWebviewPanel(
                 'jdoc.rasterize',
-                loc('extension.rasterizing', '正在导出图片…'),
+                loc('extension.rasterizing', 'Exporting images…'),
                 { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
                 { enableScripts: true, enableCommandUris: false }
             );
@@ -449,7 +456,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                         break;
                 }
             });
-            panel.onDidDispose(() => finish(new Error(loc('extension.rasterizeCanceled', '导出图片已取消'))));
+            panel.onDidDispose(() => finish(new Error(loc('extension.rasterizeCanceled', 'Image export canceled'))));
         });
     }
 
@@ -467,7 +474,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             canSelectFolders: true,
             canSelectFiles: false,
             canSelectMany: false,
-            title: loc('extension.pickImageFolder', '选择图片输出目录')
+            title: loc('extension.pickImageFolder', 'Select image output folder')
         });
         const folder = picked?.[0];
         if (!folder) return;
@@ -475,7 +482,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
-                title: loc('extension.exportingImages', '导出图片…')
+                title: loc('extension.exportingImages', 'Exporting images…')
             },
             async () => {
                 try {
@@ -490,7 +497,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                         );
                     });
                     vscode.window.showInformationMessage(
-                        `${loc('extension.imagesExported', '已导出 {0} 张图片', String(written))} → ${folder.fsPath}`
+                        `${loc('extension.imagesExported', 'Exported {0} images', String(written))} → ${folder.fsPath}`
                     );
                 } catch (err: any) {
                     vscode.window.showErrorMessage(

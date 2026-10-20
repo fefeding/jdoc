@@ -1,94 +1,86 @@
 # jdoc Document Viewer
 
-VS Code 扩展，基于 [`@fefeding/jdoc`](https://github.com/fefeding/jdoc) 在编辑器内**查看并编辑**办公文档：
+A VS Code extension that lets you **view and edit** office documents right inside the editor, built on [`@fefeding/jdoc`](https://github.com/fefeding/jdoc):
 
-- **PPTX** — 幻灯片渲染（含图表），可编辑
-- **DOCX** — 文档渲染（按纸张分页），可编辑
-- **XLSX** — 表格渲染，可编辑
-- **PDF** — 页面栅格化渲染（支持扫描件），可叠加编辑：签名 / 图片 / 文本 / 矩形 / 手绘；大文档打开时先显示加载提示并优先渲染首页，其余页与缩略图后台增量补齐
-- **Markdown**（`.md` / `.markdown`）— 排版预览（只读，围栏代码块语法高亮，支持 Mermaid 图表与 KaTeX 公式）
-- **纯文本**（`.txt`）— 等宽预览（只读）
+- **PPTX** — slide rendering (including charts), editable
+- **DOCX** — document rendering (paginated by paper size), editable
+- **XLSX** — spreadsheet rendering in an Excel-like grid (column/row headers, real column widths and row heights, cell borders / fills / fonts / number formats, merged cells, frozen panes), with **sheet tabs**, an in-cell **formula bar**, a status bar showing Sum / Count / Average for the selection, and **charts** (column / bar / pie / doughnut / line / area / scatter / radar) anchored to cells and refreshed live from the referenced cells; formulas (including cross-sheet references and Chinese sheet names) are evaluated incrementally when a cell is edited. Charts survive saving, and cells are editable. Chart drawing is shared with the PPTX editor through the library's `chart/svg` module, so both formats render the same chart types with the same legend / data-label / number-format rules.
+- **PDF** — rasterized page rendering (scanned documents supported), with overlay editing: signature / image / text / rectangle / freehand; large documents show a loading indicator first and prioritize the first page, while the rest of the pages and the thumbnails are filled in incrementally in the background
+- **Markdown** (`.md` / `.markdown`) — typeset preview (read-only, fenced code blocks with syntax highlighting, Mermaid diagrams and KaTeX formulas supported)
+- **Plain text** (`.txt`) — monospace preview (read-only)
 
-打开 PPTX / DOCX / XLSX / PDF 会自动以本扩展打开（作为默认编辑器）。
-Markdown / TXT 因 VS Code 内置编辑器优先级更高，需在文件上右键选择 **“jdoc: 用 jdoc 打开预览”**（命令 `jdoc.preview`），或经“打开方式”选择 `jdoc Document Editor`。
+Opening a PPTX / DOCX / XLSX / PDF automatically uses this extension (as the default editor). Because VS Code's built-in editor has higher priority for Markdown / TXT, you need to right-click the file and choose **"jdoc: Open Preview with jdoc"** (command `jdoc.preview`), or pick `jdoc Document Editor` via "Open With".
 
-支持编辑后保存到原文件（`Ctrl/Cmd+S`）、`Revert`（还原）、`Export Copy`（另存副本）。
+After editing you can save back to the original file (`Ctrl/Cmd+S`), `Revert` (restore), or `Export Copy` (save a copy).
 
-## Markdown 预览能力
+## Markdown Preview Features
 
-- **Mermaid**：` ```mermaid ` 围栏渲染为 SVG，支持 flowchart / sequence / class / state / ER / gantt / pie 等图
-- **KaTeX**：支持 `$行内$`、`$$块级$$`、`\[…\]`、`\(…\)`，以及 ` ```math ` / ` ```tex ` 围栏
-- 语法错误或依赖未加载时保留源码显示，不会白屏
+- **Mermaid**: ` ```mermaid ` fenced blocks render as SVG, supporting flowchart / sequence / class / state / ER / gantt / pie diagrams
+- **KaTeX**: supports `$inline$`, `$$block$$`, `\[…\]`, `\(…\)`, as well as ` ```math ` / ` ```tex ` fences
+- Syntax errors or unloaded dependencies keep the source visible instead of blanking out
 
-> 注意：普通 `$5 和 $6` 这类货币写法不会被当成公式（要求 `$` 内侧不紧跟空白）。
+> Note: ordinary currency writing like `$5 and $6` is not treated as a formula (the character inside `$` must not be followed immediately by whitespace).
 
-## PDF 叠加编辑
+## PDF Overlay Editing
 
-工具栏铅笔按钮（或标题栏「切换到编辑」）进入编辑模式，多出一行叠加工具栏：
+Click the pencil button on the toolbar (or "Switch to Edit" in the title bar) to enter edit mode, which adds a row of overlay tools:
 
-| 工具 | 快捷键 | 说明 |
+| Tool | Shortcut | Description |
 | --- | --- | --- |
-| 选择 | `V` | 选中后可拖拽移动，8 向手柄缩放；`Delete` / `×` 删除，`Esc` 取消 |
-| 文本 | `T` | 点击落点后输入内容，支持字号、文字颜色；嵌入中文需宿主提供 TTF |
-| 图片 | `I` | 选图片文件（PNG / JPEG）后插入左上角，拖拽缩放定位 |
-| 矩形 | `R` | 点击落一个高亮块 / 遮挡块（填充 + 描边 + 半透明） |
-| 手绘 | `D` | 按下拖出一笔，用于手写签名 |
+| Select | `V` | After selecting, drag to move; 8-direction handles to resize; `Delete` / `×` to delete, `Esc` to cancel |
+| Text | `T` | Click to place, then type; font size and text color supported; embedding Chinese requires a TTF font from the host |
+| Image | `I` | Choose an image file (PNG / JPEG), inserted at the top-left; drag and resize to position |
+| Rectangle | `R` | Click to drop a highlight / cover block (fill + stroke + semi-transparent) |
+| Freehand | `D` | Press and drag to draw a stroke, for handwritten signatures |
 
-保存（`Ctrl/Cmd+S` 或工具栏「保存」）把叠加内容写进 PDF 并回写原文件。
+Save (`Ctrl/Cmd+S` or the toolbar "Save") writes the overlay content into the PDF and back to the original file.
 
-叠加是**扁平化**的：内容被追加到页面内容流，之后无法再单独撤回。它不会改动原有正文——矢量
-路径、字体子集、表单域等一律原样保留。页面管理与合并拆分见库层 `editPdf` / `mergePdfs` /
-`splitPdf`。
+The overlay is **flattened**: content is appended to the page content stream and cannot be individually undone afterwards. It does not modify the original body text — vector paths, font subsets, form fields, etc. are all preserved as-is. For page management and merge/split, see the library-level `editPdf` / `mergePdfs` / `splitPdf`.
 
-## DOCX 分页与排版还原
+## DOCX Pagination and Typesetting Fidelity
 
-DOCX 在查看模式下按纸张高度分页，尽量对齐 Word/WPS 的观感：
+DOCX paginates by paper height in view mode, trying to match the look of Word/WPS:
 
-- **行网格**：中文 Word 几乎都会开 `w:docGrid`（行距网格），未显式设行距的段落按网格对齐，
-  不还原会让每页多塞几行、分页整体前移
-- **行距倍数**：Word 的「多倍行距」是单倍行距（约 1.2×字号）的倍数，不是字号本身的倍数，
-  直接当 CSS `line-height` 用会偏小约 20%
-- **与下段同页**：标题不会孤立在页尾（Word 的 keepNext）
-- **跨页与孤行控制**：段落可在行边界跨页拆分，且页尾/页首都至少留 2 行（widow/orphan）
-- **列表编号与缩进**：还原 numbering 的编号格式（`a. b. c.` / `i. ii. iii.`）与 `w:ind` 缩进
+- **Line grid**: almost all Chinese Word documents enable `w:docGrid` (line grid); paragraphs without explicit line spacing align to the grid — without restoring this, each page fits a few extra lines and pagination shifts forward overall
+- **Line spacing multiplier**: Word's "multiple" line spacing is a multiple of single-line spacing (about 1.2× the font size), not a multiple of the font size itself; using it directly as CSS `line-height` makes it about 20% too small
+- **Keep with next**: headings won't be isolated at the bottom of a page (Word's keepNext)
+- **Widow/orphan and cross-page control**: paragraphs can split across page boundaries at line boundaries, and at least 2 lines are kept at both page bottom and top (widow/orphan)
+- **List numbering and indentation**: restores the numbering format of `numbering` (`a. b. c.` / `i. ii. iii.`) and the `w:ind` indentation
 
-行级拆分只在**查看模式**启用：编辑模式下拆块会破坏「块 ↔ 数据模型」的对应关系，
-contenteditable 的光标定位、选区与撤销都会失准，因此编辑模式保持整块搬运。
+Line-level splitting is enabled only in **view mode**: in edit mode, splitting blocks would break the "block ↔ data model" correspondence, making contenteditable cursor positioning, selection, and undo inaccurate, so edit mode keeps whole-block movement.
 
-## PDF 全文搜索
+## PDF Full-Text Search
 
-工具栏放大镜按钮打开搜索栏（独立一行，不挤占导航栏）。打开文档时后台预取每页文本项，
-因此搜索无需再解析一遍、也不依赖当前是否渲染到该页。
+The magnifier button on the toolbar opens the search bar (a separate row, not crowding the navigation bar). When a document is opened, the text items of each page are prefetched in the background, so searching requires no re-parsing and does not depend on whether the page is currently rendered.
 
-- 输入即搜（防抖 200ms），命中以黄色高亮框标出，当前命中为橙色
-- `Enter` 跳下一个、`Shift+Enter` 跳上一个，或用栏内 ↑/↓ 按钮；命中自动翻页并滚动到视口中央
-- `Esc` 关闭搜索栏并清除高亮
-- 无匹配时输入框标红并显示 `0/0`，不会崩
-- 坐标复用文本层同一套换算（含旋转），高亮矩形为轴对齐近似（与文本层一致）
-- 词边界用相邻文本项的水平间隙近似补空格，跨词的短语（如 `by JDOC`）会精确高亮到对应的若干段文本项
+- Search as you type (200ms debounce); matches are highlighted with yellow boxes, the current match in orange
+- `Enter` jumps to next, `Shift+Enter` to previous, or use the ↑/↓ buttons in the bar; matches auto-flip pages and scroll to the viewport center
+- `Esc` closes the search bar and clears highlights
+- No match shows the input box in red with `0/0`, no crash
+- Coordinates reuse the same transform as the text layer (including rotation); highlight rectangles are axis-aligned approximations (consistent with the text layer)
+- Word boundaries are approximated with the horizontal gaps between adjacent text items to fill spaces; phrases spanning words (e.g. `by JDOC`) precisely highlight the corresponding text items
 
-## 技能（Skills）
+## Skills
 
-仓库根目录的 [`skills/`](../../skills) 为 `@fefeding/jdoc` 提供了按能力拆分的 agent 技能包（每个一份 `SKILL.md`），供 AI 助手按需加载：涵盖 docx / xlsx / pptx / pdf / markdown / convert / assets / bundle 八类。扩展本身与这些技能共享同一套 jdoc API。
+The [`skills/`](../../skills) directory at the repository root provides capability-split agent skill packages (one `SKILL.md` each) for `@fefeding/jdoc`, loaded by AI assistants on demand: covering docx / xlsx / pptx / pdf / markdown / convert / assets / bundle, eight categories. The extension itself shares the same jdoc API with these skills.
 
-## 开发
+## Development
 
 ```bash
-# 仓库根目录：先构建 jdoc 库（产出 dist/jdoc.browser.js）
+# Repository root: build the jdoc library first (produces dist/jdoc.browser.js)
 npm install && npm run build
 
-# 扩展目录
+# Extension directory
 cd vscode
 npm install
-npm run dev        # 持续构建 extension.js + webview.js
+npm run dev        # continuously build extension.js + webview.js
 
-# 在 VS Code 中打开仓库根，按 F5 选择 "Run Extension (watch)"
+# Open the repository root in VS Code, press F5 and choose "Run Extension (watch)"
 ```
 
-## 发布
+## Publishing
 
-推送 `v*` 标签或手动触发 `Publish Extension` 工作流，自动构建并发布到
-**VS Code Marketplace** 与 **Open VSX**。需要仓库 Secrets：
+Pushing a `v*` tag or manually triggering the `Publish Extension` workflow builds and publishes to **VS Code Marketplace** and **Open VSX**. Required repository Secrets:
 
-- `VSCE_PAT` — Marketplace 发布令牌
-- `OVSX_TOKEN` — Open VSX 访问令牌
+- `VSCE_PAT` — Marketplace publish token
+- `OVSX_TOKEN` — Open VSX access token

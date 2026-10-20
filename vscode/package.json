@@ -1,8 +1,8 @@
 {
   "name": "jdoc-viewer",
-  "displayName": "jdoc Document Viewer",
-  "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档，并预览 Markdown / 纯文本（由 @fefeding/jdoc 驱动）",
-  "version": "0.1.9",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.10",
   "keywords": [
     "docx",
     "xlsx",
@@ -34,7 +34,7 @@
     "customEditors": [
       {
         "viewType": "jdoc.documentEditor",
-        "displayName": "jdoc Document Editor",
+        "displayName": "%customEditor.documentEditor%",
         "selector": [
           {
             "filenamePattern": "*.pptx"
@@ -58,37 +58,37 @@
     "commands": [
       {
         "command": "jdoc.revert",
-        "title": "Revert"
+        "title": "%command.revert%"
       },
       {
         "command": "jdoc.exportCopy",
-        "title": "Export Copy"
+        "title": "%command.exportCopy%"
       },
       {
         "command": "jdoc.preview",
-        "title": "jdoc: 用 jdoc 打开预览"
+        "title": "%command.preview%"
       },
       {
         "command": "jdoc.viewMode",
-        "title": "查看",
+        "title": "%command.viewMode%",
         "category": "jdoc",
         "icon": "$(preview)"
       },
       {
         "command": "jdoc.editMode",
-        "title": "编辑",
+        "title": "%command.editMode%",
         "category": "jdoc",
         "icon": "$(edit)"
       },
       {
         "command": "jdoc.switchDocument",
-        "title": "切换文档",
+        "title": "%command.switchDocument%",
         "category": "jdoc",
         "icon": "$(files)"
       },
       {
         "command": "jdoc.convert",
-        "title": "转换格式为…",
+        "title": "%command.convert%",
         "category": "jdoc",
         "icon": "$(arrow-swap)"
       }
@@ -204,6 +204,7 @@
     "watch": "node esbuild.js --watch",
     "dev": "node esbuild.js --watch",
     "verify:roundtrip": "node scripts/verify-roundtrip.mjs",
+    "verify:xlsx": "node scripts/verify-xlsx.mjs",
     "sync:md-assets": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve(__dirname,'..','node_modules','katex','dist'),dst=p.resolve(__dirname,'media');fs.copyFileSync(p.join(src,'katex.min.css'),p.join(dst,'katex.min.css'));fs.rmSync(p.join(dst,'fonts'),{recursive:true,force:true});fs.cpSync(p.join(src,'fonts'),p.join(dst,'fonts'),{recursive:true})\"",
     "install:jdoc": "npm install file:..",
     "package": "vsce package --no-dependencies",
