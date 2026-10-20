@@ -114,6 +114,18 @@ export interface PdfParseOptions {
     maxPages?: number;
     /** 中文字体资源目录 URL/路径；缺省自动探测 pdfjs-dist 内的标准字体 */
     standardFontDataUrl?: string;
+    /**
+     * pdfjs worker 地址（Node 端）。
+     *
+     * pdfjs v5+ 的 fake worker 必须有 workerSrc 才会加载，否则直接抛
+     *「No "GlobalWorkerOptions.workerSrc" specified」。它在源码里的内置默认值是
+     * 相对路径 "./pdf.worker.mjs"——当 pdfjs 被打包器内联进 bundle 时，这个相对路径
+     * 会指向 bundle 所在目录而不是 pdfjs-dist 目录，worker 必然加载失败。
+     *
+     * 浏览器端不需要传（由打包器把 worker 变成资源文件）；Node 端若被内联打包，
+     * 请显式传入 worker 文件的绝对地址（file:// URL 或路径均可）。
+     */
+    workerSrc?: string;
 }
 
 /** 解析结果 */

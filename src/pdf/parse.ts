@@ -156,6 +156,46 @@ async function resolveResourceUrl(subDir: string): Promise<string | undefined> {
     }
 }
 
+/**
+ * 解析 Node 端可加载的 pdfjs worker 地址（file:// URL）。
+ *
+ * 查找顺序：
+ * 1. node_modules 里的 pdfjs-dist（未被打包内联的常规 Node 用法）
+ * 2. 与本产物同目录的 pdf.worker.mjs（打包场景：调用方把 worker 放到产物旁边）
+ *
+ * 返回 undefined 表示找不到——此时 pdfjs 会用自己的默认相对路径，多半会失败，
+ * 但不阻断主流程，由调用方通过 PdfParseOptions.workerSrc 显式指定。
+ */
+async function resolvePdfWorkerUrl(): Promise<string | undefined> {
+    const isNode = typeof process !== 'undefined' && !!process.versions?.node;
+    if (!isNode) return undefined;
+    try {
+        const { createRequire } = (await import(/* @vite-ignore */ 'node:module')) as {
+            createRequire: (from: string) => { resolve: (id: string) => string };
+        };
+        const { pathToFileURL, fileURLToPath } = (await import(/* @vite-ignore */ 'node:url')) as {
+            pathToFileURL: (p: string) => URL;
+            fileURLToPath: (u: string) => string;
+        };
+        // 1) node_modules 里的真实文件
+        try {
+            const req = createRequire(import.meta.url);
+            return pathToFileURL(req.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')).href;
+        } catch {
+            // 继续尝试 2)
+        }
+        // 2) 与本产物同目录（打包场景）
+        try {
+            const dir = fileURLToPath(new URL('.', import.meta.url).href);
+            return pathToFileURL(`${dir}/pdf.worker.mjs`).href;
+        } catch {
+            return undefined;
+        }
+    } catch {
+        return undefined;
+    }
+}
+
 /** 把 pdfjs 文本项转换为统一结构 */
 function toTextItem(item: PdfjsTextItem): PdfTextItem {
     const transform = item.transform || [];
@@ -392,16 +432,27 @@ export async function parsePdf(
         }
 
         const pdfjs = await loadPdfjs();
-        // 浏览器端 pdfjs 必须配置 worker。打包器（Vite/Rollup）会把该 URL 表达式
-        // 解析为构建产物中的 worker 资源地址；Node 端无需 worker，直接跳过。
-        if (typeof window !== 'undefined' && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
-            try {
-                pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-                    'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
-                    import.meta.url
-                ).toString();
-            } catch {
-                // 资源解析失败不阻断：调用方可自行设置 GlobalWorkerOptions.workerSrc
+        // pdfjs v5+ 的 fake worker 必须有 workerSrc 才会加载，否则直接抛
+        //「No "GlobalWorkerOptions.workerSrc" specified」。
+        // 浏览器端由打包器把 worker 变成资源文件；Node 端则必须给出能加载的地址——
+        // pdfjs 内置的默认值是相对路径 "./pdf.worker.mjs"，一旦 pdfjs 被内联进 bundle
+        // （VS Code 扩展、Electron 应用等），这个相对路径就指向 bundle 所在目录，
+        // worker 必然找不到，PDF 解析会整体失败。
+        if (pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+            if (typeof window !== 'undefined') {
+                // 浏览器端 pdfjs 必须配置 worker。打包器（Vite/Rollup）会把该 URL 表达式
+                // 解析为构建产物中的 worker 资源地址。
+                try {
+                    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+                        'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+                        import.meta.url
+                    ).toString();
+                } catch {
+                    // 资源解析失败不阻断：调用方可自行设置 GlobalWorkerOptions.workerSrc
+                }
+            } else {
+                const workerUrl = options.workerSrc || (await resolvePdfWorkerUrl());
+                if (workerUrl) pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
             }
         }
         const standardFontDataUrl = options.standardFontDataUrl || (await resolveResourceUrl('standard_fonts'));

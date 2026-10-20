@@ -1,8 +1,19 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { JdocDocument } from './document';
 import { convert, type ConvertTarget } from '@fefeding/jdoc';
 import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
+
+/**
+ * 宿主侧解析 PDF 用的 pdfjs worker 地址。
+ *
+ * pdfjs 被 esbuild 内联进 extension.js 后，它内置的相对 worker 路径（"./pdf.worker.mjs"）
+ * 会指向 dist/ 目录，worker 必然加载不到，PDF 转换会直接失败。esbuild 会把真实的
+ * worker 复制到 dist/pdf.worker.mjs（见 esbuild.js 的 copyPdfWorker），这里把它
+ * 的绝对地址显式传给 jdoc。
+ */
+const PDF_WORKER_URL = pathToFileURL(path.join(__dirname, 'pdf.worker.mjs')).href;
 
 /** 可被转换命令识别的源格式（与扩展名对应） */
 const SUPPORTED_EXT = /\.(docx|pdf|md|markdown|html|htm|txt)$/;
@@ -355,7 +366,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             async () => {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
-                    const result = await convert(data, to, { from });
+                    const result = await convert(data, to, { from, workerSrc: PDF_WORKER_URL });
                     const base = sourceName.replace(/\.[^.]+$/, '');
                     const dir = target.path.replace(/[^/]+$/, '');
                     const outUri = await vscode.window.showSaveDialog({
@@ -469,7 +480,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             async () => {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
-                    const pdf = await convert(data, 'pdf', { from });
+                    const pdf = await convert(data, 'pdf', { from, workerSrc: PDF_WORKER_URL });
                     const base = sourceName.replace(/\.[^.]+$/, '') || 'page';
                     // scale=2 约 144dpi，A4 输出约 1191x1684，清晰度足够印刷预览
                     const written = await this.rasterizePdf(pdf, 2, async (index, png) => {

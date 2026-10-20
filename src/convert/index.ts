@@ -45,6 +45,12 @@ export interface ConvertOptions {
     quality?: 'fast' | 'layout';
     /** 资源表，用于还原图片 assetId */
     assets?: DocAsset[] | Record<string, DocAsset> | { assets?: DocAsset[] };
+    /**
+     * pdfjs worker 地址（Node 端）。当 pdfjs 被打包器内联进 bundle（VS Code 扩展、
+     * Electron 应用等）时，它内置的相对 worker 路径会失效，PDF 解析会直接失败，
+     * 需显式给出 worker 文件的地址。
+     */
+    workerSrc?: string;
 }
 
 /** 把字节解码为 UTF-8 文本 */
@@ -114,7 +120,7 @@ export async function convert(
     } else if (from === 'html') {
         blocks = htmlToBlocks(decodeText(bytes));
     } else if (from === 'pdf') {
-        const result = await pdfToBlocks(bytes, { quality: options.quality });
+        const result = await pdfToBlocks(bytes, { quality: options.quality, workerSrc: options.workerSrc });
         blocks = result.blocks;
         metadata = result.metadata as DocxDocument['metadata'];
     } else {

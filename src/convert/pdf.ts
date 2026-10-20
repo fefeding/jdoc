@@ -29,6 +29,11 @@ export interface PdfToBlocksOptions {
     pages?: number[];
     /** 是否在各页之间插入 pageBreak 块，默认 false */
     pageBreaks?: boolean;
+    /**
+     * pdfjs worker 地址（Node 端）。pdfjs 被打包器内联进 bundle 时，
+     * 它内置的相对 worker 路径会失效，必须显式给出可加载的地址。
+     */
+    workerSrc?: string;
 }
 
 /** PDF -> blocks 结果 */
@@ -65,7 +70,8 @@ export async function pdfToBlocks(
         vectors: quality === 'layout',
         text: false,
         pages: options.pages,
-        maxPages: options.maxPages
+        maxPages: options.maxPages,
+        workerSrc: options.workerSrc
     });
 
     const allBlocks: DocxBlock[] = [];

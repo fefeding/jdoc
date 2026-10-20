@@ -61,6 +61,46 @@ const nodeStubPlugin = {
 const watch = process.argv.includes('--watch');
 const production = process.argv.includes('--production');
 
+/**
+ * 把 pdfjs 的 worker 复制到 dist/。
+ *
+ * 为什么必须单独放一个文件：pdfjs v5+ 的 fake worker 依赖
+ * `GlobalWorkerOptions.workerSrc`，它源码里的内置默认值是相对路径
+ * "./pdf.worker.mjs"——pdfjs 被 esbuild 内联进 extension.js 后，这个相对路径
+ * 会指向 dist/ 目录本身，worker 必然找不到，宿主侧的 PDF 转换会整体失败
+ * （报「No "GlobalWorkerOptions.workerSrc" specified」）。
+ *
+ * 放在 dist/ 里与 extension.js 同级，jdoc 的自动探测（同目录兜底）就能命中；
+ * 同时 extension.ts 也会显式把它的 file:// 地址传给 convert()。
+ */
+function copyPdfWorker() {
+  const outDir = path.join(__dirname, 'dist');
+  const dest = path.join(outDir, 'pdf.worker.mjs');
+  const candidates = [];
+  try {
+    // 从 vscode 目录解析 @fefeding/jdoc 的依赖链里的 pdfjs-dist
+    const require = require('module').createRequire(path.join(__dirname, 'package.json'));
+    candidates.push(path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'legacy', 'build', 'pdf.worker.mjs'));
+  } catch {
+    // 解析失败时退回仓库根目录的 node_modules
+  }
+  candidates.push(
+    path.join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs')
+  );
+  for (const src of candidates) {
+    try {
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.copyFileSync(src, dest);
+      console.log(`[esbuild] pdf worker -> ${path.relative(__dirname, dest)}`);
+      return;
+    } catch {
+      // 试下一个候选路径
+    }
+  }
+  console.warn('[esbuild] 警告：未找到 pdf.worker.mjs，PDF 转换在宿主侧将不可用');
+}
+
 async function buildWithContext() {
   const base = {
     bundle: true,
@@ -132,6 +172,7 @@ async function buildWithContext() {
   }
 
   await Promise.all([extCtx.rebuild(), webCtx.rebuild(), pptxCt.rebuild(), officeCt.rebuild()]);
+  copyPdfWorker();
   await extCtx.dispose();
   await webCtx.dispose();
   await pptxCt.dispose();
