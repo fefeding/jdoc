@@ -10,6 +10,7 @@
 //   缩略图，所以旋转不是 CSS transform，而是把渲染重走一遍。
 import { createZoomCluster, type ZoomController } from './zoom';
 import { createOverlayEditor, type OverlayEditor } from './pdf-editor';
+import { escapeHtml } from './util';
 
 /** 缩略图渲染宽度（CSS px，与 .pdf-thumb .frame 宽度一致） */
 const THUMB_WIDTH = 132;
@@ -56,9 +57,14 @@ export const PDF_CSS = `
 .pdf-thumb .num { font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* ---------- 正文页 ---------- */
-.pdf-content { padding: 16px 24px 32px; }
+.pdf-content { position: relative; padding: 16px 24px 32px; }
 .pdf-pages { display: flex; flex-direction: column; align-items: center; }
 .pdf-page { background: #fff; border: 1px solid var(--jc-border, #d0d7de); margin: 0 auto 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+/* 打开加载遮罩：大文档解析/首渲期间覆盖正文，给出明确反馈 */
+.pdf-loading { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: var(--jc-bg); color: var(--jc-muted); }
+.pdf-loading .spinner { width: 30px; height: 30px; border: 3px solid var(--jc-border); border-top-color: var(--jc-accent); border-radius: 50%; animation: pdf-spin .8s linear infinite; }
+.pdf-loading .msg { font-size: 13px; }
+@keyframes pdf-spin { to { transform: rotate(360deg); } }
 .pdf-page .page-text { white-space: pre-wrap; word-break: break-word; }
 .pdf-canvas-page { padding: 0; overflow: hidden; position: relative; line-height: 0; }
 .pdf-canvas-page canvas { display: block; width: 100%; height: 100%; }
@@ -809,8 +815,46 @@ export function createPdfViewer(
     });
 
     // ---------- 打开 / 关闭 ----------
+    /** 加载遮罩：覆盖正文，给出大文档解析/首渲期间的明确反馈 */
+    let loadingEl: HTMLElement | null = null;
+    function showLoading(msg: string): void {
+        hideLoading();
+        loadingEl = el('div', 'pdf-loading');
+        loadingEl.append(el('div', 'spinner'), el('div', 'msg', msg));
+        content.appendChild(loadingEl);
+    }
+    function hideLoading(): void {
+        loadingEl?.remove();
+        loadingEl = null;
+    }
+    function setLoadingMsg(msg: string): void {
+        const m = loadingEl?.querySelector('.msg') as HTMLElement | null;
+        if (m) m.textContent = msg;
+    }
+
+    /**
+     * 分批把节点插入容器，每帧一批，避免大文档一次性 append 几百个节点时的长任务
+     * 冻结主线程（期间 loading 转不动、用户无法交互）。disposed 时立即收尾。
+     */
+    function appendBatch(container: HTMLElement, nodes: HTMLElement[], from: number, size = 50): Promise<void> {
+        return new Promise((resolve) => {
+            let i = from;
+            const step = (): void => {
+                if (disposed) return resolve();
+                const end = Math.min(nodes.length, i + size);
+                for (; i < end; i++) {
+                    if (nodes[i].parentElement !== container) container.appendChild(nodes[i]);
+                }
+                if (i < nodes.length) requestAnimationFrame(step);
+                else resolve();
+            };
+            step();
+        });
+    }
+
     function close(): void {
         disposed = true;
+        hideLoading();
         io?.disconnect();
         io = null;
         thumbIo?.disconnect();
@@ -853,17 +897,38 @@ export function createPdfViewer(
         const wasEditing = editing;
         close();
         disposed = false;
+        showLoading('正在打开 PDF…');
         onStatus('正在打开 PDF…');
         // 编辑层的幂等保存基准：始终是这份打开时的字节
         editor.reset(bytes);
-        // 与 jdoc 内部使用同一说明符，命中同一模块实例
-        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        let pdfjs: any;
+        try {
+            // 与 jdoc 内部使用同一说明符，命中同一模块实例
+            pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        } catch (err: any) {
+            console.error('[pdf] pdfjs 加载失败:', err);
+            hideLoading();
+            content.innerHTML = `<pre class="error">PDF 引擎加载失败：${escapeHtml(String(err?.message || err))}</pre>`;
+            onStatus('加载失败');
+            return;
+        }
         const worker = (window as any).__JDC_PDF_WORKER__;
         if (worker && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
             pdfjs.GlobalWorkerOptions.workerSrc = worker;
         }
-        // pdfjs 会把 data 转移给 worker（原 ArrayBuffer 会被 detach），必须传副本
-        const doc: any = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+        let doc: any;
+        try {
+            // pdfjs 会把 data 转移给 worker（原 ArrayBuffer 会被 detach），必须传副本。
+            // disableAutoFetch：默认会预取所有页面数据，大文档首屏会被拖慢；关掉后
+            // 只取当前请求的页，配合「第一页优先」让首页尽快出来。
+            doc = await pdfjs.getDocument({ data: bytes.slice(), disableAutoFetch: true, isEvalSupported: false }).promise;
+        } catch (err: any) {
+            console.error('[pdf] pdfjs 解析失败:', err);
+            hideLoading();
+            content.innerHTML = `<pre class="error">PDF 解析失败：${escapeHtml(String(err?.message || err))}</pre>`;
+            onStatus('解析失败');
+            return;
+        }
         if (disposed) {
             void doc.destroy?.();
             return;
@@ -881,18 +946,42 @@ export function createPdfViewer(
         const first = await doc.getPage(1);
         if (disposed) return;
         const ratio = first.getViewport({ scale: 1 }).height / first.getViewport({ scale: 1 }).width;
+        (first as any).cleanup?.();
+        content.replaceChildren(wrap);
+        wrap.classList.toggle('paged', state.paged);
+
+        // 所有页占位先创建（仅 createElement，开销小），随后分批插入 DOM，
+        // 否则几百页一次性 append 的长任务会冻结主线程、loading 也转不动。
         for (let i = 1; i <= state.total; i++) {
             const p = el('div', 'pdf-page pdf-canvas-page pending');
             p.dataset.page = String(i);
             p.textContent = `第 ${i} 页`;
             p.style.width = `${pageWidth}px`;
             p.style.height = `${Math.round(pageWidth * ratio)}px`;
-            wrap.appendChild(p);
             state.pages.push(p);
         }
-        wrap.classList.toggle('paged', state.paged);
-        content.replaceChildren(wrap);
+
+        // 第一页优先：立即插入并渲染，用户尽快看到内容
+        setLoadingMsg('正在渲染第 1 页…');
+        wrap.appendChild(state.pages[0]);
         buildThumbs();
+        onScroll = () => syncFromScroll();
+        content.addEventListener('scroll', onScroll, { passive: true });
+        onResize = () => relayout();
+        window.addEventListener('resize', onResize);
+        window.addEventListener('keydown', onKey);
+        viewBtn.classList.toggle('on', state.paged);
+        toggleBtn.classList.toggle('on', !thumbs.hidden);
+        setEditing(wasEditing, false);
+        goTo(1);
+        await renderPage(1);
+        if (disposed) return;
+        onStatus(`共 ${state.total} 页`);
+        // 首页就绪即收起 loading；其余页与缩略图在后台补齐（懒渲染 / 懒观察）
+        hideLoading();
+
+        // 其余页占位分批插入（单页模式非当前页 display:none，不触发布局）
+        await appendBatch(wrap, state.pages, 1, 50);
 
         // 连续模式靠观察器懒渲染正文页；单页模式由翻页主动渲染
         io = new IntersectionObserver(
@@ -905,20 +994,9 @@ export function createPdfViewer(
             },
             { root: content, rootMargin: '800px 0px' }
         );
-        state.pages.forEach((p) => io!.observe(p));
+        // 首页已插入并渲染，仅观察其余页
+        for (let i = 1; i < state.pages.length; i++) io.observe(state.pages[i]);
 
-        onScroll = () => syncFromScroll();
-        content.addEventListener('scroll', onScroll, { passive: true });
-        onResize = () => relayout();
-        window.addEventListener('resize', onResize);
-        window.addEventListener('keydown', onKey);
-
-        viewBtn.classList.toggle('on', state.paged);
-        toggleBtn.classList.toggle('on', !thumbs.hidden);
-        setEditing(wasEditing, false);
-        goTo(1);
-        await renderPage(1);
-        onStatus(`共 ${state.total} 页`);
         // 后台预取文本项，搜索时无需再 parse
         void prefetchText();
     }

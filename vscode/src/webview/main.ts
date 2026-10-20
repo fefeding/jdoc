@@ -105,6 +105,7 @@ async function renderContent(): Promise<void> {
             await pdfViewer.open(currentBytes);
             pdfViewer.setEditing(mode === 'edit', false);
         } catch (err: any) {
+            console.error('[pdf] renderContent open failed:', err);
             pdfViewer.content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
             setStatus('渲染失败');
             vscode.postMessage({ type: 'error', message: String(err?.message || err) });
