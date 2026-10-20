@@ -1,7 +1,7 @@
 // 缩放回归验证：适应是否真的生效 + 缩放后左侧目录跳转是否落到正确位置。
 //
 // 直接驱动 office-editor（DOCX），断言：
-// 1. 打开后「适应」自动算出的倍率不是 1（窄页面应放大铺满，而不是锁死在 100%）
+// 1. 打开后「适应」符合「只缩不放」语义：宽屏保持 100% 居中，窄屏才按屏宽缩小
 // 2. 点「适应宽度」后倍率与 auto 标记正确
 // 3. 非 100% 缩放下点击左侧目录项，目标标题实际落在内容区顶部附近（换算正确）
 // 4. 缩放变化后侧栏高亮会跟着更新
@@ -73,30 +73,41 @@ await page.waitForTimeout(800);
 
 console.log('\n== ZOOM ==');
 
-// 1. 打开后自动适应：A4(≈794px) 在 1440 宽视口里应放大到 >1，而不是锁死 100%
+// 1. 打开后自动适应：A4(≈794px) 在 1440 宽视口里并不比可视区宽，
+//    应保持 100% 实际大小（不再放大铺满），且仍处于自动模式。
 const autoZoom = await page.evaluate(() => {
     const label = [...document.querySelectorAll('.jc-zoom .chip')].find((b) => /%$/.test(b.textContent));
     const fit = [...document.querySelectorAll('.jc-zoom .chip')].find((b) => /适应/.test(b.textContent));
     return { label: label?.textContent, fitOn: fit?.classList.contains('on') };
 });
 const autoPct = Number(String(autoZoom.label).replace('%', ''));
-check('打开后自动适应宽度（窄页面放大而非锁死 100%）', autoZoom.fitOn && autoPct > 100, `zoom=${autoZoom.label} fitOn=${autoZoom.fitOn}`);
+check('打开后自动适应：宽屏保持 100%（不放大铺满）', autoZoom.fitOn && autoPct === 100,
+    `zoom=${autoZoom.label} fitOn=${autoZoom.fitOn}`);
 
-// 2. 缩放真的作用到了 DOM 上（target 的 zoom 属性非空）
-const applied = await page.evaluate(() => {
+// 2. 只有内容比可视区宽时才按屏宽缩小，且缩放确实落到 DOM 上（zoom=1 时 style.zoom 会被清空，
+//    所以必须在窄视口下验证才有非空 style.zoom）
+await page.setViewportSize({ width: 700, height: 900 });
+await page.waitForTimeout(600);
+const narrow = await page.evaluate(() => {
+    const label = [...document.querySelectorAll('.jc-zoom .chip')].find((b) => /%$/.test(b.textContent));
     const root = document.querySelector('.oe-content > *');
-    return { zoom: root?.style.zoom || '', w: Math.round(root?.getBoundingClientRect().width || 0) };
+    return { label: label?.textContent, zoom: root?.style.zoom || '' };
 });
-check('缩放已应用到内容根', applied.zoom !== '' && applied.zoom !== '1', `style.zoom=${applied.zoom} visualWidth=${applied.w}`);
+const narrowPct = Number(String(narrow.label).replace('%', ''));
+check('窄视口按屏宽缩小（<100% 且 zoom 已应用到内容根）',
+    narrowPct < 100 && narrowPct >= 20 && narrow.zoom !== '' && narrow.zoom !== '1',
+    `zoom=${narrow.label} style.zoom=${narrow.zoom || '(none)'}`);
 
-// 3. 点「适应宽度」后仍是 auto 且倍率稳定
+// 3. 视口放宽后自动恢复；点「适应宽度」同样稳定在 100%
+await page.setViewportSize({ width: 1440, height: 900 });
+await page.waitForTimeout(600);
 await page.click('.jc-zoom .chip[title="适应宽度"]');
 await page.waitForTimeout(300);
 const afterFit = await page.evaluate(() => {
     const label = [...document.querySelectorAll('.jc-zoom .chip')].find((b) => /%$/.test(b.textContent));
     return label?.textContent;
 });
-check('点「适应」回到自动宽度', Number(String(afterFit).replace('%', '')) > 100, `zoom=${afterFit}`);
+check('点「适应」回到自动宽度（宽屏 100%）', Number(String(afterFit).replace('%', '')) === 100, `zoom=${afterFit}`);
 
 // 4. 非 100% 缩放下点击左侧目录项，目标标题应落在内容区顶部附近
 await page.click('.jc-zoom .chip[title="实际大小（100%）"]'); // 先设成手动 100%
@@ -156,7 +167,10 @@ const jump2 = await page.evaluate(async (idx) => {
 check('缩小倍率下目录跳转同样定位正确', jump2.ok && Math.abs(jump2.delta) <= 30, `delta=${jump2.delta}px zoom=${jump2.zoom}`);
 
 // 6. 放大到 >100% 再跳一次：视觉坐标放大后最容易暴露「视觉坐标与布局坐标混用」
-await page.click('.jc-zoom .chip[title="适应宽度"]');
+//    （「适应宽度」已改为只缩不放、不再放大，故这里手动置 100% 再点「＋」制造放大态）
+await page.click('.jc-zoom .chip[title="实际大小（100%）"]');
+await page.click('.jc-zoom .chip[title="放大"]');
+await page.click('.jc-zoom .chip[title="放大"]');
 await page.waitForTimeout(300);
 const jump3 = await page.evaluate(async (idx) => {
     const settle = async () => {
@@ -180,7 +194,7 @@ const jump3 = await page.evaluate(async (idx) => {
     const zoom = Number(getComputedStyle(document.querySelector('.oe-content > *')).zoom || 1);
     return { ok: true, delta: Math.round(delta), zoom };
 }, 6);
-check('放大（适应宽度）后目录跳转定位正确', jump3.ok && Math.abs(jump3.delta) <= 30, `delta=${jump3.delta}px zoom=${jump3.zoom}`);
+check('放大（>100%）后目录跳转定位正确', jump3.ok && Math.abs(jump3.delta) <= 30, `delta=${jump3.delta}px zoom=${jump3.zoom}`);
 
 // 7. 缩放会重排内容但不一定触发 scroll：侧栏高亮必须跟着重算，否则会停在旧标题上
 const sync = await page.evaluate(async () => {
