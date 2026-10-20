@@ -41,6 +41,8 @@ let zoomBoundTo: HTMLElement | null = null;
 let outline: OutlineView | null = null;
 /** 滚动联动句柄（refresh 用于缩放后重算高亮） */
 let untrack: ActiveHeadingTracker | null = null;
+/** 目录跳转进行中：期间忽略滚动联动对侧栏高亮的改写，落稳后自动释放 */
+let jumpLock = false;
 /** 查看模式渲染代数：丢弃过期的异步分页结果 */
 let viewGen = 0;
 
@@ -123,6 +125,13 @@ function scrollToAnchor(el: HTMLElement): void {
     // 目标已不在文档里（重排后失效）：不猜位置，保持当前视图
     if (!el.isConnected || !scroller.contains(el)) return;
 
+    /** 本次落点是否退化为「页顶对齐」；退化后 delta 天然偏大，不参与二次校正 */
+    let degraded = false;
+    // 跳转期间锁定侧栏高亮：smooth 滚动一路触发的 trackActiveHeading 会按「视口顶部
+    // 实际是哪个标题」反复改写高亮，落稳那一刻算出的往往不是刚点的那条（末条退化为
+    // 页顶对齐时尤其明显）。锁定到落稳后再交还给滚动联动。
+    jumpLock = true;
+
     // rect 与 scrollTop 同属「视觉」坐标系：CSS zoom 生效后，滚动容器的 scrollTop
     // 也按缩放后的距离计，两者直接相加即为目标在滚动内容中的位置，不需要再除 zoom。
     const goto = (behavior: ScrollBehavior): void => {
@@ -132,14 +141,39 @@ function scrollToAnchor(el: HTMLElement): void {
         const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
 
         let desired = docTopOf(el) - 12;
+        // 是否退化为「滚到所在页的页顶」。退化后标题本就推不到内容区顶部（delta 会
+        // 明显大于阈值），二次校正不能再拿 delta 当判据，否则会白跳一次。
+        degraded = false;
         if (desired > maxScroll) {
-            // 末尾条目（末章、附录）后面不足一屏，标题物理上推不到内容区顶部：退化为
-            // 「滚到所在页的页顶」，与 Word 导航窗格跳转的落点一致。若不这样处理，
-            // 位置完全交给浏览器的隐式 clamp，缩放越小文档越短偏得越多（实测适应宽度
-            // 下最后一条偏 168px，且目标可能压根没进视口）。
+            // 末尾条目（末章、附录）后面不足一屏，标题物理上推不到内容区顶部。
+            // 先按页顶对齐试算，全程只用 getBoundingClientRect 的**视觉坐标**：
+            // 不能读 getComputedStyle(page).paddingTop——那是未缩放的布局值（实测恒为
+            // 96px，与 zoom 无关），与视觉值相加就是坐标系混用，偏差 = padTop*(1-zoom)。
             const page = el.closest<HTMLElement>('.oe-page');
-            const padTop = page ? parseFloat(getComputedStyle(page).paddingTop) || 0 : 0;
-            desired = page ? Math.min(docTopOf(page) + padTop - 12, maxScroll) : maxScroll;
+            if (page) {
+                const pRect = page.getBoundingClientRect();
+                // 页内首个正文块；没有就退回用标题自身（此时视觉 padding 恰为 0）
+                const firstKid = page.querySelector<HTMLElement>('.docx-body') ?? page.firstElementChild;
+                const visualPadTop = firstKid instanceof HTMLElement ? firstKid.getBoundingClientRect().top - pRect.top : 0;
+                const pageAligned = Math.max(0, Math.min(docTopOf(page) + visualPadTop - 12, maxScroll));
+
+                // 页顶对齐仍不足以把标题带进视口时（页面底部本身就顶到文档底部、
+                // maxScroll 连页顶都到不了），退化为「滚到底」——此时标题必然可见，
+                // 与 Word 导航窗格在文档末尾的落点一致。判断用「目标底边 vs 可视底边」
+                // 这一实际可见性，而不是继续在坐标系上纠缠。
+                const targetBottom = docTopOf(el) + el.getBoundingClientRect().height;
+                const reachable = pageAligned + (el.getBoundingClientRect().top - (pRect.top + visualPadTop));
+                if (targetBottom - maxScroll <= scroller.clientHeight && reachable <= maxScroll) {
+                    degraded = true;
+                    desired = pageAligned;
+                } else {
+                    degraded = true;
+                    desired = maxScroll;
+                }
+            } else {
+                degraded = true;
+                desired = maxScroll;
+            }
         }
 
         scroller.scrollTo({ top: Math.max(0, Math.min(desired, maxScroll)), behavior });
@@ -150,6 +184,7 @@ function scrollToAnchor(el: HTMLElement): void {
     // 落稳后二次校正：smooth 期间若发生重排（图片解码后重分页）或缩放变化，
     // 首次算出的位置会偏（表现为滚过头 / 没滚到位）。等滚动停止再量一次，
     // 偏差仍超过阈值就用 instant 拉回——只校正一次，避免来回抖动。
+    // 退化（页顶对齐）时标题本就推不到顶部，delta 天然大于阈值，不在此列。
     let stableSince = 0;
     let lastTop = scroller.scrollTop;
     let done = false;
@@ -169,12 +204,24 @@ function scrollToAnchor(el: HTMLElement): void {
         }
         done = true;
         scroller.removeEventListener('scroll', watch);
-        if (!el.isConnected) return;
+        if (degraded || !el.isConnected) {
+            jumpLock = false;
+            return;
+        }
         const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-        if (Math.abs(delta) > 24) goto('instant');
+        if (Math.abs(delta) > 24) {
+            goto('instant');
+            return; // goto 会重新上锁，等下一轮 watch 落稳再释放
+        }
+        jumpLock = false;
     };
     scroller.addEventListener('scroll', watch, { passive: true });
     window.setTimeout(watch, 100);
+    // 兜底：watch 因容器被移除 / 事件不触发而没跑到时，必须释放跳转锁，
+    // 否则侧栏高亮会永久停在点击项，后续手动滚动也不再联动。
+    window.setTimeout(() => {
+        jumpLock = false;
+    }, 3000);
 }
 
 /** 依据当前内容重建左侧目录并接上滚动联动 */
@@ -196,7 +243,8 @@ function refreshOutline(): void {
     untrack = trackActiveHeading(
         contentEl,
         items.map((item) => item.id),
-        (id) => outline?.setActive(id)
+        (id) => outline?.setActive(id),
+        () => jumpLock
     );
 }
 

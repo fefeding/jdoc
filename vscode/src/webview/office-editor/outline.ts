@@ -197,7 +197,15 @@ export interface ActiveHeadingTracker {
 export function trackActiveHeading(
     scrollEl: HTMLElement,
     ids: string[],
-    onChange: (id: string | null) => void
+    onChange: (id: string | null) => void,
+    /**
+     * 返回 true 时暂停联动（如目录跳转进行中）。
+     *
+     * 跳转的 smooth 滚动一路触发 scroll 事件，联动会按「视口顶部实际是哪个标题」反复
+     * 改写高亮；落稳那一刻算出的往往不是用户刚点的那条（末条退化为页顶对齐时尤其明显）。
+     * 锁定期间保持点击时设定的高亮，落稳后再交还给联动。
+     */
+    isLocked?: () => boolean
 ): ActiveHeadingTracker {
     if (!ids.length) return { refresh: () => undefined, dispose: () => undefined };
     let ticking = false;
@@ -205,6 +213,7 @@ export function trackActiveHeading(
 
     const pick = (): void => {
         ticking = false;
+        if (isLocked?.()) return;
         // 阈值用视觉像素：scrollEl 与标题元素的 rect 同处视觉坐标系，
         // 缩放后两者同步缩放，比较依然成立，无需再除 zoom。
         const top = scrollEl.getBoundingClientRect().top;

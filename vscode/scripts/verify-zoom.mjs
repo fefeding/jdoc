@@ -268,14 +268,41 @@ const drift = await page.evaluate(async () => {
 check('反复重算不漂移（幂等，不滑向 MIN_ZOOM）', Math.min(...drift) > 60 && Math.max(...drift) - Math.min(...drift) <= 2,
     `samples=${drift.join(',')}`);
 
-// 10. 真实 docx 的末尾条目：标题推不到内容区顶部时（后面内容不足一屏），
-//     必须退化为「滚到所在页的页顶」，而不是卡在文档底部让目标偏出预期位置。
-//     该缺陷只在缩放后的真实文档上出现：适应宽度下最后一条曾偏 168px 且页顶不可见。
+// 10. 真实 docx × 多种倍率 × 全部条目：目录跳转必须准确。
+//     这组组合此前从未被覆盖——合成文档只测了 3 个条目、真实文档只测了最后一个，
+//     「真实文档 + 中间条目 + 缩放」正好是线上失准的场景。
+//
+//     判据分两种：
+//     - 能贴顶时（绝大多数）：标题落在内容区顶部 ±30px 内；
+//     - 物理上贴不了顶时（文档末尾，标题后面不足一屏）：退化为滚到底/页顶，
+//       此时 delta 可以大于 30，但标题必须**完整可见**。
+//     旧口径用 getComputedStyle(page).paddingTop 判页顶对齐，那是未缩放的布局值
+//     （实测恒为 96px，与 zoom 无关），与视觉坐标系混用后无法作为判据。
 const EXAMPLES = path.resolve(__dirname, '..', '..', 'examples');
 const realDocx = fs
     .readdirSync(EXAMPLES)
     .filter((f) => f.endsWith('.docx'))
     .map((f) => ({ name: f, b64: fs.readFileSync(path.join(EXAMPLES, f)).toString('base64') }));
+
+const ZOOM_MODES = [
+    ['适应', async () => clickChip(page, '适应宽度')],
+    ['100%', async () => clickChip(page, '实际大小（100%）')],
+    ['放大', async () => {
+        await clickChip(page, '实际大小（100%）');
+        await clickChip(page, '放大');
+    }],
+    ['缩小', async () => {
+        await clickChip(page, '实际大小（100%）');
+        await clickChip(page, '缩小');
+        await clickChip(page, '缩小');
+        await clickChip(page, '缩小');
+    }]
+];
+
+async function clickChip(pg, title) {
+    await pg.click(`.jc-zoom .chip[title="${title}"]`);
+    await pg.waitForTimeout(450);
+}
 
 for (const doc of realDocx) {
     await page.evaluate(
@@ -289,47 +316,94 @@ for (const doc of realDocx) {
     await page.waitForSelector('.oe-page', { timeout: 20000 });
     await page.waitForTimeout(1200);
 
-    const last = await page.evaluate(async () => {
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-        const c = document.querySelector('.oe-content');
-        const items = [...document.querySelectorAll('.oe-outline-item')];
-        if (!items.length) return { err: 'no outline item' };
-        const t = items[items.length - 1];
-        const id = t.dataset.id;
-        const zoom = Number(getComputedStyle(document.querySelector('.oe-content > *')).zoom || 1);
-        t.click();
-        let prev = -1;
-        for (let k = 0; k < 50; k++) {
-            await sleep(100);
-            if (c.scrollTop === prev) break;
-            prev = c.scrollTop;
-        }
-        const h = document.querySelector(`[data-oe-anchor="${id}"]`);
-        if (!h) return { err: 'no anchor' };
-        const hr = h.getBoundingClientRect();
-        const cr = c.getBoundingClientRect();
-        const pg = h.closest('.oe-page');
-        return {
-            id,
-            zoom,
-            label: t.textContent.slice(0, 18),
-            delta: Math.round(hr.top - cr.top),
-            visible: hr.top < cr.bottom && hr.bottom > cr.top,
-            pageTopAligned: pg
-                ? Math.round(pg.getBoundingClientRect().top - cr.top + (parseFloat(getComputedStyle(pg).paddingTop) || 0) - 12)
-                : null,
-            atBottom: Math.round(c.scrollTop) >= Math.round(c.scrollHeight - c.clientHeight) - 1
-        };
-    });
-
-    // 判据：标题顶部对齐，或已退化为页顶对齐（含页面 padding 补偿）；且目标必须可见
-    const aligned = Math.abs(last.delta ?? 999) <= 30 || Math.abs(last.pageTopAligned ?? 999) <= 30;
-    check(
-        `真实文档末尾条目可定位（${doc.name}）`,
-        !last.err && last.visible && aligned,
-        `label=${last.label} zoom=${last.zoom} delta=${last.delta} pageTopAligned=${last.pageTopAligned} atBottom=${last.atBottom}`
-    );
+    for (const [modeName, setup] of ZOOM_MODES) {
+        await setup();
+        const res = await page.evaluate(async () => {
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            const c = document.querySelector('.oe-content');
+            const items = [...document.querySelectorAll('.oe-outline-item')];
+            const zoom = Number(getComputedStyle(document.querySelector('.oe-content > *')).zoom || 1);
+            const bad = [];
+            let checked = 0;
+            for (const t of items) {
+                const id = t.dataset.id;
+                c.scrollTop = 0;
+                await sleep(120);
+                t.click();
+                let prev = -1;
+                for (let k = 0; k < 40; k++) {
+                    await sleep(80);
+                    if (c.scrollTop === prev) break;
+                    prev = c.scrollTop;
+                }
+                await sleep(200);
+                const h = document.querySelector(`[data-oe-anchor="${id}"]`);
+                if (!h) {
+                    bad.push({ label: t.textContent.slice(0, 12), why: 'no-anchor' });
+                    continue;
+                }
+                checked++;
+                const cr = c.getBoundingClientRect();
+                const hr = h.getBoundingClientRect();
+                const delta = Math.round(hr.top - cr.top);
+                // 能贴顶 -> 必须贴顶；贴不了顶 -> 必须完整可见
+                const ok = Math.abs(delta) <= 30 || (hr.top >= cr.top - 1 && hr.bottom <= cr.bottom + 1);
+                if (!ok) {
+                    bad.push({
+                        label: t.textContent.slice(0, 12),
+                        delta,
+                        viewH: Math.round(cr.height),
+                        headTop: Math.round(hr.top - cr.top),
+                        headBottom: Math.round(hr.bottom - cr.top)
+                    });
+                }
+            }
+            return { zoom, checked, bad };
+        });
+        check(
+            `真实文档全条目跳转准确（${doc.name} @ ${modeName}）`,
+            res.bad.length === 0 && res.checked > 0,
+            `zoom=${res.zoom} 检查${res.checked}项` + (res.bad.length ? ` 失准: ${JSON.stringify(res.bad.slice(0, 3))}` : '')
+        );
+    }
 }
+
+// 11. 跳转期间侧栏高亮必须锁定在用户点的那条：smooth 滚动一路触发滚动联动，
+//     它按「视口顶部实际是哪个标题」改写高亮，落稳那一刻往往不是刚点的那条。
+const lockCase = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const items = [...document.querySelectorAll('.oe-outline-item')];
+    // 挑一条不在视口顶部的（最容易出现高亮错位）
+    const t = items[Math.min(6, items.length - 1)];
+    const id = t.dataset.id;
+    t.click();
+    await sleep(120);
+    const midLock = document.querySelector('.oe-outline-item.active')?.dataset.id;
+    let prev = -1;
+    const c = document.querySelector('.oe-content');
+    for (let k = 0; k < 40; k++) {
+        await sleep(100);
+        if (c.scrollTop === prev) break;
+        prev = c.scrollTop;
+    }
+    await sleep(400);
+    return { id, midLock, settled: document.querySelector('.oe-outline-item.active')?.dataset.id };
+});
+check(
+    '跳转后侧栏高亮停在用户点的条目',
+    lockCase.id === lockCase.settled && lockCase.id === lockCase.midLock,
+    `target=${lockCase.id} duringScroll=${lockCase.midLock} settled=${lockCase.settled}`
+);
+
+// 12. 跳转锁必须释放：落稳后手动滚动，高亮要重新跟随
+const unlockCase = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const c = document.querySelector('.oe-content');
+    c.scrollTop = Math.round(c.scrollHeight * 0.6);
+    await sleep(600);
+    return { active: document.querySelector('.oe-outline-item.active')?.dataset.id || null };
+});
+check('跳转锁会释放（落稳后手动滚动仍联动高亮）', unlockCase.active !== null, `active=${unlockCase.active}`);
 
 const errs = await page.evaluate(() => window.__ERRS__ || []);
 check('无运行时错误', errs.length === 0, errs.slice(0, 2).join(' | '));
