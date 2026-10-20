@@ -4,7 +4,7 @@ import { b64ToBytes, bytesToB64, escapeHtml } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
-import { createConvertChip, convertMenuEntry, copySelection, hasTextSelection, installContextMenu, setCurrentDocUri } from './chrome';
+import { createConvertChip, convertMenuEntry, copySelection, hasTextSelection, installContextMenu, setCurrentDocUri, setHostPostMessage } from './chrome';
 import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
 import { highlightCodeBlocks, markdownCodeCss } from './markdown-code';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
@@ -322,6 +322,10 @@ window.addEventListener('message', (e) => {
             break;
     }
 });
+
+// chrome.ts 的转换入口需要向宿主发消息，但它不能自己调 acquireVsCodeApi()
+// （每个 webview 只能调一次，第二次会抛错），由这里注入本入口的 post 函数
+setHostPostMessage((m) => vscode.postMessage(m));
 
 // 脚本就绪即握手，而不是等处理完 init 再回：宿主必须先确认 webview 已注册监听，
 // 后续消息（init / rasterize）才不会被丢弃。全程只发一次，宿主收到 ready 后的回发

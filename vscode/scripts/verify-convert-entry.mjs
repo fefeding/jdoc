@@ -28,8 +28,20 @@ function makeServer(script) {
         const url = req.url.split('?')[0];
         if (url === '/' || url === '/index.html') {
             res.writeHead(200, { 'Content-Type': 'text/html' });
+            // 桩必须复刻 VS Code 的真实约束：**acquireVsCodeApi() 每个 webview 只能调一次**，
+            // 第二次会抛「An instance of the VS Code API has already been acquired」。
+            // 早先的桩每次都返回新对象，把「重复获取 API」这个真实缺陷完全掩盖了——
+            // 表现为状态栏转换按钮点击没反应，而 TAB 右键正常。
             res.end(`<!doctype html><html><head><meta charset="utf-8"></head><body><div id="app"></div>
-<script>window.__POSTS__=[];window.acquireVsCodeApi=function(){return {postMessage:function(m){window.__POSTS__.push(m);}};};</script>
+<script>
+window.__POSTS__=[];window.__ERRS__=[];window.__API_COUNT__=0;
+window.addEventListener('error',function(e){window.__ERRS__.push(String(e.message||e.error));});
+window.acquireVsCodeApi=function(){
+  window.__API_COUNT__++;
+  if(window.__API_COUNT__>1){throw new Error('An instance of the VS Code API has already been acquired');}
+  return {postMessage:function(m){window.__POSTS__.push(m);}};
+};
+</script>
 <script src="/app.js"></script></body></html>`);
             return;
         }
@@ -112,6 +124,20 @@ async function clickConvert(page) {
     check('DOCX 点击「转换格式」回传 convert 消息', click?.count === 1, `count=${click?.count}`);
     check('DOCX convert 消息带上文档 uri', click?.uri === 'file:///tmp/t.docx', `uri=${click?.uri}`);
 
+    // 状态栏「转换格式」按钮：与右键菜单是两条独立路径，都必须能用
+    // （曾因 chrome.ts 二次调用 acquireVsCodeApi() 抛错而点了没反应）
+    const chip = await page.evaluate(async () => {
+        const b = [...document.querySelectorAll('.oe-statusbar .chip')].find((x) => x.textContent.includes('转换'));
+        if (!b) return { err: 'no chip' };
+        window.__POSTS__.length = 0;
+        b.click();
+        await new Promise((r) => setTimeout(r, 250));
+        const msgs = window.__POSTS__.filter((m) => m && m.type === 'convert');
+        return { count: msgs.length, uri: msgs[0]?.uri ?? null, errs: window.__ERRS__.slice(0, 2) };
+    });
+    check('DOCX 状态栏转换按钮点击有响应', chip?.count === 1, `count=${chip?.count} errs=${JSON.stringify(chip?.errs)}`);
+    check('DOCX 状态栏按钮带 uri 且无运行时错误', chip?.uri === 'file:///tmp/t.docx' && (chip?.errs?.length ?? 0) === 0, `uri=${chip?.uri} errs=${JSON.stringify(chip?.errs)}`);
+
     // 菜单应随再次右键/点击外部而更新，且不残留
     const closed = await page.evaluate(() => document.querySelectorAll('.jc-ctxmenu').length);
     check('DOCX 点击菜单项后菜单关闭', closed === 0, `残留=${closed}`);
@@ -162,6 +188,18 @@ async function clickConvert(page) {
     const click = await clickConvert(page);
     check('Markdown 点击「转换格式」回传 convert 消息', click?.count === 1, `count=${click?.count}`);
     check('Markdown convert 消息带上文档 uri', click?.uri === 'file:///tmp/t.md', `uri=${click?.uri}`);
+
+    const chip = await page.evaluate(async () => {
+        const b = [...document.querySelectorAll('.jc-statusbar .chip')].find((x) => x.textContent.includes('转换'));
+        if (!b) return { err: 'no chip' };
+        window.__POSTS__.length = 0;
+        b.click();
+        await new Promise((r) => setTimeout(r, 250));
+        const msgs = window.__POSTS__.filter((m) => m && m.type === 'convert');
+        return { count: msgs.length, uri: msgs[0]?.uri ?? null, errs: window.__ERRS__.slice(0, 2) };
+    });
+    check('Markdown 状态栏转换按钮点击有响应', chip?.count === 1, `count=${chip?.count} errs=${JSON.stringify(chip?.errs)}`);
+    check('Markdown 状态栏按钮带 uri 且无运行时错误', chip?.uri === 'file:///tmp/t.md' && (chip?.errs?.length ?? 0) === 0, `uri=${chip?.uri} errs=${JSON.stringify(chip?.errs)}`);
     await page.close();
     server.close();
 }

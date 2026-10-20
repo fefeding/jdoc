@@ -119,6 +119,22 @@ button, input, select, textarea { font-family: inherit; }
 `;
 /** 创建统一底部状态栏 */
 /**
+ * 向宿主发消息的函数（由各 webview 入口注入）
+ *
+ * **不能在这里自己调 acquireVsCodeApi()**：VS Code 规定该函数每个 webview 只能调用
+ * 一次，第二次会抛「An instance of the VS Code API has already been acquired」。
+ * 各入口（main.ts / office-editor/main.ts）都在模块顶层已经调过一次，这里再调就会
+ * 在点击时抛异常——表现为「按钮点了没反应」，而 TAB 右键（走 VS Code 命令，不碰
+ * webview API）却正常，很难定位。故统一由入口注入自己的 post 函数。
+ */
+let hostPost: (msg: unknown) => void = () => undefined;
+
+/** 注入向宿主发消息的函数（入口在模块顶层调用一次即可） */
+export function setHostPostMessage(fn: (msg: unknown) => void): void {
+    hostPost = fn;
+}
+
+/**
  * 状态栏「转换格式」按钮
  *
  * 本扩展打开文档用的是 custom editor，正文渲染在 webview 里：内容区的右键事件被
@@ -148,8 +164,7 @@ export function setCurrentDocUri(uri: string | null): void {
 
 /** 向宿主请求转换当前文档 */
 export function postConvert(): void {
-    const api = (window as unknown as { acquireVsCodeApi(): { postMessage(m: unknown): void } }).acquireVsCodeApi();
-    api.postMessage({ type: 'convert', uri: currentDocUri ?? undefined });
+    hostPost({ type: 'convert', uri: currentDocUri ?? undefined });
 }
 
 /**

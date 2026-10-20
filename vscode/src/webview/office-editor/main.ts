@@ -9,7 +9,7 @@
 import { docxToHtml, xlsxToHtml, type DocxSection } from '@fefeding/jdoc';
 import { officeCss } from './style';
 import { CHROME_CSS } from '../chrome';
-import { convertMenuEntry, copySelection, hasTextSelection, installContextMenu, setCurrentDocUri } from '../chrome';
+import { convertMenuEntry, copySelection, hasTextSelection, installContextMenu, postConvert, setCurrentDocUri, setHostPostMessage } from '../chrome';
 import { createZoom, createZoomCluster } from '../zoom';
 import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
@@ -50,6 +50,10 @@ let viewGen = 0;
 function post(msg: WebviewToHost): void {
     vscode.postMessage(msg);
 }
+
+// chrome.ts 的转换入口需要向宿主发消息，但它不能自己调 acquireVsCodeApi()
+// （每个 webview 只能调一次，第二次会抛错），由这里注入本入口的 post 函数
+setHostPostMessage((m) => post(m as WebviewToHost));
 
 const hooks = {
     onSync: (bytes: Uint8Array | null): void => {
@@ -110,7 +114,9 @@ function convertBtn(): HTMLElement {
     const btn = h('button', { class: 'chip', type: 'button' });
     btn.textContent = '转换格式';
     btn.title = '转换为其他格式（DOCX / PDF / Markdown / HTML）';
-    btn.addEventListener('click', () => vscode.postMessage({ type: 'convert' }));
+    // 走 chrome.ts 的 postConvert：它会带上当前文档 uri，宿主才能精确定位目标文件。
+    // 不能直接用 vscode.postMessage——那条路拿不到 uri。
+    btn.addEventListener('click', () => postConvert());
     return btn;
 }
 
