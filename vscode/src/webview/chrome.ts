@@ -110,6 +110,27 @@ button, input, select, textarea { font-family: inherit; }
 }
 `;
 /** 创建统一底部状态栏 */
+/**
+ * 状态栏「转换格式」按钮
+ *
+ * 本扩展打开文档用的是 custom editor，正文渲染在 webview 里：内容区的右键事件被
+ * webview 吞掉，VS Code 的 editor/context 菜单**根本不会出现**——只靠右键菜单，
+ * 转换功能在编辑器里等于没有入口（这正是之前「移除 editor/title、全部收敛到右键」
+ * 那次改动留下的死角）。这里在常驻的状态栏上给出可靠入口，点击后交回宿主执行
+ * jdoc.convert；宿主侧 protocol 已加 `{ type: 'convert' }` 消息与之配对。
+ */
+export function createConvertChip(): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'chip';
+    btn.textContent = '转换格式';
+    btn.title = '转换为其他格式（DOCX / PDF / Markdown / HTML）';
+    btn.addEventListener('click', () =>
+        (window as unknown as { acquireVsCodeApi(): { postMessage(m: unknown): void } }).acquireVsCodeApi().postMessage({ type: 'convert' })
+    );
+    return btn;
+}
+
 export function createStatusBar(): { el: HTMLElement; textEl: HTMLElement } {
     const textEl = document.createElement('span');
     textEl.className = 'jc-status-text';

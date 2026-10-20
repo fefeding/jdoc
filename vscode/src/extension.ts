@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { JdocDocument } from './document';
-import { convert, pdfPageToPng, pdfToJson, type ConvertTarget } from '@fefeding/jdoc';
+import { convert, type ConvertTarget } from '@fefeding/jdoc';
 import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
 
 /** 可被转换命令识别的源格式（与扩展名对应） */
@@ -41,6 +41,13 @@ function getNonce(): string {
     const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     for (let i = 0; i < 32; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
     return text;
+}
+
+/** webview 回传的 data URL（image/png;base64,…）还原成 PNG 字节。 */
+function dataUrlToBytes(dataUrl: string): Uint8Array {
+    const comma = dataUrl.indexOf(',');
+    const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+    return new Uint8Array(Buffer.from(b64, 'base64'));
 }
 
 class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
@@ -160,6 +167,10 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                         await document.revert();
                         await sendInit();
                         send({ type: 'info', kind: 'info', message: loc('extension.reloaded', 'Reloaded') });
+                        break;
+                    case 'convert':
+                        // 状态栏「转换格式」按钮：等价于执行 jdoc.convert（无参数走活动文档）
+                        await vscode.commands.executeCommand('jdoc.convert');
                         break;
                     case 'error':
                         send({ type: 'info', kind: 'error', message: message.message });
@@ -347,14 +358,90 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
     }
 
     /**
+     * 在一次性webview 里把 PDF 逐页栅格化为 PNG。
+     *
+     * 为什么必须借道 webview：pdfjs 在 Node 侧渲染依赖 @napi-rs/canvas，那是约 27MB
+     * 的平台相关原生二进制（skia.*.node），既无法被 esbuild 打包、也无法随扩展分发；
+     * 而且 esbuild 产物里 pdfjs 的 fake worker 会因定位不到 pdf.worker.mjs 直接抛
+     *「No GlobalWorkerOptions.workerSrc specified」。webview 里pdfjs 与浏览器 canvas
+     * 都是现成的，中文 CJK 字形渲染也正常。
+     *
+     * 每渲染完一页onPage 就被调用一次并立刻落盘，内存峰值只有单页。
+     * 返回实际写出的页数。
+     */
+    private rasterizePdf(
+        pdf: Uint8Array,
+        scale: number,
+        onPage: (index: number, png: Uint8Array) => Promise<void>
+    ): Promise<number> {
+        return new Promise<number>((resolve, reject) => {
+            const panel = vscode.window.createWebviewPanel(
+                'jdoc.rasterize',
+                loc('extension.rasterizing', '正在导出图片…'),
+                { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
+                { enableScripts: true, enableCommandUris: false }
+            );
+            panel.webview.html = this.getWebviewHtml(panel.webview, 'pdf');
+
+            let settled = false;
+            let count = 0;
+            const finish = (err?: Error) => {
+                if (settled) return;
+                settled = true;
+                panel.dispose();
+                if (err) reject(err);
+                else resolve(count);
+            };
+
+            panel.webview.onDidReceiveMessage((msg: WebviewToHost) => {
+                switch (msg.type) {
+                    case 'ready':
+                        // 必须等握手：webview 脚本就绪前发出的消息会被丢弃
+                        panel.webview.postMessage({
+                            type: 'rasterize',
+                            bytes: Buffer.from(pdf).toString('base64'),
+                            scale
+                        });
+                        break;
+                    case 'rasterizePage':
+                        count = Math.max(count, msg.index);
+                        void onPage(msg.index, dataUrlToBytes(msg.dataUrl)).catch((e) =>
+                            finish(e instanceof Error ? e : new Error(String(e)))
+                        );
+                        break;
+                    case 'rasterizeDone':
+                        finish();
+                        break;
+                    case 'rasterizeError':
+                        finish(new Error(msg.message));
+                        break;
+                    default:
+                        break;
+                }
+            });
+            panel.onDidDispose(() => finish(new Error(loc('extension.rasterizeCanceled', '导出图片已取消'))));
+        });
+    }
+
+    /**
      * 导出为图片：源格式 → PDF → 每页一张 PNG，写入用户选定目录。
      *
-     * 库的ConvertTarget 只有 docx/pdf/md/html，没有 png，所以显式走两步：
-     * 先转 PDF（自动子集化字体，中文文档也只有几百 KB），再用 pdfPageToPng 逐页栅格化。
-     * 栅格化在扩展宿主完成，无需 webview 参与，因此没有打开任何文档时也能用。
-     * pdfPageToPng 依赖 @napi-rs/canvas（根库已声明为 optionalDependencies）。
+     * 库的 ConvertTarget 只有 docx/pdf/md/html，没有 png，所以显式走两步：先用 pdf-lib
+     * 转 PDF（已修子集化，中文文档也只有几百 KB），再交给一次性 webview 逐页栅格化。
+     * 全程不需要任何原生依赖，没打开任何文档时也能用。
      */
     private async exportImages(target: vscode.Uri, from: ConvertTarget | 'txt', sourceName: string): Promise<void> {
+        // 先选目录再栅格化：页数要等 webview 渲染完才知道，这样还能边渲染边落盘，
+        // 不必把所有 PNG 暂存在内存里。
+        const picked = await vscode.window.showOpenDialog({
+            canSelectFolders: true,
+            canSelectFiles: false,
+            canSelectMany: false,
+            title: loc('extension.pickImageFolder', '选择图片输出目录')
+        });
+        const folder = picked?.[0];
+        if (!folder) return;
+
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -364,27 +451,16 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
                     const pdf = await convert(data, 'pdf', { from });
-                    // text:false 只取页数，不解析正文（大文档下快很多）
-                    const meta = await pdfToJson(pdf, { text: false });
-                    const pages = meta.pageCount ?? 1;
-
-                    const picked = await vscode.window.showOpenDialog({
-                        canSelectFolders: true,
-                        canSelectFiles: false,
-                        canSelectMany: false,
-                        title: loc('extension.pickImageFolder', '选择图片输出目录（共 {0} 页）', String(pages))
-                    });
-                    const folder = picked?.[0];
-                    if (!folder) return;
-
                     const base = sourceName.replace(/\.[^.]+$/, '') || 'page';
-                    for (let i = 1; i <= pages; i++) {
-                        // scale=2 约 144dpi，A4 输出约 1191x1684，清晰度足够印刷预览
-                        const png = await pdfPageToPng(pdf, i, 2);
-                        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, `${base}-${i}.png`), png);
-                    }
+                    // scale=2 约 144dpi，A4 输出约 1191x1684，清晰度足够印刷预览
+                    const written = await this.rasterizePdf(pdf, 2, async (index, png) => {
+                        await vscode.workspace.fs.writeFile(
+                            vscode.Uri.joinPath(folder, `${base}-${index}.png`),
+                            png
+                        );
+                    });
                     vscode.window.showInformationMessage(
-                        `${loc('extension.imagesExported', '已导出 {0} 张图片', String(pages))} → ${folder.fsPath}`
+                        `${loc('extension.imagesExported', '已导出 {0} 张图片', String(written))} → ${folder.fsPath}`
                     );
                 } catch (err: any) {
                     vscode.window.showErrorMessage(

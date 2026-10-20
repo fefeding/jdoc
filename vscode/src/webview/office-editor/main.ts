@@ -83,7 +83,7 @@ function buildShell(): void {
         onToggle: () => bindZoom()
     });
 
-    app.append(toolbarEl, h('div', { class: 'oe-body' }, [outline.el, contentEl]), h('div', { class: 'oe-statusbar' }, [statusEl, createZoomCluster(zoom)]));
+    app.append(toolbarEl, h('div', { class: 'oe-body' }, [outline.el, contentEl]), h('div', { class: 'oe-statusbar' }, [statusEl, convertBtn(), createZoomCluster(zoom)]));
     root.append(app);
 
     // 缩放会改变内容高度与各标题的视口位置，但缩放本身不触发 scroll 事件，
@@ -94,6 +94,23 @@ function buildShell(): void {
     // 必须监听 subtree：XLSX 重建的是 .oe-xl 内部的 .oe-grid，contentEl 的直接子节点
     // 并没变，只看 childList 会漏掉，缩放就再也绑不回新网格上。
     new MutationObserver(() => bindZoom()).observe(contentEl, { childList: true, subtree: true });
+}
+
+/**
+ * 状态栏「转换格式」按钮
+ *
+ * DOCX 打开后是 custom editor，正文在 webview 里：内容区的右键事件被webview 吞掉，
+ * VS Code 的 editor/context 菜单**根本不会出现**，explorer/context 又只在资源管理器
+ * 文件树里生效——只靠右键菜单，转换功能在编辑器里等于没有入口（这正是之前
+ * 「移除 editor/title、全部收敛到右键」那次改动留下的死角）。这里在状态栏常驻一个
+ * 按钮作为可靠入口，点击后交回宿主执行 jdoc.convert。
+ */
+function convertBtn(): HTMLElement {
+    const btn = h('button', { class: 'chip', type: 'button' });
+    btn.textContent = '转换格式';
+    btn.title = '转换为其他格式（DOCX / PDF / Markdown / HTML）';
+    btn.addEventListener('click', () => vscode.postMessage({ type: 'convert' }));
+    return btn;
 }
 
 /**

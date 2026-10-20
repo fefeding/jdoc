@@ -28,8 +28,14 @@ export type WebviewToHost =
   | { type: 'save' }
   | { type: 'saveAs'; bytes: string | null }
   | { type: 'revert' }
-  /** 把 webview 端的解析/生成错误暴露到 Host UI。 */
-  | { type: 'error'; message: string };
+  /** 状态栏「转换格式」按钮：请求宿主对当前文档执行 jdoc.convert（无参数=活动文档）。 */
+| { type: 'convert' }
+  /** 把webview 端的解析/生成错误暴露到 Host UI。 */
+  | { type: 'error'; message: string }
+  /** 栅格化结果：每渲染完一页立刻回传一页，避免整本文档的 PNG 挤在一条消息里。 */
+  | { type: 'rasterizePage'; index: number; dataUrl: string }
+  | { type: 'rasterizeDone'; count: number }
+  | { type: 'rasterizeError'; message: string };
 
 /** Host → Webview */
 export type HostToWebview =
@@ -57,4 +63,13 @@ export type HostToWebview =
   | { type: 'bytes'; bytes: string; dirty: boolean }
   | { type: 'reverted' }
   | { type: 'saved' }
-  | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' };
+  | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' }
+  /**
+   * 栅格化请求：把整份 PDF 逐页渲染成 PNG，逐页回传（见 WebviewToHost.rasterizePage）。
+   *
+   * 之所以由 webview 而非宿主栅格化：pdfjs 在 Node 侧渲染依赖 @napi-rs/canvas，
+   * 那是约 27MB 的平台相关原生二进制，既无法被esbuild 打包也不能随扩展分发；
+   * 而且打包后 pdfjs 的 fake worker 会因定位不到 pdf.worker.mjs 直接失败。
+   * webview 侧pdfjs 与浏览器 canvas 都是现成的，中文 CJK 字形渲染也正常。
+   */
+  | { type: 'rasterize'; bytes: string; scale: number };

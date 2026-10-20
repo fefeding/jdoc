@@ -4,6 +4,7 @@ import { b64ToBytes, bytesToB64, escapeHtml } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
+import { createConvertChip } from './chrome';
 import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
 import { highlightCodeBlocks, markdownCodeCss } from './markdown-code';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
@@ -32,8 +33,6 @@ async function loadBytes(msg: HostToWebview): Promise<Uint8Array> {
     return b64ToBytes(init.bytes || '');
 }
 let statusText: HTMLElement | null = null;
-/** 只握手一次：host 收到 ready 会再发一次 init，无条件回 ready 会形成无限循环。 */
-let readySent = false;
 
 /** 缩放：PDF / Markdown / 纯文本等只读内容共用，默认适应宽度，宽内容不会出屏外 */
 const zoom = createZoom();
@@ -97,6 +96,9 @@ function renderShell(): { content: HTMLElement } {
             vscode.postMessage({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
             vscode.postMessage({ type: 'save' });
         });
+        // PDF 阅读器自带工具栏且已挂缩放簇（pdf-viewer 内），这里只补转换入口，
+        // 避免同一份缩放簇出现两次
+        status.el.append(createConvertChip());
         app.append(status.el);
         return { content: pdfViewer.content };
     }
@@ -110,7 +112,7 @@ function renderShell(): { content: HTMLElement } {
     app.className = 'jc-app';
     app.append(content, status.el);
     // 缩放簇挂在状态栏尾部（createStatusBar 里已有一个 grow 占位，簇会自然靠右）
-    status.el.append(createZoomCluster(zoom));
+    status.el.append(createConvertChip(), createZoomCluster(zoom));
     return { content };
 }
 
@@ -246,6 +248,45 @@ async function renderText(content: HTMLElement, bytes: Uint8Array): Promise<void
     setStatus('纯文本预览');
 }
 
+/**
+ * 把整份 PDF 逐页渲染成 PNG，每完成一页立刻回传一页。
+ *
+ * 宿主端没有 canvas 可用（pdfjs 的 Node 渲染依赖 @napi-rs/canvas，约 27MB 的平台相关
+ * 原生二进制，无法随扩展分发），所以由 webview 用浏览器原生 canvas 渲染；中文 CJK
+ * 字形在浏览器里走 Path2D 也不会有宿主侧遇到的 napi InvalidArg 问题。
+ *
+ * 逐页回传而不是攒齐再发：几十页文档的 PNG 全塞进一条 postMessage 体会非常大，
+ * 宿主边收边落盘，内存峰值只剩单页。
+ */
+async function rasterize(bytes: Uint8Array, scale: number): Promise<void> {
+    try {
+        const pdfjs: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        const worker = (window as any).__JDC_PDF_WORKER__;
+        if (worker && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+            pdfjs.GlobalWorkerOptions.workerSrc = worker;
+        }
+        // pdfjs 会把 data 转移给 worker，必须传副本，否则原始字节被 detach
+        const doc = await pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
+        for (let i = 1; i <= doc.numPages; i++) {
+            const page = await doc.getPage(i);
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.ceil(viewport.width);
+            canvas.height = Math.ceil(viewport.height);
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('无法创建 canvas 2D 上下文');
+            // 铺白底：PDF 页面本身透明，直接导出会得到透明 PNG，在部分看图器里显示为黑块
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            vscode.postMessage({ type: 'rasterizePage', index: i, dataUrl: canvas.toDataURL('image/png') });
+        }
+        vscode.postMessage({ type: 'rasterizeDone', count: doc.numPages });
+    } catch (err: any) {
+        vscode.postMessage({ type: 'rasterizeError', message: String(err?.message || err) });
+    }
+}
+
 window.addEventListener('message', (e) => {
     const msg = e.data as HostToWebview;
     switch (msg.type) {
@@ -259,11 +300,10 @@ window.addEventListener('message', (e) => {
                 pdfViewer?.setTitle(msg.title || '');
                 zoom.fit(); // 新文档：缩放复位到适应宽度
                 void renderContent();
-                if (!readySent) {
-                    readySent = true;
-                    vscode.postMessage({ type: 'ready' });
-                }
             })();
+            break;
+        case 'rasterize':
+            void rasterize(b64ToBytes(msg.bytes), msg.scale || 2);
             break;
         case 'reverted':
             void renderContent();
@@ -280,3 +320,8 @@ window.addEventListener('message', (e) => {
             break;
     }
 });
+
+// 脚本就绪即握手，而不是等处理完 init 再回：宿主必须先确认 webview 已注册监听，
+// 后续消息（init / rasterize）才不会被丢弃。全程只发一次，宿主收到 ready 后的回发
+// 不会再次触发它，因此不存在握手循环。
+vscode.postMessage({ type: 'ready' });
