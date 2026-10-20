@@ -39,6 +39,11 @@ export type HostToWebview =
     mode: EditorMode;
     /** 原始文件字节（base64）—— 预览模式忠实渲染。 */
     bytes: string;
+    /**
+     * 可访问的原始文件 URI（宿主侧 asWebviewUri 结果）。大文件优先走 fetch 取
+     * 二进制，避免把整份 base64 经 postMessage 序列化卡死主线程；缺失时回退 bytes。
+     */
+    fileUri?: string;
     title: string;
     /** 当前文档的 uri.toString()。 */
     uri: string;

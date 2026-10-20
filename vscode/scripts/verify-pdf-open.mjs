@@ -68,16 +68,8 @@ const server = http.createServer((req, res) => {
 <script>window.acquireVsCodeApi=function(){return{postMessage:function(){}}};</script>
 <script src="/webview.js"></script>
 <script>
-fetch('/pdf').then(r=>r.arrayBuffer()).then(buf=>{
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  const CHUNK = 0x8000;
-  for (let i=0;i<bytes.length;i+=CHUNK) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+CHUNK));
-  const b64 = btoa(bin);
-  console.log('[test] base64 ready len=', b64.length);
-  window.postMessage({type:'init',format:'pdf',mode:'view',bytes:b64,title:'课本',dirty:false,locale:'zh-cn'},'*');
-  console.log('[test] init sent');
-}).catch(e=>{document.body.innerHTML='<pre class=error>fetch 失败:'+e+'</pre>';});
+// 模拟真实宿主：init 直接带 fileUri，webview 端自行 fetch 二进制（大文件免 base64 卡死）
+window.postMessage({type:'init',format:'pdf',mode:'view',fileUri:'/pdf',title:'课本',uri:'file://x',dirty:false,locale:'zh-cn'},'*');
 </script></body></html>`);
         return;
     }

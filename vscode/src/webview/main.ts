@@ -14,6 +14,23 @@ const vscode = acquireVsCodeApi();
 let format: DocFormat = 'pptx';
 let mode: EditorMode = 'view';
 let currentBytes: Uint8Array = new Uint8Array(0);
+
+/**
+ * 取文档字节：优先 fetch 宿主给的可访问文件 URI（大文件避免 base64 经 postMessage
+ * 序列化卡死主线程），失败再回退到 init.bytes 的 base64。
+ */
+async function loadBytes(msg: HostToWebview): Promise<Uint8Array> {
+    if (msg.type === 'init' && msg.fileUri) {
+        try {
+            const res = await fetch(msg.fileUri);
+            if (res.ok) return new Uint8Array(await res.arrayBuffer());
+        } catch {
+            // 回退 base64
+        }
+    }
+    const init = msg.type === 'init' ? msg : (msg as { bytes?: string });
+    return b64ToBytes(init.bytes || '');
+}
 let statusText: HTMLElement | null = null;
 /** 只握手一次：host 收到 ready 会再发一次 init，无条件回 ready 会形成无限循环。 */
 let readySent = false;
@@ -233,18 +250,20 @@ window.addEventListener('message', (e) => {
     const msg = e.data as HostToWebview;
     switch (msg.type) {
         case 'init':
-            format = msg.format;
-            mode = msg.mode || 'view';
-            currentBytes = b64ToBytes(msg.bytes);
-            applyBaseStyle();
-            renderShell();
-            pdfViewer?.setTitle(msg.title || '');
-            zoom.fit(); // 新文档：缩放复位到适应宽度
-            void renderContent();
-            if (!readySent) {
-                readySent = true;
-                vscode.postMessage({ type: 'ready' });
-            }
+            void (async () => {
+                format = msg.format;
+                mode = msg.mode || 'view';
+                currentBytes = await loadBytes(msg);
+                applyBaseStyle();
+                renderShell();
+                pdfViewer?.setTitle(msg.title || '');
+                zoom.fit(); // 新文档：缩放复位到适应宽度
+                void renderContent();
+                if (!readySent) {
+                    readySent = true;
+                    vscode.postMessage({ type: 'ready' });
+                }
+            })();
             break;
         case 'reverted':
             void renderContent();

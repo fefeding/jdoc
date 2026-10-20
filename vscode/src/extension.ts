@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { JdocDocument } from './document';
 import { convert, pdfPageToPng, pdfToJson, type ConvertTarget } from '@fefeding/jdoc';
 import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
@@ -92,7 +93,8 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         webviewPanel.webview.options = {
             enableScripts: true,
             enableCommandUris: false,
-            localResourceRoots: [this.context.extensionUri]
+            // 文档所在目录也加入资源根，使 webview 能直接 fetch 原始文件（大 PDF 免 base64 卡死）
+            localResourceRoots: [this.context.extensionUri, vscode.Uri.file(path.dirname(document.uri.fsPath))]
         };
         webviewPanel.webview.html = this.getWebviewHtml(webviewPanel.webview, document.format);
 
@@ -119,6 +121,8 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                 format: s.format,
                 mode: s.mode,
                 bytes: s.bytes,
+                // 可访问的原始文件 URI：webview 优先 fetch 它取二进制，绕开大文件 base64 瓶颈
+                fileUri: webviewPanel.webview.asWebviewUri(document.uri).toString(),
                 title,
                 uri: key,
                 dirty: document.isDirty,
@@ -434,7 +438,9 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             // echarts-gl 内部用 new Function() 解析 expr()，需 unsafe-eval 否则 3D 图表抛错；
             // pdfjs worker 以 Worker 形式加载，需 worker-src（含 blob: 兜底）
             `script-src 'nonce-${nonce}' 'unsafe-eval' ${webview.cspSource};`,
-            `worker-src ${webview.cspSource} blob: data:;`
+            `worker-src ${webview.cspSource} blob: data:;`,
+            // 允许 webview 直接 fetch 宿主给的文件 URI（asWebviewUri 同源），大文件免 base64 卡死
+            `connect-src ${webview.cspSource} blob: data:;`
         ].join(' ');
         return `<!DOCTYPE html>
 <html lang="${vscode.env.language}" data-oe-theme="${oeTheme}">
