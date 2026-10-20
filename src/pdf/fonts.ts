@@ -145,7 +145,9 @@ async function findFirstUsableFont(
         try {
             const probe = await PDFDocument.create();
             probe.registerFontkit(fontkit as never);
-            await probe.embedFont(bytes);
+            // 用与生产一致的 subset: true 探测：TTC 集合无法被 fontkit 子集化
+            // （createSubset is not a function），只有子集化能成功才说明该候选真正可用。
+            await probe.embedFont(bytes, { subset: true });
             // bold/italic 不单独探测：generate.ts 的 buildFonts 会自动回落到 regular
             return { regular: bytes };
         } catch {

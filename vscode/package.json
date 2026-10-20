@@ -103,33 +103,33 @@
       "editor/title": [
         {
           "command": "jdoc.viewMode",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && !jdoc:editing",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && !jdoc:editing",
           "group": "navigation@1"
         },
         {
           "command": "jdoc.editMode",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && jdoc:editing",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && jdoc:editing",
           "group": "navigation@1"
         },
         {
           "command": "jdoc.switchDocument",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
           "group": "navigation@2"
         },
         {
+          "command": "jdoc.convert",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "group": "navigation@3"
+        },
+        {
           "command": "jdoc.revert",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-          "group": "navigation"
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "1_modification"
         },
         {
           "command": "jdoc.exportCopy",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-          "group": "navigation"
-        },
-        {
-          "command": "jdoc.convert",
-          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
-          "group": "navigation@3"
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "1_modification"
         }
       ],
       "explorer/context": [
@@ -147,8 +147,33 @@
       "editor/context": [
         {
           "command": "jdoc.preview",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-          "group": "navigation"
+          "when": "activeCustomEditor != 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jdoc.convert",
+          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "jdoc.viewMode",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && !jdoc:editing",
+          "group": "navigation@3"
+        },
+        {
+          "command": "jdoc.editMode",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && jdoc:editing",
+          "group": "navigation@3"
+        },
+        {
+          "command": "jdoc.revert",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "1_modification"
+        },
+        {
+          "command": "jdoc.exportCopy",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "1_modification"
         }
       ]
     }

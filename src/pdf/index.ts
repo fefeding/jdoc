@@ -120,14 +120,27 @@ export async function pdfPageToPng(
 ): Promise<Uint8Array> {
     try {
         const data = await toArrayBuffer(input);
-        const canvasFactory = (await import(/* @vite-ignore */ CANVAS_PACKAGE).catch(() => undefined)) as
-            | {
-                  createCanvas: (w: number, h: number) => {
-                      getContext: (type: '2d') => unknown;
-                      toBuffer: (mime: string) => Buffer;
-                  };
-              }
-            | undefined;
+        const canvasModule = (await import(/* @vite-ignore */ CANVAS_PACKAGE).catch(() => undefined)) as
+                        | {
+                              createCanvas: (w: number, h: number) => {
+                                  getContext: (type: '2d') => unknown;
+                                  toBuffer: (mime: string) => Buffer;
+                              };
+                              Path2D?: unknown;
+                              DOMMatrix?: unknown;
+                          }
+                        | undefined;
+                    const canvasFactory = canvasModule;
+
+                    // pdfjs 用**全局** Path2D / DOMMatrix 绘制 CJK 字形（CanvasGraphics.paintChar）。
+                    // Node 端没有浏览器环境，不挂上就会走到 @napi-rs/canvas 的默认实现并抛出
+                    // napi InvalidArg「Value is none of these types `String`, `Path`」，
+                    // 表现为「ASCII 能渲染、含中文的页直接失败」。这里把 canvas 的实现补进全局。
+                    if (canvasModule) {
+                                    const g = globalThis as unknown as Record<string, unknown>;
+                                    if (canvasModule.Path2D) g.Path2D = canvasModule.Path2D;
+                                    if (canvasModule.DOMMatrix) g.DOMMatrix = canvasModule.DOMMatrix;
+                                }
 
         const entries = ['pdfjs-dist/legacy/build/pdf.mjs', 'pdfjs-dist/build/pdf.mjs'];
         let pdfjs: PdfjsForRender | undefined;

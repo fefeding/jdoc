@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { JdocDocument } from './document';
-import { convert, type ConvertTarget } from '@fefeding/jdoc';
+import { convert, pdfPageToPng, pdfToJson, type ConvertTarget } from '@fefeding/jdoc';
 import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
 
 /** 可被转换命令识别的源格式（与扩展名对应） */
@@ -21,6 +21,9 @@ function extToFormat(path: string): ConvertTarget | 'txt' | undefined {
     if (/\.txt$/i.test(path)) return 'txt';
     return undefined;
 }
+
+/** 「导出为图片」在 QuickPick 里的哨兵值（库的 ConvertTarget 里没有 png，故用独立标记） */
+const IMAGE_TARGET = '__images__';
 
 const VIEW_TYPE = 'jdoc.documentEditor';
 
@@ -279,7 +282,10 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
      * 通过 QuickPick 选择目标格式，转换后在扩展宿主（Node）完成并另存为新文件。
      */
     public async convertUri(uri?: vscode.Uri): Promise<void> {
-        const target = uri || vscode.window.activeTextEditor?.document.uri;
+        // uri：菜单点击时 VS Code 传入；activeTextEditor：内置编辑器打开的 md/txt；
+        // _activeDoc：jdoc 自定义编辑器（此时 activeTextEditor 为 undefined），
+        // 否则从命令面板触发会误报「请选择文件」。
+        const target = uri || vscode.window.activeTextEditor?.document.uri || this._activeDoc?.uri;
         if (!target) {
             vscode.window.showInformationMessage(loc('extension.pickConvert', 'Select a file to convert with jdoc.'));
             return;
@@ -291,22 +297,31 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             return;
         }
 
-        const items = (Object.keys(TARGET_META) as ConvertTarget[])
-            .filter((k) => k !== from)
-            .map((k) => ({ label: TARGET_META[k].label, target: k }));
+        const items = [
+            { label: loc('extension.toImages', '图片（PNG，每页一张）'), target: IMAGE_TARGET },
+            ...(Object.keys(TARGET_META) as ConvertTarget[])
+                .filter((k) => k !== from)
+                .map((k) => ({ label: TARGET_META[k].label, target: k }))
+        ];
         const picked = await vscode.window.showQuickPick(items, {
             placeHolder: loc('extension.convertTo', 'Convert "{0}" to which format?', sourceName),
             title: loc('extension.convertTitle', 'jdoc: 转换文档格式')
         });
         if (!picked) return;
 
-        const meta = TARGET_META[picked.target];
+        if (picked.target === IMAGE_TARGET) {
+            await this.exportImages(target, from, sourceName);
+            return;
+        }
+
+        const to = picked.target as ConvertTarget;
+        const meta = TARGET_META[to];
         await vscode.window.withProgress(
             { location: vscode.ProgressLocation.Notification, title: loc('extension.converting', 'Converting document…') },
             async () => {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
-                    const result = await convert(data, picked.target, { from });
+                    const result = await convert(data, to, { from });
                     const base = sourceName.replace(/\.[^.]+$/, '');
                     const dir = target.path.replace(/[^/]+$/, '');
                     const outUri = await vscode.window.showSaveDialog({
@@ -322,6 +337,55 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                     );
                 } catch (err: any) {
                     vscode.window.showErrorMessage(loc('extension.convertFailed', 'Conversion failed: {0}', String(err?.message || err)));
+                }
+            }
+        );
+    }
+
+    /**
+     * 导出为图片：源格式 → PDF → 每页一张 PNG，写入用户选定目录。
+     *
+     * 库的ConvertTarget 只有 docx/pdf/md/html，没有 png，所以显式走两步：
+     * 先转 PDF（自动子集化字体，中文文档也只有几百 KB），再用 pdfPageToPng 逐页栅格化。
+     * 栅格化在扩展宿主完成，无需 webview 参与，因此没有打开任何文档时也能用。
+     * pdfPageToPng 依赖 @napi-rs/canvas（根库已声明为 optionalDependencies）。
+     */
+    private async exportImages(target: vscode.Uri, from: ConvertTarget | 'txt', sourceName: string): Promise<void> {
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: loc('extension.exportingImages', '导出图片…')
+            },
+            async () => {
+                try {
+                    const data = await vscode.workspace.fs.readFile(target);
+                    const pdf = await convert(data, 'pdf', { from });
+                    // text:false 只取页数，不解析正文（大文档下快很多）
+                    const meta = await pdfToJson(pdf, { text: false });
+                    const pages = meta.pageCount ?? 1;
+
+                    const picked = await vscode.window.showOpenDialog({
+                        canSelectFolders: true,
+                        canSelectFiles: false,
+                        canSelectMany: false,
+                        title: loc('extension.pickImageFolder', '选择图片输出目录（共 {0} 页）', String(pages))
+                    });
+                    const folder = picked?.[0];
+                    if (!folder) return;
+
+                    const base = sourceName.replace(/\.[^.]+$/, '') || 'page';
+                    for (let i = 1; i <= pages; i++) {
+                        // scale=2 约 144dpi，A4 输出约 1191x1684，清晰度足够印刷预览
+                        const png = await pdfPageToPng(pdf, i, 2);
+                        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, `${base}-${i}.png`), png);
+                    }
+                    vscode.window.showInformationMessage(
+                        `${loc('extension.imagesExported', '已导出 {0} 张图片', String(pages))} → ${folder.fsPath}`
+                    );
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(
+                        loc('extension.convertFailed', 'Conversion failed: {0}', String(err?.message || err))
+                    );
                 }
             }
         );
