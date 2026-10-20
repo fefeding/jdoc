@@ -20,6 +20,8 @@ export type WebviewToHost =
   | { type: 'save' }
   | { type: 'saveAs'; bytes: string | null }
   | { type: 'revert' }
+  /** 请求宿主对当前文档执行 jdoc.convert（内容区右键「转换格式」）。 */
+  | { type: 'convert'; uri?: string }
   /** Surface a webview-side problem (parse/serialize failure) in the host UI. */
   | { type: 'error'; message: string };
 

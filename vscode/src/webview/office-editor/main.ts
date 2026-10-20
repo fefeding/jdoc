@@ -9,6 +9,7 @@
 import { docxToHtml, xlsxToHtml, type DocxSection } from '@fefeding/jdoc';
 import { officeCss } from './style';
 import { CHROME_CSS } from '../chrome';
+import { convertMenuEntry, copySelection, hasTextSelection, installContextMenu, setCurrentDocUri } from '../chrome';
 import { createZoom, createZoomCluster } from '../zoom';
 import { toast } from './framework';
 import { createDocxEditor, type DocxEditor } from './docx';
@@ -457,6 +458,8 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
             const my = ++gen; // 丢弃此后被更新的 init 所取代的异步结果
             format = msg.format;
             mode = msg.mode === 'edit' ? 'edit' : 'view';
+            // 记住当前文档 uri：转换请求必须带上，否则宿主只能靠 activeTextEditor 猜
+            setCurrentDocUri(msg.uri ?? null);
             latest = b64ToBytes(msg.bytes);
             original = latest;
             if (editor) {
@@ -504,6 +507,26 @@ function main(): void {
     style.textContent = CHROME_CSS + officeCss;
     document.head.appendChild(style);
     buildShell();
+
+    // 文档内容区右键菜单：custom editor 的正文在 webview 里，VS Code 的
+    // editor/context 菜单不会出现，这里自绘一份，把「转换格式」补进内容区右键。
+    // 可编辑区域（编辑模式下的 contenteditable / 表格单元格 / 输入框）保留浏览器
+    // 原生菜单——那里的复制、粘贴、撤销等原生行为更完整。
+    installContextMenu(
+        () => {
+            const entries = [];
+            if (hasTextSelection()) {
+                entries.push({ label: '复制', action: () => copySelection(), hint: '⌘C' });
+                entries.push({});
+            }
+            entries.push(convertMenuEntry());
+            return entries;
+        },
+        (target) =>
+            target.isContentEditable ||
+            !!target.closest('[contenteditable="true"], input, textarea, .oe-tbl td, .oe-tbl th')
+    );
+
     post({ type: 'ready' });
 }
 

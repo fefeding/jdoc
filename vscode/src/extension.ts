@@ -168,10 +168,22 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                         await sendInit();
                         send({ type: 'info', kind: 'info', message: loc('extension.reloaded', 'Reloaded') });
                         break;
-                    case 'convert':
-                        // 状态栏「转换格式」按钮：等价于执行 jdoc.convert（无参数走活动文档）
-                        await vscode.commands.executeCommand('jdoc.convert');
+                    case 'convert': {
+                        // 状态栏按钮 / 内容区右键：优先用 webview 带来的 uri，
+                        // 兜底用当前面板的 document.uri（本 handler 就绑在这个面板上）。
+                        // 绝不能让 convertUri 去猜 activeTextEditor——同时开着别的文本
+                        // 文件时会转错对象（Markdown 走内置编辑器时尤其明显）。
+                        let target: vscode.Uri | undefined;
+                        if (message.uri) {
+                            try {
+                                target = vscode.Uri.parse(message.uri, true);
+                            } catch {
+                                target = undefined;
+                            }
+                        }
+                        await this.convertUri(target ?? document.uri);
                         break;
+                    }
                     case 'error':
                         send({ type: 'info', kind: 'error', message: message.message });
                         break;

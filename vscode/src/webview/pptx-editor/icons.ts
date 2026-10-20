@@ -6,6 +6,9 @@
 // keep consistent at 16px.
 const GLYPHS: Record<string, string> = {
   save: '<path d="M2.5 2.5h8.4l2.6 2.6v8.4H2.5z"/><path d="M5 2.5v3.6h6V2.5"/><rect x="5" y="9.2" width="6" height="4.3"/>',
+  // 格式转换：上下两条反向箭头
+  convert:
+    '<path d="M2.6 4.6h9.2l-2.3-2.3M13.4 11.4H4.2l2.3 2.3"/>',
   undo: '<path d="M6.3 4.4L2.9 7.6l3.4 3.2"/><path d="M2.9 7.6h6.3a4.1 4.1 0 0 1 0 8.2H6"/>',
   redo: '<path d="M9.7 4.4l3.4 3.2-3.4 3.2"/><path d="M13.1 7.6H6.8a4.1 4.1 0 0 0 0 8.2H10"/>',
   present: '<path d="M4.6 3.1l8.4 4.9-8.4 4.9z" fill="currentColor" stroke="none"/>',

@@ -153,6 +153,7 @@ export const zhCN: Record<keyof typeof en, string> = {
 
   // ---------- 画布右键菜单 ----------
   'menu.editMode': '编辑',
+  'menu.convertFormat': '转换格式…',
   'menu.viewMode': '预览',
   'menu.cut': '剪切',
   'menu.copy': '复制',

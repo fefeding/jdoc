@@ -96,6 +96,14 @@ button, input, select, textarea { font-family: inherit; }
 .jc-zoom .chip:hover { background: var(--jc-hover); }
 .jc-zoom .chip.on { background: var(--jc-active); color: var(--jc-text); }
 
+/* 状态栏里的普通 chip（转换格式按钮）：与缩放簇按钮同一套视觉，
+   否则会渲染成突兀的原生灰色按钮，在深色状态栏上几乎看不出来。 */
+.jc-statusbar .chip {
+  appearance: none; border: 0; background: transparent; color: inherit; font: inherit;
+  padding: 2px 7px; border-radius: 4px; cursor: pointer; line-height: 1.4;
+}
+.jc-statusbar .chip:hover { background: var(--jc-hover); }
+
 /* ---------- 滚动条（跟随 VS Code） ---------- */
 .jc-content::-webkit-scrollbar, .oe-content::-webkit-scrollbar, .jdoc-md ::-webkit-scrollbar { width: 10px; height: 10px; }
 .jc-content::-webkit-scrollbar-thumb, .oe-content::-webkit-scrollbar-thumb, .jdoc-md ::-webkit-scrollbar-thumb {
@@ -125,10 +133,35 @@ export function createConvertChip(): HTMLButtonElement {
     btn.className = 'chip';
     btn.textContent = '转换格式';
     btn.title = '转换为其他格式（DOCX / PDF / Markdown / HTML）';
-    btn.addEventListener('click', () =>
-        (window as unknown as { acquireVsCodeApi(): { postMessage(m: unknown): void } }).acquireVsCodeApi().postMessage({ type: 'convert' })
-    );
+    btn.addEventListener('click', () => postConvert());
     return btn;
+}
+
+/** 当前文档的 uri（init 时由宿主下发） */
+let currentDocUri: string | null = null;
+
+/** 记录当前文档 uri：转换请求必须带上它，否则宿主只能靠 activeTextEditor 猜，
+ *  在同时开着其它文本文件时会转错对象（Markdown 走内置编辑器时尤其明显）。 */
+export function setCurrentDocUri(uri: string | null): void {
+    currentDocUri = uri;
+}
+
+/** 向宿主请求转换当前文档 */
+export function postConvert(): void {
+    const api = (window as unknown as { acquireVsCodeApi(): { postMessage(m: unknown): void } }).acquireVsCodeApi();
+    api.postMessage({ type: 'convert', uri: currentDocUri ?? undefined });
+}
+
+/**
+ * 「转换格式」右键菜单项
+ *
+ * 内容区右键时与状态栏按钮走同一条路径（postConvert），保证两处行为一致。
+ */
+export function convertMenuEntry(): ContextMenuEntry {
+    return {
+        label: '转换格式…',
+        action: () => postConvert()
+    };
 }
 
 export function createStatusBar(): { el: HTMLElement; textEl: HTMLElement } {
@@ -140,4 +173,162 @@ export function createStatusBar(): { el: HTMLElement; textEl: HTMLElement } {
     el.className = 'jc-statusbar';
     el.append(textEl, grow);
     return { el, textEl };
+}
+
+/* ---------- 文档内容区右键菜单 ---------- */
+
+/** 右键菜单项 */
+export interface ContextMenuEntry {
+    label: string;
+    /** 省略表示分隔线 */
+    action?: () => void;
+    /** 置灰不可用 */
+    disabled?: boolean;
+    /** 快捷键提示，如 "⌘C" */
+    hint?: string;
+}
+
+const MENU_CSS = `
+.jc-ctxmenu {
+  position: fixed; z-index: 9999; min-width: 190px; padding: 4px 0;
+  background: var(--vscode-menu-background, var(--jc-surface-2, #25282e));
+  color: var(--vscode-menu-foreground, var(--jc-text, #e6e6e6));
+  border: 1px solid var(--vscode-menu-border, var(--jc-border, rgba(255,255,255,.12)));
+  border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,.4);
+  font-size: 13px; line-height: 1.4; user-select: none;
+}
+.jc-ctxmenu-item {
+  display: flex; align-items: center; gap: 16px;
+  padding: 5px 14px; cursor: pointer; white-space: nowrap;
+}
+.jc-ctxmenu-item:hover:not(.disabled) { background: var(--vscode-menu-selectionBackground, var(--jc-hover, rgba(255,255,255,.1))); color: var(--vscode-menu-selectionForeground, inherit); }
+.jc-ctxmenu-item.disabled { opacity: .45; cursor: default; }
+.jc-ctxmenu-item .label { flex: 1 1 auto; }
+.jc-ctxmenu-item .hint { opacity: .6; font-size: 12px; }
+.jc-ctxmenu-sep { height: 1px; margin: 4px 0; background: var(--vscode-menu-separatorBackground, var(--jc-border, rgba(255,255,255,.12))); }
+`;
+
+/** 菜单是否已注入过样式 */
+let menuCssInjected = false;
+
+function ensureMenuCss(): void {
+    if (menuCssInjected) return;
+    menuCssInjected = true;
+    const style = document.createElement('style');
+    style.textContent = MENU_CSS;
+    document.head.appendChild(style);
+}
+
+/** 当前打开的菜单（同一时刻只允许一个） */
+let openMenu: HTMLElement | null = null;
+
+function closeMenu(): void {
+    openMenu?.remove();
+    openMenu = null;
+}
+
+function showMenu(x: number, y: number, entries: ContextMenuEntry[]): void {
+    ensureMenuCss();
+    closeMenu();
+    const menu = document.createElement('div');
+    menu.className = 'jc-ctxmenu';
+    for (const entry of entries) {
+        if (!entry.action) {
+            const sep = document.createElement('div');
+            sep.className = 'jc-ctxmenu-sep';
+            menu.appendChild(sep);
+            continue;
+        }
+        const item = document.createElement('div');
+        item.className = 'jc-ctxmenu-item' + (entry.disabled ? ' disabled' : '');
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = entry.label;
+        item.appendChild(label);
+        if (entry.hint) {
+            const hint = document.createElement('span');
+            hint.className = 'hint';
+            hint.textContent = entry.hint;
+            item.appendChild(hint);
+        }
+        if (!entry.disabled) {
+            item.addEventListener('click', () => {
+                closeMenu();
+                entry.action?.();
+            });
+        }
+        menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    openMenu = menu;
+
+    // 贴边翻转：靠近右/下边缘时向内收，避免菜单被视口裁掉
+    const r = menu.getBoundingClientRect();
+    const left = x + r.width > window.innerWidth ? Math.max(4, x - r.width) : x;
+    const top = y + r.height > window.innerHeight ? Math.max(4, y - r.height) : y;
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+
+    // 点击别处 / 滚动 / 失焦 / Esc 关闭
+    const onDocDown = (e: MouseEvent): void => {
+        if (!menu.contains(e.target as Node)) closeMenu();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+        if (e.key === 'Escape') closeMenu();
+    };
+    // 用 capture + once 组合：首次外部点击后解绑自身
+    setTimeout(() => {
+        document.addEventListener('mousedown', onDocDown, { capture: true });
+        document.addEventListener('keydown', onKey, { capture: true });
+        window.addEventListener('blur', closeMenu);
+        window.addEventListener('resize', closeMenu);
+    }, 0);
+    const cleanup = (): void => {
+        document.removeEventListener('mousedown', onDocDown, { capture: true });
+        document.removeEventListener('keydown', onKey, { capture: true });
+        window.removeEventListener('blur', closeMenu);
+        window.removeEventListener('resize', closeMenu);
+    };
+    menu.addEventListener('remove', cleanup);
+}
+
+/**
+ * 给文档内容区装上自定义右键菜单
+ *
+ * 本扩展用 custom editor 打开文档，正文渲染在 webview（iframe）里：内容区的右键
+ * 事件被 webview 吞掉，**VS Code 的 editor/context 菜单根本不会出现**，用户只能看到
+ * 浏览器默认的「复制/粘贴」。这里自绘菜单，把「转换格式」等文档级操作补进内容区右键，
+ * 三条 webview 链路（office-editor / 顶层 webview / pptx-editor）共用这一份实现。
+ *
+ * @param getEntries 按当前状态生成菜单项（可依据选区/编辑模式动态变化）
+ * @param isEditable 命中可编辑区域时是否保留浏览器原生菜单（让复制粘贴照常工作）
+ */
+export function installContextMenu(getEntries: () => ContextMenuEntry[], isEditable?: (target: HTMLElement) => boolean): void {
+    document.addEventListener(
+        'contextmenu',
+        (e: MouseEvent) => {
+            const target = e.target as HTMLElement | null;
+            // 输入框 / 可编辑区域交给浏览器原生菜单（复制粘贴、撤销等原生行为更完整）
+            if (target && isEditable?.(target)) return;
+            e.preventDefault();
+            showMenu(e.clientX, e.clientY, getEntries());
+        },
+        true
+    );
+    // 菜单打开时按 Esc 关闭（已监听），这里额外保证滚动时收起
+    document.addEventListener('scroll', closeMenu, true);
+}
+
+/** 选区是否有文本（决定「复制」是否可用） */
+export function hasTextSelection(): boolean {
+    const sel = window.getSelection();
+    return !!(sel && !sel.isCollapsed && sel.toString().length > 0);
+}
+
+/** 复制当前选区 */
+export function copySelection(): void {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const text = sel.toString();
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
 }

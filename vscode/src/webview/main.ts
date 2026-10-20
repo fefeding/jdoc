@@ -4,7 +4,7 @@ import { b64ToBytes, bytesToB64, escapeHtml } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
-import { createConvertChip } from './chrome';
+import { createConvertChip, convertMenuEntry, copySelection, hasTextSelection, installContextMenu, setCurrentDocUri } from './chrome';
 import { createPdfViewer, PDF_CSS, type PdfViewer } from './pdf-viewer';
 import { highlightCodeBlocks, markdownCodeCss } from './markdown-code';
 import type { DocFormat, EditorMode, HostToWebview } from '../protocol';
@@ -294,6 +294,8 @@ window.addEventListener('message', (e) => {
             void (async () => {
                 format = msg.format;
                 mode = msg.mode || 'view';
+                // 记住当前文档 uri：转换请求必须带上，否则宿主只能靠 activeTextEditor 猜
+                setCurrentDocUri(msg.uri ?? null);
                 currentBytes = await loadBytes(msg);
                 applyBaseStyle();
                 renderShell();
@@ -325,3 +327,15 @@ window.addEventListener('message', (e) => {
 // 后续消息（init / rasterize）才不会被丢弃。全程只发一次，宿主收到 ready 后的回发
 // 不会再次触发它，因此不存在握手循环。
 vscode.postMessage({ type: 'ready' });
+
+// 文档内容区右键菜单：custom editor 的正文在 webview 里，VS Code 的 editor/context
+// 菜单不会出现，这里自绘一份，把「转换格式」补进内容区右键（PDF / Markdown / 纯文本）。
+installContextMenu(() => {
+    const entries = [];
+    if (hasTextSelection()) {
+        entries.push({ label: '复制', action: () => copySelection(), hint: '⌘C' });
+        entries.push({});
+    }
+    entries.push(convertMenuEntry());
+    return entries;
+});

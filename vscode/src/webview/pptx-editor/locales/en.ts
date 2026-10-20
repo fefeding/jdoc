@@ -157,6 +157,7 @@ export const en = {
 
   // ---------- canvas context menu ----------
   'menu.editMode': 'Edit',
+  'menu.convertFormat': 'Convert Format…',
   'menu.viewMode': 'Preview',
   'menu.cut': 'Cut',
   'menu.copy': 'Copy',

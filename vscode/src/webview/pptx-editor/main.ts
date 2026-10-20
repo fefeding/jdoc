@@ -72,6 +72,9 @@ import {
 import { chartRenderer } from '../chart-renderer';
 import type { EditorMode, HostToWebview, WebviewToHost } from './protocol';
 
+/** 当前文档的 uri（init 时由宿主下发），用于「转换格式」精确定位目标文件 */
+let currentDocUri = '';
+
 declare function acquireVsCodeApi(): {
   postMessage(msg: WebviewToHost): void;
   getState(): any;
@@ -3195,6 +3198,12 @@ function showCtxMenu(x: number, y: number) {
       { label: t('menu.docProps'), icon: 'props', onClick: () => toggleDocInfo() }
     );
   }
+  // 转换格式：所有格式统一的内容区右键入口（custom editor 里 VS Code 的
+  // editor/context 菜单不会出现，只能在 webview 内提供）
+  items.push(
+    { type: 'sep' },
+    { label: t('menu.convertFormat'), icon: 'convert', onClick: () => post({ type: 'convert', uri: currentDocUri || undefined }) }
+  );
   openMenu(items, x, y);
 }
 
@@ -3387,6 +3396,8 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
         state.original = toBytes(msg.originalBytes ?? msg.bytes);
         state.latest = toBytes(msg.bytes);
         state.title = msg.title || state.title;
+        // 记住当前文档 uri：内容区右键「转换格式」要靠它精确定位目标文件
+        currentDocUri = msg.uri || '';
         state.mode = msg.mode === 'edit' ? 'edit' : 'preview';
         state.dirty = msg.dirty;
         state.version++;
