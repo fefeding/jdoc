@@ -9,7 +9,6 @@
 // - 旋转：viewport.rotation 变化后页面尺寸会换（width/height 对调），必须重算占位与
 //   缩略图，所以旋转不是 CSS transform，而是把渲染重走一遍。
 import { createZoomCluster, type ZoomController } from './zoom';
-import { createOverlayEditor, type OverlayEditor } from './pdf-editor';
 import { escapeHtml } from './util';
 
 /** 缩略图渲染宽度（CSS px，与 .pdf-thumb .frame 宽度一致） */
@@ -77,9 +76,6 @@ export const PDF_CSS = `
 
 /* ---------- 编辑模式（叠加层） ---------- */
 /* 工具栏独立一行：顶栏已经放了导航/缩放/视图，叠加工具再挤进去会挤爆 */
-.pdf-edit-bar { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 4px 10px; background: var(--jc-surface); border-bottom: 1px solid var(--jc-border); overflow-x: auto; }
-.pdf-edit-bar[hidden] { display: none; }
-.pdf-edit-bar .spring { flex: 1 1 auto; }
 .pdf-tool { appearance: none; border: 1px solid transparent; background: transparent; color: var(--jc-muted); cursor: pointer; height: 22px; padding: 0 9px; border-radius: 4px; font: inherit; font-size: 12px; white-space: nowrap; flex: 0 0 auto; }
 .pdf-tool:hover { background: var(--jc-hover); color: var(--jc-text); }
 .pdf-tool.on { background: var(--jc-active); color: var(--jc-active-fg); }
@@ -150,7 +146,6 @@ const ICON = {
     next: 'M9 6l6 6-6 6',
     page: 'M7 3h7l5 5v13H7zM14 3v5h5',
     rotate: 'M4.5 12a7.5 7.5 0 1 1 2.2 5.3M4.5 12V6.5M4.5 12H10',
-    edit: 'M4 20h4l10-10-4-4L4 16zM13.5 6.5l4 4',
     search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4.3-4.3'
 };
 
@@ -162,17 +157,6 @@ export interface PdfViewer {
     open(bytes: Uint8Array): Promise<void>;
     /** 顶部工具栏显示的文件名 */
     setTitle(name: string): void;
-    /**
-     * 切换查看 / 编辑模式（编辑模式叠加 overlay 工具层）
-     *
-     * @param notify 是否回调 onEditingChange（宿主据此同步标题栏的查看/编辑命令）
-     */
-    setEditing(on: boolean, notify?: boolean): void;
-    readonly editing: boolean;
-    /** 编辑产出新字节，交回 host 写盘 */
-    onSave(handler: (bytes: Uint8Array) => void): void;
-    /** 宿主已落盘：清掉标题上的未保存标记 */
-    markSaved(): void;
     /** 卸载：销毁 pdfjs 文档、解绑监听与观察器 */
     close(): void;
 }
@@ -183,13 +167,11 @@ export interface PdfViewer {
  * @param app 外壳根（调用方负责 height:100% 的布局）
  * @param zoom 共用缩放控制器；本模块自行绑定 paper 为当前页
  * @param onStatus 状态栏文案回调
- * @param onEditingChange 用户在阅读器里开关编辑模式时回调，供宿主同步「查看/编辑」上下文
  */
 export function createPdfViewer(
     app: HTMLElement,
     zoom: ZoomController,
-    onStatus: (s: string) => void,
-    onEditingChange?: (editing: boolean) => void
+    onStatus: (s: string) => void
 ): PdfViewer {
     // ---------- 结构与工具栏 ----------
     const bar = el('div', 'pdf-bar');
@@ -207,27 +189,7 @@ export function createPdfViewer(
         return b;
     };
 
-    // ---------- 叠加编辑层 ----------
-    // 必须在 append 之前建好：它的工具栏要插在 bar 之后单独一行
-    let editing = false;
-    /** 有未保存的叠加内容 */
-    let dirty = false;
-    let saveHandler: ((bytes: Uint8Array) => void) | null = null;
-    const editor = createOverlayEditor({
-        // 真正的原始字节在 open() 时通过 reset 注入
-        original: new Uint8Array(0),
-        zoom: () => zoom.getZoom(),
-        onSave: (bytes) => saveHandler?.(bytes),
-        onDirty: (d) => {
-            dirty = d;
-            paintTitle();
-        },
-        onToast: (message, kind) => onStatus(`${kind === 'error' ? '✕ ' : ''}${message}`)
-    });
-    const editBar = editor.bar;
-    editBar.hidden = true;
-
-    // ---------- 全文搜索栏（独立一行，与编辑栏对称） ----------
+    // ---------- 全文搜索栏（独立一行） ----------
     const searchBar = el('div', 'pdf-search-bar');
     searchBar.hidden = true;
     const searchInput = el('input', 'pdf-search-input') as HTMLInputElement;
@@ -241,7 +203,7 @@ export function createPdfViewer(
     searchBar.append(searchInput, searchCount, searchPrev, searchNext, searchClose);
 
     body.append(thumbs, content);
-    app.append(bar, editBar, searchBar, body);
+    app.append(bar, searchBar, body);
 
     const toggleBtn = btn(ICON.menu, '折叠 / 展开缩略图栏', () => {
         thumbs.hidden = !thumbs.hidden;
@@ -262,32 +224,15 @@ export function createPdfViewer(
 
     const viewBtn = btn(ICON.page, '单页 / 连续滚动', () => setPaged(!state.paged));
     const rotateBtn = btn(ICON.rotate, '顺时针旋转 90°', () => rotate());
-    const editBtn = btn(ICON.edit, '编辑：叠加签名 / 图片 / 文本 / 手绘', () => setEditing(!editing));
     const searchBtn = btn(ICON.search, '搜索全文', () => toggleSearch());
     searchBtn.dataset.tool = 'search';
     const title = el('div', 'title');
 
-    /** 标题：文件名 + 未保存标记（叠加编辑的未保存态由 webview 自行维护） */
+    /** 标题：文件名（PDF 为只读，不存在未保存标记） */
     function paintTitle(): void {
         const name = title.dataset.name ?? '';
-        title.textContent = dirty ? `● ${name}` : name;
+        title.textContent = name;
         title.title = name;
-    }
-
-    /**
-     * 切换编辑模式
-     *
-     * 叠加层随每页渲染时创建（未渲染的页等渲染完再建），因此这里只切
-     * pointer-events 与工具栏显隐，不需要重建页面。
-     */
-    function setEditing(on: boolean, notify = true): void {
-        if (editing === on) return;
-        editing = on;
-        if (on) editor.enable();
-        else editor.disable();
-        editBar.hidden = !on;
-        editBtn.classList.toggle('on', on);
-        if (notify) onEditingChange?.(on);
     }
 
     bar.append(
@@ -297,7 +242,6 @@ export function createPdfViewer(
         createZoomCluster(zoom),
         viewBtn,
         rotateBtn,
-        editBtn,
         searchBtn,
         el('div', 'spring'),
         title
@@ -382,9 +326,6 @@ export function createPdfViewer(
         const host = state.pages[index - 1];
         if (!host) return;
         state.rendered.add(index);
-        // 下面会 replaceChildren 重建页内容，旧叠加层节点随之失效。
-        // 编辑层内部一律用 0 起页序（与库层 overlays[] 的下标一致）
-        editor.invalidate(index - 1);
         try {
             let pg = page;
             let baseVp = base;
@@ -435,9 +376,6 @@ export function createPdfViewer(
             } catch {
                 // 文本层失败不影响图形渲染
             }
-            // 叠加编辑层挂在页内（canvas / 文本层之上），坐标换算由 editor 自己做。
-            // 尺寸单位：cssWidth 为布局 px，宽高为 PDF 点（baseVp 是 scale=1 的视口）。
-            editor.paint(index - 1, host, Math.round(baseVp.width * scale), baseVp.width, baseVp.height);
             onStatus(`共 ${state.total} 页`);
             // 搜索高亮依赖坐标换算，页（重）渲染后需要按当前命中重画
             if (query && hits.length) void paintSearch();
@@ -861,10 +799,6 @@ export function createPdfViewer(
         thumbIo = null;
         thumbQueue.length = 0;
         thumbBusy = 0;
-        editor.disable();
-        editor.reset(new Uint8Array(0));
-        editBar.hidden = !editing;
-        editBtn.classList.toggle('on', editing);
         searchBar.hidden = true;
         searchBtn.classList.remove('on');
         clearSearch();
@@ -893,14 +827,10 @@ export function createPdfViewer(
     }
 
     async function open(bytes: Uint8Array): Promise<void> {
-        // 记住编辑态：close() 会拆掉编辑层，重开时要恢复用户所处的模式
-        const wasEditing = editing;
         close();
         disposed = false;
         showLoading('正在打开 PDF…');
         onStatus('正在打开 PDF…');
-        // 编辑层的幂等保存基准：始终是这份打开时的字节
-        editor.reset(bytes);
         let pdfjs: any;
         try {
             // 与 jdoc 内部使用同一说明符，命中同一模块实例
@@ -972,7 +902,6 @@ export function createPdfViewer(
         window.addEventListener('keydown', onKey);
         viewBtn.classList.toggle('on', state.paged);
         toggleBtn.classList.toggle('on', !thumbs.hidden);
-        setEditing(wasEditing, false);
         goTo(1);
         await renderPage(1);
         if (disposed) return;
@@ -1005,17 +934,6 @@ export function createPdfViewer(
         content,
         open,
         close,
-        setEditing,
-        get editing(): boolean {
-            return editing;
-        },
-        onSave(handler: (bytes: Uint8Array) => void): void {
-            saveHandler = handler;
-        },
-        markSaved(): void {
-            dirty = false;
-            paintTitle();
-        },
         setTitle(name: string): void {
             title.dataset.name = name;
             paintTitle();

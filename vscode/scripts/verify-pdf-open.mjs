@@ -132,6 +132,18 @@ if (total > 0) {
 check('其余页占位已异步补齐（全部页就位）', total === 0 ? true : allPages,
     total ? `已就位 ${await page.evaluate(() => document.querySelectorAll('.pdf-page').length)}/${total}` : '');
 
+// 5) PDF 是纯只读：工具栏不应再有「编辑」入口，也不该存在编辑工具栏
+const readOnly = await page.evaluate(() => {
+    const titles = [...document.querySelectorAll('.pdf-bar .pdf-btn')].map((b) => b.getAttribute('aria-label') || '');
+    return {
+        hasEditBtn: titles.some((t) => t.includes('编辑')),
+        editBars: document.querySelectorAll('.pdf-edit-bar').length,
+        btnTitles: titles
+    };
+});
+check('PDF 工具栏没有「编辑」按钮', !readOnly.hasEditBtn, readOnly.btnTitles.join(' | '));
+check('PDF 没有编辑工具栏', readOnly.editBars === 0, `找到 ${readOnly.editBars} 个`);
+
 console.log(failed ? `\nFAILED (${failed} failure(s))` : '\nALL PASSED (0 failure(s))');
 await browser.close();
 server.close();

@@ -2,7 +2,7 @@
   "name": "jdoc-viewer",
   "displayName": "jdoc Document Viewer",
   "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档，并预览 Markdown / 纯文本（由 @fefeding/jdoc 驱动）",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "keywords": [
     "docx",
     "xlsx",
@@ -131,7 +131,7 @@
         },
         {
           "command": "jdoc.revert",
-          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|pptx|xlsx)$/",
           "group": "1_modification"
         },
         {
@@ -187,7 +187,7 @@
         },
         {
           "command": "jdoc.revert",
-          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|pptx|xlsx)$/",
           "group": "1_modification"
         },
         {

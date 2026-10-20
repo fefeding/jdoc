@@ -147,91 +147,33 @@ async function runPdf() {
     // 旋转会重建缩略图栏，当前页高亮必须补回去，否则翻页定位会丢失视觉基准
     check('PDF 旋转后保持当前页高亮', s3.active === '4' && s3.cur === '4', JSON.stringify({ active: s3.active, cur: s3.cur }));
 
-    // ---------- 叠加编辑 ----------
-    // 查看模式下编辑工具层不参与（不抢正文的选中与滚动）
-    check('查看模式不显示编辑工具栏', !(await page.isVisible('.pdf-edit-bar')));
+    // ---------- PDF 纯只读 ----------
+    // PDF 的编辑能力（叠加签名 / 图片 / 文本 / 手绘）已整体移除：没有编辑按钮、
+    // 没有编辑工具栏、没有叠加层，也不存在把编辑结果写回原文件的路径。
+    check('PDF 没有编辑工具栏', !(await page.isVisible('.pdf-edit-bar')));
+    const pdfEditUi = await page.evaluate(() => ({
+        editBar: document.querySelectorAll('.pdf-edit-bar').length,
+        editBtn: [...document.querySelectorAll('.pdf-bar .pdf-btn')]
+            .filter((b) => ((b.getAttribute('aria-label') || '') + (b.title || '')).includes('编辑')).length,
+        ovLayer: document.querySelectorAll('.pdf-ov-layer').length,
+        ov: document.querySelectorAll('.pdf-ov').length
+    }));
+    check('PDF 无编辑入口与叠加层',
+        pdfEditUi.editBar === 0 && pdfEditUi.editBtn === 0 && pdfEditUi.ovLayer === 0 && pdfEditUi.ov === 0,
+        JSON.stringify(pdfEditUi));
 
+    // 宿主即便下发 edit 模式，PDF 也应保持只读：不出现编辑层，也不回发 setMode
     await page.evaluate(() => { window.__POSTS__ = []; });
-    await init('edit'); await page.waitForTimeout(3000);
-    const editUi = await page.evaluate(() => ({
-        bar: !!document.querySelector('.pdf-edit-bar') && !document.querySelector('.pdf-edit-bar').hidden,
-        tools: document.querySelectorAll('.pdf-edit-bar .pdf-tool').length,
-        layer: !!document.querySelector('.pdf-page.current .pdf-ov-layer.on'),
-        setMode: (window.__POSTS__ || []).some((m) => m && m.type === 'setMode')
+    await init('edit'); await page.waitForTimeout(2000);
+    const afterEdit = await page.evaluate(() => ({
+        editBar: document.querySelectorAll('.pdf-edit-bar').length,
+        ovLayer: document.querySelectorAll('.pdf-ov-layer.on').length,
+        setMode: (window.__POSTS__ || []).some((m) => m && m.type === 'setMode'),
+        pages: document.querySelectorAll('.pdf-page').length
     }));
-    check('编辑模式打开叠加工具层', editUi.bar && editUi.tools >= 6 && editUi.layer, JSON.stringify(editUi));
-    // 宿主 init 的 edit 不该回发 setMode（否则与标题栏命令互相触发）
-    check('宿主指定的模式不回发 setMode', !editUi.setMode);
-
-    // 页内相对坐标 -> 屏幕坐标
-    // 页面往往比视口高（单页在 1280 宽下有 1400+px），必须夹到「可视的正文区」内：
-    // 超出视口或压在底部状态栏上，鼠标事件都到不了叠加层
-    const inPagePoint = async (fx, fy) => {
-        const box = await page.evaluate(() => {
-            const r = document.querySelector('.pdf-page.current .pdf-ov-layer').getBoundingClientRect();
-            return { x: r.x, y: r.y, w: r.width, h: r.height };
-        });
-        const vp = page.viewportSize();
-        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-        return {
-            x: clamp(box.x + box.w * fx, 40, vp.width - 40),
-            y: clamp(box.y + box.h * fy, 40, vp.height - 90)
-        };
-    };
-    const clickInPage = async (fx, fy) => {
-        const p = await inPagePoint(fx, fy);
-        await page.mouse.click(p.x, p.y);
-        await page.waitForTimeout(220);
-    };
-
-    // 矩形（高亮块）
-    await page.click('.pdf-edit-bar [data-tool="rect"]');
-    await clickInPage(0.3, 0.3);
-    // 文本：中文需要宿主注入 TTF，这里用 ASCII 走标准字体
-    page.once('dialog', (d) => d.accept('Signed by JDOC'));
-    await page.click('.pdf-edit-bar [data-tool="text"]');
-    await clickInPage(0.5, 0.5);
-    // 手绘签名：按下拖出一笔
-    await page.click('.pdf-edit-bar [data-tool="draw"]');
-    {
-        const start = await inPagePoint(0.2, 0.75);
-        await page.mouse.move(start.x, start.y);
-        await page.mouse.down();
-        for (let i = 1; i <= 8; i++) {
-            const p = await inPagePoint(0.2 + i * 0.06, 0.75 - Math.sin(i / 2) * 0.04);
-            await page.mouse.move(p.x, p.y, { steps: 2 });
-        }
-        await page.mouse.up();
-        await page.waitForTimeout(220);
-    }
-    const objs = await page.evaluate(() => ({
-        all: document.querySelectorAll('.pdf-page.current .pdf-ov').length,
-        text: document.querySelectorAll('.pdf-page.current .pdf-ov-text').length,
-        path: document.querySelectorAll('.pdf-page.current .pdf-ov svg path').length,
-        dirtyTitle: document.querySelector('.pdf-bar .title')?.textContent
-    }));
-    check('PDF 叠加对象绘制', objs.all === 3 && objs.text === 1 && objs.path === 1, JSON.stringify(objs));
-    check('PDF 编辑后标题标记未保存', String(objs.dirtyTitle || '').startsWith('●'), String(objs.dirtyTitle));
-
-    // 保存 → sync（字节）+ save（落盘）
-    await page.click('.pdf-edit-bar .pdf-tool.primary');
-    await page.waitForTimeout(2500);
-    const posts = await page.evaluate(() => window.__POSTS__ || []);
-    const syncMsg = posts.filter((m) => m && m.type === 'sync').pop();
-    check('PDF 保存发出 sync + save', !!syncMsg && syncMsg.dirty === true && posts.some((m) => m && m.type === 'save'),
-        posts.map((m) => m && m.type).join(','));
-
-    const saved = Buffer.from(syncMsg?.bytes || '', 'base64');
-    const ops = saved.length ? await pageContentOps(saved, 0) : '';
-    // 叠加文本用标准字体写入，内容流里是字形 hex；手绘/矩形走 path 指令
-    const hexText = Buffer.from('Signed by JDOC').toString('hex').toUpperCase();
-    const segs = (ops.match(/ l\s*\n/g) || []).length;
-    check('PDF 叠加写入内容流（文本/手绘/矩形）', ops.includes(hexText) && segs >= 10 && /h\s*\n[BF]/.test(ops),
-        `len=${saved.length} text=${ops.includes(hexText)} lineSegs=${segs} closed=${/h\s*\n[BF]/.test(ops)}`);
-    const parsed = saved.length ? await jdoc.pdfToJson(saved) : null;
-    const text = saved.length ? await jdoc.pdfToText(saved) : '';
-    check('PDF 叠加后可正常回读且原内容保留', parsed?.pageCount === 6 && text.includes('Chapter 1') && text.includes('Signed by JDOC'),
-        `pages=${parsed?.pageCount} chapter=${text.includes('Chapter 1')} signed=${text.includes('Signed by JDOC')}`);
+    check('PDF 忽略宿主的 edit 模式（保持只读）',
+        afterEdit.editBar === 0 && afterEdit.ovLayer === 0 && !afterEdit.setMode && afterEdit.pages > 0,
+        JSON.stringify(afterEdit));
 
     // 全文搜索：打开后预取文本，搜 "Chapter" 应命中多页并能跳到首命中页
     await page.waitForTimeout(800); // 等预取文本项完成

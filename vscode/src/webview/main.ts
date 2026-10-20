@@ -1,6 +1,6 @@
 import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml, renderMarkdownExtras } from '@fefeding/jdoc';
 import { chartRenderer } from './chart-renderer';
-import { b64ToBytes, bytesToB64, escapeHtml } from './util';
+import { b64ToBytes, escapeHtml } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
@@ -84,21 +84,13 @@ function renderShell(): { content: HTMLElement } {
     pdfViewer?.close();
     app.innerHTML = '';
 
-    // PDF 有自己的阅读器外壳（顶部工具栏 + 左侧缩略图栏 + 正文），缩放也由它绑定
+    // PDF 有自己的阅读器外壳（顶部工具栏 + 左侧缩略图栏 + 正文），缩放也由它绑定。
+    // PDF 为纯只读：没有编辑层，也没有编辑产出写回原文件的路径。
     if (format === 'pdf') {
         app.className = 'jc-app pdf-app';
         const status = createStatusBar();
         statusText = status.textEl;
-        pdfViewer = createPdfViewer(app, zoom, setStatus, (editing) => {
-            // 阅读器里手动开关编辑模式，同步给宿主，标题栏的「查看/编辑」命令才不会失配
-            vscode.postMessage({ type: 'setMode', mode: editing ? 'edit' : 'view' });
-        });
-        // 叠加编辑产出新字节：先回传字节（标脏），再请求落盘，
-        // 一步完成「生成 + 写回原文件」，不必让用户再按一次保存。
-        pdfViewer.onSave((bytes) => {
-            vscode.postMessage({ type: 'sync', bytes: bytesToB64(bytes), dirty: true });
-            vscode.postMessage({ type: 'save' });
-        });
+        pdfViewer = createPdfViewer(app, zoom, setStatus);
         // PDF 阅读器自带工具栏且已挂缩放簇（pdf-viewer 内），这里只补转换入口，
         // 避免同一份缩放簇出现两次
         status.el.append(createConvertChip());
@@ -121,11 +113,10 @@ function renderShell(): { content: HTMLElement } {
 
 async function renderContent(): Promise<void> {
     const content = document.getElementById('content')!;
-    // PDF 无论查看还是编辑都走阅读器外壳，编辑模式只是叠加一层 overlay 工具层
+    // PDF 是纯只读阅读器：无论宿主传来的 mode 是什么，都只渲染阅读视图
     if (format === 'pdf' && pdfViewer) {
         try {
             await pdfViewer.open(currentBytes);
-            pdfViewer.setEditing(mode === 'edit', false);
         } catch (err: any) {
             console.error('[pdf] renderContent open failed:', err);
             pdfViewer.content.innerHTML = `<pre class="error">渲染失败：${escapeHtml(String(err?.message || err))}</pre>`;
