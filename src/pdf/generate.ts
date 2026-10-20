@@ -30,6 +30,7 @@ import type {
     PdfRun,
     PdfRunsElement,
     PdfTableCell,
+    PdfTableCellObject,
     PdfTableElement,
     PdfTabStop,
     PdfTextElement
@@ -171,7 +172,11 @@ export async function buildFonts(
 
         const embed = async (source: string | ArrayBuffer | Uint8Array | undefined, fallback?: string) => {
             const bytes = source ? await toFontBytes(source) : fallback ? await toFontBytes(fallback) : undefined;
-            return bytes ? doc.embedFont(bytes) : undefined;
+            // 必须显式 subset: true：pdf-lib 的 embedFont 对该选项的默认值是 **false**
+            // （见 PDFDocument.embedFont 内 `subset = options.subset ?? false`），不传就整份
+            // 嵌入字体。Arial Unicode.ttf 有 22MB，不子集化会让一行中文的 PDF 膨胀到 15MB，
+            // 且体积过大的 PDF 会让 pdfjs + canvas 栅格化直接失败。
+            return bytes ? doc.embedFont(bytes, { subset: true }) : undefined;
         };
 
         const regular = await embed(fonts.regular);
@@ -649,20 +654,94 @@ function drawLeader(
 /**
  * 绘制表格，返回占用高度
  *
- * 单元格文本按列宽换行、行高按内容自适应；flow 模式下按行跨页，
- * 跨页后重复表头行（与 Word「标题行重复」行为一致）。
+ * 按 Word 的 tblGrid 网格布局：columnWidths 是「网格列」宽，而 rows 里每个 cell
+ * 只占其中连续若干列（gridSpan），纵向合并的 cell 会占住后续行的同一列。因此
+ * 先把 rows 展开成网格占位（placement），每个 cell 拿到自己的起始网格列，再按
+ * 该列累加宽度——不能按「第 N 个 cell」取宽，否则合并表头会拿到某个数字列的
+ * 窄宽度，文字被逐字折行。
+ *
+ * 单元格文本按实际宽度换行、行高按内容自适应；flow 模式下按行跨页，跨页后重复
+ * 表头行（与 Word「标题行重复」行为一致）。
  */
 function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
     const fontSize = element.fontSize ?? 10;
     const padding = element.padding ?? 4;
     const lineH = fontSize * 1.35;
     const hasHeader = element.header !== false && element.rows.length > 0;
-    const columnCount = element.rows.reduce((max, row) => Math.max(max, row.length), 0);
-    if (!columnCount) return 0;
+    if (!element.rows.length) return 0;
+
+    /** 归一化后的单元格：内容一律转成纯文本，另带合并/底纹元数据 */
+    interface NCell {
+        text: string;
+        colspan: number;
+        rowspan: number;
+        width?: number;
+        fill?: string;
+        verticalAlign?: 'top' | 'middle' | 'bottom';
+    }
+    const isCellObject = (c: PdfTableCell): c is PdfTableCellObject =>
+        !!c && typeof c === 'object' && !Array.isArray(c) && 'content' in c;
+    const normCell = (cell: PdfTableCell): NCell => {
+        if (isCellObject(cell)) {
+            const content = cell.content;
+            return {
+                text: typeof content === 'string' ? content : cellToPlainText(content),
+                colspan: Math.max(1, Math.round(cell.colspan ?? 1)),
+                rowspan: Math.max(1, Math.round(cell.rowspan ?? 1)),
+                width: cell.width,
+                fill: cell.fill,
+                verticalAlign: cell.verticalAlign
+            };
+        }
+        const text = tableCellText(cell);
+        return { text, colspan: 1, rowspan: 1 };
+    };
+    const rows = element.rows.map((row) => row.map(normCell));
+
+    // ---- 展开网格：确定每个 cell 的起始网格列，并标记 rowspan/colspan 占位 ----
+    interface Placement {
+        row: number;
+        col: number;
+        cell: NCell;
+    }
+    const placements: Placement[] = [];
+    const occupied: boolean[][] = [];
+    let gridCols = 0;
+    rows.forEach((row, r) => {
+        if (!occupied[r]) occupied[r] = [];
+        let col = 0;
+        for (const cell of row) {
+            // 跳过被上方 rowspan 占住的网格列
+            while (occupied[r][col]) col++;
+            for (let rr = r; rr < r + cell.rowspan && rr < rows.length; rr++) {
+                if (!occupied[rr]) occupied[rr] = [];
+                for (let cc = col; cc < col + cell.colspan; cc++) occupied[rr][cc] = true;
+            }
+            placements.push({ row: r, col, cell });
+            col += cell.colspan;
+        }
+        gridCols = Math.max(gridCols, col);
+    });
+    if (!gridCols) return 0;
 
     const widths = element.columnWidths?.length
         ? element.columnWidths
-        : new Array(columnCount).fill(ctx.contentWidth / columnCount);
+        : new Array(gridCols).fill(ctx.contentWidth / gridCols);
+
+    /** 网格列 col 之前的累计宽度 */
+    const colOffset = (col: number): number => {
+        let x = 0;
+        for (let i = 0; i < col && i < widths.length; i++) x += widths[i];
+        return x;
+    };
+    /** cell 实际宽度 = 它跨越的那些网格列之和（tcW 显式宽度优先） */
+    const cellWidth = (cell: NCell, col: number): number => {
+        if (cell.width !== undefined && cell.width > 0) return cell.width;
+        let w = 0;
+        for (let i = col; i < col + cell.colspan; i++) w += widths[i] ?? widths[widths.length - 1] ?? 0;
+        if (w <= 0) w = widths[widths.length - 1] ?? ctx.contentWidth / gridCols;
+        return w;
+    };
 
     const borderColor = element.borderColor === 'none' ? undefined : parseColor(element.borderColor || '#CCCCCC');
     const headerFill = element.headerFill ? parseColor(element.headerFill) : undefined;
@@ -670,47 +749,62 @@ function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
     const startTop = topCursor(ctx, element.y ?? 0);
     const startX = ctx.originX + (element.x ?? 0);
 
-    /**
-     * 画一行表格。
-     * @param y 该行顶部光标（顶部原点）
-     * @param rowHeight 行高
-     * @param row 单元格数据
-     * @param isHeader 是否表头（加粗 + 底纹）
-     * @param rowLines 每个单元格已换行的文本
-     */
-    const drawRow = (y: number, rowHeight: number, row: PdfTableCell[], isHeader: boolean, rowLines: string[][]) => {
-        const page = currentPage(ctx);
-        if (isHeader && headerFill) {
-            page.drawRectangle({
-                x: startX,
-                y: ctx.pageHeight - y - rowHeight,
-                width: widths.reduce((sum, w) => sum + w, 0),
-                height: rowHeight,
-                color: headerFill
-            });
+    // ---- 预排版：按各自实际宽度换行，并求出每行行高（含 rowspan 分摊） ----
+    const cellLines = new Map<Placement, string[]>();
+    const rowHeights = new Array(rows.length).fill(0);
+    for (const p of placements) {
+        const isHeader = hasHeader && p.row === 0;
+        const font = isHeader ? ctx.fonts.bold : ctx.fonts.normal;
+        const lines = wrapText(p.cell.text ?? '', font, fontSize, Math.max(8, cellWidth(p.cell, p.col) - padding * 2));
+        cellLines.set(p, lines);
+        if (p.cell.rowspan <= 1) {
+            rowHeights[p.row] = Math.max(rowHeights[p.row], lines.length * lineH + padding * 2);
         }
+    }
+    // 纵向合并的 cell 若比它跨越的那些行加起来还高，把差额均摊到这些行
+    for (const p of placements) {
+        if (p.cell.rowspan <= 1) continue;
+        let sum = 0;
+        for (let r = p.row; r < p.row + p.cell.rowspan; r++) sum += rowHeights[r];
+        const need = (cellLines.get(p)?.length ?? 0) * lineH + padding * 2;
+        if (sum < need) {
+            const per = (need - sum) / p.cell.rowspan;
+            for (let r = p.row; r < p.row + p.cell.rowspan; r++) rowHeights[r] += per;
+        }
+    }
+    const heightOf = (r: number): number => element.rowHeight ?? rowHeights[r] ?? 0;
 
-        let x = startX;
-        row.forEach((cell, colIndex) => {
-            const cellWidth = widths[colIndex] ?? widths[widths.length - 1] ?? ctx.contentWidth / columnCount;
+    /** 画第 r 行的所有 cell（rowspan>1 的 cell 只在起始行画一次，高度含其跨越的行） */
+    const drawRowCells = (topY: number, r: number): void => {
+        const page = currentPage(ctx);
+        const isHeader = hasHeader && r === 0;
+        for (const p of placements) {
+            if (p.row !== r) continue;
+            const c = p.cell;
+            const w = cellWidth(c, p.col);
+            let h = 0;
+            for (let rr = r; rr < r + c.rowspan; rr++) h += heightOf(rr);
+            const x = startX + colOffset(p.col);
+            const fill = c.fill ? parseColor(c.fill) : isHeader ? headerFill : undefined;
 
-            if (borderColor) {
+            if (borderColor || fill) {
                 page.drawRectangle({
                     x,
-                    y: ctx.pageHeight - y - rowHeight,
-                    width: cellWidth,
-                    height: rowHeight,
+                    y: ctx.pageHeight - topY - h,
+                    width: w,
+                    height: h,
                     borderColor,
                     borderWidth: 0.5,
-                    color: isHeader ? headerFill : undefined
+                    color: fill
                 });
             }
 
             const font = isHeader ? ctx.fonts.bold : ctx.fonts.normal;
-            const lines = rowLines[colIndex] ?? [];
-            // 多行文本在单元格内垂直居中
+            const lines = cellLines.get(p) ?? [];
             const textBlock = lines.length * lineH;
-            const offsetY = y + (rowHeight - textBlock) / 2;
+            let offsetY = topY + (h - textBlock) / 2;
+            if (c.verticalAlign === 'top') offsetY = topY + padding / 2;
+            else if (c.verticalAlign === 'bottom') offsetY = topY + h - textBlock - padding / 2;
             lines.forEach((text, li) => {
                 let textWidth: number;
                 try {
@@ -718,7 +812,7 @@ function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
                 } catch {
                     textWidth = text.length * fontSize * 0.5;
                 }
-                const drawX = x + Math.max(padding, (cellWidth - textWidth) / 2);
+                const drawX = x + Math.max(padding, (w - textWidth) / 2);
                 page.drawText(text, {
                     x: drawX,
                     y: ctx.pageHeight - offsetY - li * lineH - fontSize - (lineH - fontSize) / 2,
@@ -727,44 +821,27 @@ function drawTableElement(ctx: DrawContext, element: PdfTableElement): number {
                     color: ctx.defaultColor
                 });
             });
-
-            x += cellWidth;
-        });
-    };
-
-    /** 预排版一行：每单元格按各自列宽换行，并求该行高 */
-    const layoutRow = (row: PdfTableCell[], isHeader: boolean): { rowHeight: number; rowLines: string[][] } => {
-        const font = isHeader ? ctx.fonts.bold : ctx.fonts.normal;
-        const rowLines = row.map((cell, colIndex) => {
-            const cellWidth = widths[colIndex] ?? widths[widths.length - 1] ?? ctx.contentWidth / columnCount;
-            const text = typeof cell === 'string' ? cell : cellToPlainText(cell);
-            return wrapText(text ?? '', font, fontSize, Math.max(8, cellWidth - padding * 2));
-        });
-        const maxLines = rowLines.reduce((m, ls) => Math.max(m, ls.length), 0);
-        const rowHeight = element.rowHeight ?? maxLines * lineH + padding * 2;
-        return { rowHeight, rowLines };
+        }
     };
 
     let localY = startTop;
-
-    element.rows.forEach((row, rowIndex) => {
+    rows.forEach((_, rowIndex) => {
         const isHeader = hasHeader && rowIndex === 0;
-        const { rowHeight, rowLines } = layoutRow(row, isHeader);
+        const rowHeight = heightOf(rowIndex);
 
         if (ctx.flow) {
             // 表头与首条数据行保持同页（避免表头孤悬页尾）
-            const bind = isHeader && element.rows.length > 1 ? rowHeight + (layoutRow(element.rows[1], false).rowHeight) : rowHeight;
+            const bind = isHeader && rows.length > 1 ? rowHeight + heightOf(1) : rowHeight;
             const moved = ctx.flow.ensure(bind);
             if (moved && hasHeader && rowIndex > 0) {
                 // 跨页：重复表头行
-                const head = layoutRow(element.rows[0], true);
-                drawRow(ctx.flow.marginTop + ctx.flow.cursorY, head.rowHeight, element.rows[0], true, head.rowLines);
-                ctx.flow.cursorY += head.rowHeight;
+                drawRowCells(ctx.flow.marginTop + ctx.flow.cursorY, 0);
+                ctx.flow.cursorY += heightOf(0);
             }
             localY = ctx.flow.marginTop + ctx.flow.cursorY;
         }
 
-        drawRow(localY, rowHeight, row, isHeader, rowLines);
+        drawRowCells(localY, rowIndex);
 
         if (ctx.flow) ctx.flow.cursorY += rowHeight;
         localY += rowHeight;
@@ -782,6 +859,13 @@ function cellToPlainText(cell: PdfElement[]): string {
         })
         .join(' ')
         .trim();
+}
+
+/** 表格单元格 -> 纯文本（兼容 纯文本 / 元素序列 / 带合并信息对象 三种形态） */
+function tableCellText(cell: PdfTableCell): string {
+    if (typeof cell === 'string') return cell;
+    if (Array.isArray(cell)) return cellToPlainText(cell);
+    return typeof cell.content === 'string' ? cell.content : cellToPlainText(cell.content);
 }
 
 /** 元素段前间距（pt，自动分页时由循环层进给） */
@@ -936,7 +1020,7 @@ export async function generatePdf(
                         : element.type === 'runs'
                           ? element.runs.map((r) => r.text).join('')
                           : element.type === 'table'
-                            ? element.rows.flat().map((c) => (typeof c === 'string' ? c : cellToPlainText(c))).join('')
+                            ? element.rows.flat().map(tableCellText).join('')
                             : '';
                 if (hasCjk(cjkText)) {
                     throw new JdocError(

@@ -19,9 +19,11 @@ import type {
     PdfPageSize,
     PdfRun,
     PdfRunsElement,
+    PdfTableCell,
+    PdfTableCellObject,
     PdfTableElement
 } from '../pdf/types';
-import type { DocxBlock, DocxCell, DocxDocument, DocxRun } from '../docx/types';
+import type { DocxBlock, DocxCell, DocxCellDetail, DocxDocument, DocxRun } from '../docx/types';
 
 /** blocksToPdf 选项 */
 export interface BlocksToPdfOptions {
@@ -155,12 +157,36 @@ function listToElements(list: Extract<DocxBlock, { type: 'list' }>, depth: numbe
     return els;
 }
 
+/**
+ * 表格单元格 -> PDF 单元格
+ *
+ * 内容仍取纯文本（与既有渲染一致），但要把 gridSpan / vMerge / tcW / shd 一并
+ * 带过去：合并单元格只存在于 DocxCellDetail 上，一旦在这里退化成字符串，
+ * 生成端就只能按 cell 序号取列宽，合并表头会被压成窄列。
+ */
+function cellToPdfCell(cell: DocxCell | undefined): PdfTableCell {
+    const text = cellToText(cell);
+    if (cell == null || typeof cell === 'string' || Array.isArray(cell)) return text;
+    const detail = cell as DocxCellDetail;
+    const colspan = detail.colspan ?? 1;
+    const rowspan = detail.rowspan ?? 1;
+    const hasMeta = colspan > 1 || rowspan > 1 || detail.width !== undefined || detail.fill;
+    if (!hasMeta) return text;
+    const obj: PdfTableCellObject = { content: text };
+    if (colspan > 1) obj.colspan = colspan;
+    if (rowspan > 1) obj.rowspan = rowspan;
+    if (detail.width !== undefined) obj.width = detail.width;
+    if (detail.fill) obj.fill = detail.fill;
+    if (detail.verticalAlign) obj.verticalAlign = detail.verticalAlign;
+    return obj;
+}
+
 /** 表格 -> PDF 表格元素 */
 function tableToElement(table: Extract<DocxBlock, { type: 'table' }>): PdfTableElement {
     return {
         type: 'table',
         header: table.header,
-        rows: table.rows.map((row) => row.map(cellToText)) as string[][],
+        rows: table.rows.map((row) => row.map(cellToPdfCell)),
         // 透传 docx tblGrid 列宽（磅），缺列宽时由生成端按内容区等分
         columnWidths: table.columnWidths,
         fontSize: WORD_DEFAULTS.bodySize

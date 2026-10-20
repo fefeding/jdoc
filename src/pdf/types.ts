@@ -291,8 +291,30 @@ export interface PdfRectElement {
     radius?: number;
 }
 
-/** 表格单元格 */
-export type PdfTableCell = string | PdfElement[];
+/**
+ * 带合并信息的表格单元格
+ *
+ * Word 的合并单元格（w:gridSpan 横跨列、w:vMerge 纵跨行）与列宽只有在这一层
+ * 保留下来，生成端才能按 tblGrid 网格对齐；否则合并表头会被按「第 N 个
+ * cell」分配宽度，退化成窄列并把文字逐字折行。
+ */
+export interface PdfTableCellObject {
+    /** 单元格内容：元素序列或纯文本 */
+    content: PdfElement[] | string;
+    /** 跨列数（对应 w:gridSpan），默认 1 */
+    colspan?: number;
+    /** 跨行数（对应 w:vMerge 向下合并的行数），默认 1 */
+    rowspan?: number;
+    /** 显式宽度（pt，对应 w:tcW）；优先于 columnWidths 推导 */
+    width?: number;
+    /** 底纹填充色（对应 w:shd） */
+    fill?: string;
+    /** 垂直对齐（对应 w:vAlign），默认垂直居中 */
+    verticalAlign?: 'top' | 'middle' | 'bottom';
+}
+
+/** 表格单元格：纯文本简写 / 元素序列 / 带合并信息的对象 */
+export type PdfTableCell = string | PdfElement[] | PdfTableCellObject;
 
 /** 表格元素 */
 export interface PdfTableElement {
