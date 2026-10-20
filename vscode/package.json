@@ -2,7 +2,7 @@
   "name": "jdoc-viewer",
   "displayName": "jdoc Document Viewer",
   "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档，并预览 Markdown / 纯文本（由 @fefeding/jdoc 驱动）",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "keywords": [
     "docx",
     "xlsx",
@@ -100,65 +100,65 @@
       }
     ],
     "menus": {
-        "commandPalette": [
-          {
-            "command": "jdoc.revert",
-            "when": "activeCustomEditor == 'jdoc.documentEditor'"
-          },
-          {
-            "command": "jdoc.exportCopy",
-            "when": "activeCustomEditor == 'jdoc.documentEditor'"
-          },
-          {
-            "command": "jdoc.switchDocument",
-            "when": "activeCustomEditor == 'jdoc.documentEditor'"
-          }
-        ],
-        "editor/title": [
-          {
-            "command": "jdoc.convert",
-            "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
-            "group": "navigation@1"
-          },
-          {
-            "command": "jdoc.switchDocument",
-            "when": "activeCustomEditor == 'jdoc.documentEditor'",
-            "group": "navigation@2"
-          },
-          {
-            "command": "jdoc.viewMode",
-            "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && !jdoc:editing",
-            "group": "navigation@3"
-          },
-          {
-            "command": "jdoc.editMode",
-            "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && jdoc:editing",
-            "group": "navigation@3"
-          },
-          {
-            "command": "jdoc.revert",
-            "when": "activeCustomEditor == 'jdoc.documentEditor'",
-            "group": "1_modification"
-          },
-          {
-            "command": "jdoc.exportCopy",
-            "when": "activeCustomEditor == 'jdoc.documentEditor'",
-            "group": "1_modification"
-          }
-        ],
-        "editor/title/context": [
-          {
-            "command": "jdoc.convert",
-            "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
-            "group": "navigation@1"
-          },
-          {
-            "command": "jdoc.preview",
-            "when": "activeCustomEditor != 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-            "group": "navigation@2"
-          }
-        ],
-        "explorer/context": [
+      "commandPalette": [
+        {
+          "command": "jdoc.revert",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'"
+        },
+        {
+          "command": "jdoc.exportCopy",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'"
+        },
+        {
+          "command": "jdoc.switchDocument",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "jdoc.convert",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jdoc.switchDocument",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "jdoc.viewMode",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && !jdoc:editing",
+          "group": "navigation@3"
+        },
+        {
+          "command": "jdoc.editMode",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx)$/ && jdoc:editing",
+          "group": "navigation@3"
+        },
+        {
+          "command": "jdoc.revert",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "1_modification"
+        },
+        {
+          "command": "jdoc.exportCopy",
+          "when": "activeCustomEditor == 'jdoc.documentEditor'",
+          "group": "1_modification"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "jdoc.convert",
+          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jdoc.preview",
+          "when": "activeCustomEditor != 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
+          "group": "navigation@2"
+        }
+      ],
+      "explorer/context": [
         {
           "command": "jdoc.preview",
           "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
