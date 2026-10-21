@@ -181,7 +181,12 @@ export const en = {
   'status.snap': 'Snap',
 
   // ---------- inspector ----------
-  'insp.elements': 'Elements (click to select)',
+  'insp.pickerLabel': 'Elements',
+  'insp.pickerTitle': 'Select an element (searchable)',
+  'insp.pickerSearch': 'Search elements…',
+  'insp.pickerEmpty': 'No matching elements',
+  'insp.pickerNone': 'No element selected',
+  'insp.pickerSelected': 'Selected: {0}',
   'insp.selectedCount': '{0} elements selected',
   'insp.arrange': 'Arrange',
   'insp.slideProps': 'Slide Properties',

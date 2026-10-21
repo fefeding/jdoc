@@ -389,11 +389,49 @@ button { font-family: inherit; }
 .shortcuts td { padding: 2px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .shortcuts td.key { width: 34%; color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
 
-/* ===== Right-side properties panel ===== */
-.inspector { width: 290px; background: var(--panel); border-left: 1px solid var(--border); overflow-y: auto; padding: 10px; flex: 0 0 auto; }
+/* ===== Right-side properties panel =====
+   The panel is split into a sticky header (slide counter + element picker) and a scrollable
+   body (the property form). The element list lives in the picker's dropdown, so a slide with
+   dozens of elements no longer pushes the property form below the fold. */
+.inspector { width: 290px; background: var(--panel); border-left: 1px solid var(--border); flex: 0 0 auto; display: flex; flex-direction: column; overflow: hidden; }
 .inspector.hidden { display: none; }
 .inspector h3 { font-size: 12px; margin: 0 0 8px; color: var(--accent); text-transform: uppercase; letter-spacing: .04em; }
 .inspector h4 { font-size: 11px; margin: 12px 0 6px; color: var(--muted); }
+.insp-head { flex: 0 0 auto; padding: 8px 10px 7px; border-bottom: 1px solid var(--border); }
+.insp-head-row { display: flex; align-items: center; gap: 8px; }
+.insp-head h3 { flex: 1 1 auto; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px; }
+
+/* Element picker (dropdown trigger in the panel header) */
+.insp-picker {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 150px; flex: 0 0 auto;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 11px; font-family: inherit;
+}
+.insp-picker:hover { background: var(--panel-3); }
+.insp-picker .rb-ico { display: inline-flex; flex: 0 0 auto; opacity: .85; }
+.insp-picker-count { color: var(--muted); font-size: 10px; }
+.insp-sel-line { margin-top: 5px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Element picker dropdown — the slide's element list, searchable */
+.el-picker {
+  position: fixed; z-index: 92; width: 268px; max-width: 92vw; display: flex; flex-direction: column;
+  background: var(--vscode-menu-background, var(--panel-2)); color: var(--vscode-menu-foreground, var(--text));
+  border: 1px solid var(--vscode-menu-border, var(--border)); border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.45); overflow: hidden;
+}
+.el-picker-search {
+  width: 100%; background: var(--vscode-input-background, var(--bg)); color: var(--text);
+  border: 0; border-bottom: 1px solid var(--border); padding: 6px 8px; font-size: 12px; font-family: inherit; outline: none;
+}
+.el-picker-list { list-style: none; margin: 0; padding: 4px; max-height: 300px; overflow-y: auto; }
+.el-picker-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.el-picker-item:hover { background: var(--vscode-menu-selectionBackground, var(--accent-bg)); }
+.el-picker-item.sel { background: var(--accent-bg); }
+.el-picker-item .tick { width: 12px; flex: 0 0 auto; color: var(--accent); }
+.el-picker-item .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.el-picker-item .tag { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.el-picker-empty { padding: 8px; color: var(--muted); font-size: 12px; }
 .el-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; margin: -4px 0 8px; }
 .field { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .field label { width: 72px; color: var(--muted); flex: 0 0 auto; font-size: 11px; }
@@ -407,10 +445,6 @@ button { font-family: inherit; }
 .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .row .btn { flex: 1 1 auto; justify-content: center; }
 .chk { display: flex; align-items: center; gap: 6px; }
-.el-list { list-style: none; margin: 0; padding: 0; }
-.el-list li { padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 4px; cursor: pointer; display: flex; justify-content: space-between; gap: 6px; }
-.el-list li.active { border-color: var(--accent-2); background: var(--panel-2); }
-.el-list li .tag { color: var(--muted); font-size: 11px; }
 .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
 
 /* ===== Status bar ===== */

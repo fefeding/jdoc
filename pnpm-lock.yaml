@@ -87,6 +87,10 @@ importers:
       vitest:
         specifier: ^1.6.1
         version: 1.6.1(@types/node@20.19.43)(jsdom@27.4.0)(terser@5.51.2)
+    optionalDependencies:
+      '@napi-rs/canvas':
+        specifier: ^1.0.11
+        version: 1.0.11
 
 packages:
 

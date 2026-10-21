@@ -151,6 +151,11 @@ let stageInnerEl!: HTMLElement;
 let slideHostEl!: HTMLElement;
 let overlayEl!: HTMLElement;
 let gridEl!: HTMLElement;
+/** Right panel: container (header + scrollable property body). */
+let inspectorWrapEl!: HTMLElement;
+/** Right panel header: slide counter + element picker. */
+let inspectorHeadEl!: HTMLElement;
+/** Right panel body: the property form (scrolls independently of the header). */
 let inspectorEl!: HTMLElement;
 let statusCountEl!: HTMLElement;
 let zoomLabelEl!: HTMLElement;
@@ -314,9 +319,13 @@ function buildLayout() {
   groupHintEl.style.display = 'none';
   canvasArea.append(groupHintEl);
 
-  // Properties panel (edit mode only)
-  inspectorEl = h('div', { class: 'inspector edit-only' });
-  const main = h('div', { class: 'main' }, [slidesPanel, canvasArea, inspectorEl]);
+  // Properties panel (edit mode only): a sticky header (slide counter + element picker) plus a
+  // scrollable body with the property form. The element list moved into the picker's dropdown so
+  // the form is always reachable at the top of the panel, whatever the slide's element count.
+  inspectorHeadEl = h('div', { class: 'insp-head' });
+  inspectorEl = h('div', { class: 'insp-body' });
+  inspectorWrapEl = h('div', { class: 'inspector edit-only' }, [inspectorHeadEl, inspectorEl]);
+  const main = h('div', { class: 'main' }, [slidesPanel, canvasArea, inspectorWrapEl]);
 
   // Status bar (PowerPoint keeps the slide counter and the zoom cluster down here)
   statusCountEl = h('span', {});
@@ -500,7 +509,7 @@ function ribbonCommands(name: string, ...args: any[]): any {
     case 'present': return startPresent(false);
     case 'presentHere': return startPresent(true);
     case 'endShow': return stopPresent();
-    case 'toggleInspector': return inspectorEl.classList.toggle('hidden');
+    case 'toggleInspector': return inspectorWrapEl.classList.toggle('hidden');
     case 'zoom':
       if (args[0] === 'in') return setZoom(state.userZoom ?? state.zoom, true, 1.1);
       if (args[0] === 'out') return setZoom(state.userZoom ?? state.zoom, true, 0.9);
@@ -1770,34 +1779,13 @@ function syncChrome(): void {
 function renderInspector() {
   if (state.mode !== 'edit') {
     inspectorEl.innerHTML = '';
+    inspectorHeadEl.innerHTML = '';
     return;
   }
   if (state.editingText && store.sel.length) return; // don't rebuild while typing (keeps focus)
   inspectorEl.innerHTML = '';
   const slide = store.slide;
-  const count = store.slideCount;
-  inspectorEl.append(h('h3', {}, [t('status.counter', state.current + 1, count)]));
-
-  // Element list
-  const list = h('ul', { class: 'el-list' });
-  for (const el of slide?.elements || []) {
-    const tag = elSnippet(el);
-    list.append(
-      h(
-        'li',
-        {
-          class: store.sel.includes(el.id) ? 'active' : '',
-          onclick: () => {
-            store.setSel([el.id]);
-            renderSelection();
-            renderInspector();
-          }
-        },
-        [h('span', {}, [tag.name]), h('span', { class: 'tag' }, [tag.type])]
-      )
-    );
-  }
-  inspectorEl.append(h('h4', {}, [t('insp.elements')]), list);
+  renderInspectorHead();
 
   if (store.sel.length > 1) {
     const els = store.sel.map((id: string) => store.findElement(id)).filter(Boolean);
@@ -1810,6 +1798,155 @@ function renderInspector() {
     renderSlideInspector(slide);
   }
   syncChrome();
+}
+
+/**
+ * Panel header: slide counter + element picker. The element list itself lives in the picker's
+ * dropdown (searchable, one click to select), so the property form below always starts right
+ * under the header instead of below a list that can be dozens of rows long.
+ */
+function renderInspectorHead(): void {
+  inspectorHeadEl.innerHTML = '';
+  const slide = store.slide;
+  const els = (slide?.elements || []).filter(Boolean) as any[];
+  const sel = store.sel.map((id: string) => store.findElement(id)).filter(Boolean) as any[];
+
+  const picker = h('button', { class: 'insp-picker', type: 'button' }, [
+    icon('props', 13),
+    h('span', { class: 'insp-picker-label' }, [t('insp.pickerLabel')]),
+    h('span', { class: 'insp-picker-count' }, [String(els.length)]),
+    h('span', { class: 'rb-caret' }, [icon('chevron', 10)])
+  ]);
+  picker.title = t('insp.pickerTitle');
+  picker.onclick = () => openElementPicker(picker);
+
+  inspectorHeadEl.append(
+    h('div', { class: 'insp-head-row' }, [h('h3', {}, [t('status.counter', state.current + 1, store.slideCount)]), picker])
+  );
+
+  // One line telling what is currently being edited (instead of a full list of all elements).
+  let summary: string;
+  if (!sel.length) summary = t('insp.pickerNone');
+  else if (sel.length > 1) summary = t('insp.selectedCount', sel.length);
+  else {
+    const sn = elSnippet(sel[0]);
+    summary = t('insp.pickerSelected', `${sn.name} · ${sn.type}`);
+  }
+  const line = h('div', { class: 'insp-sel-line', title: summary }, [summary]);
+  inspectorHeadEl.append(line);
+}
+
+// ---------- Element picker (dropdown) ----------
+let pickerPopup: HTMLElement | null = null;
+let pickerAnchor: HTMLElement | null = null;
+
+function closeElementPicker(): void {
+  if (!pickerPopup) return;
+  pickerPopup.remove();
+  pickerPopup = null;
+  pickerAnchor = null;
+  document.removeEventListener('pointerdown', onPickerDocDown, true);
+  window.removeEventListener('blur', closeElementPicker);
+  window.removeEventListener('resize', closeElementPicker);
+}
+
+/** Keep the dropdown inside the window and aligned to the right edge of its trigger. */
+function placeElementPicker(anchor: HTMLElement, box: HTMLElement): void {
+  const r = anchor.getBoundingClientRect();
+  const w = box.offsetWidth;
+  const hgt = box.offsetHeight;
+  let left = r.right - w;
+  if (left < 6) left = 6;
+  if (left + w > window.innerWidth - 6) left = Math.max(6, window.innerWidth - w - 6);
+  let top = r.bottom + 4;
+  if (top + hgt > window.innerHeight - 6) top = Math.max(6, window.innerHeight - hgt - 6);
+  box.style.left = left + 'px';
+  box.style.top = top + 'px';
+}
+
+/**
+ * Dropdown with the current slide's elements (PowerPoint's "Selection Pane" in a combo box):
+ * type to filter, click to select. The list is intentionally *not* part of the panel body —
+ * that is what used to push the property form far below the fold on busy slides.
+ */
+function openElementPicker(anchor: HTMLElement): void {
+  if (pickerPopup) {
+    closeElementPicker();
+    return;
+  }
+  const all = ((store.slide?.elements || []) as any[]).filter(Boolean);
+  const box = h('div', { class: 'el-picker' });
+  const search = h('input', {
+    type: 'text',
+    class: 'el-picker-search',
+    placeholder: t('insp.pickerSearch'),
+    'aria-label': t('insp.pickerSearch')
+  });
+  const list = h('ul', { class: 'el-picker-list' });
+
+  const build = (query: string): void => {
+    list.innerHTML = '';
+    const q = query.trim().toLowerCase();
+    const items = q
+      ? all.filter((el) => {
+          const sn = elSnippet(el);
+          return (sn.name + ' ' + sn.type).toLowerCase().includes(q);
+        })
+      : all;
+    if (!items.length) {
+      list.append(h('li', { class: 'el-picker-empty' }, [t('insp.pickerEmpty')]));
+      return;
+    }
+    for (const el of items) {
+      const sn = elSnippet(el);
+      const isSel = store.sel.includes(el.id);
+      const row = h('li', { class: 'el-picker-item' + (isSel ? ' sel' : ''), title: sn.name }, [
+        h('span', { class: 'tick' }, [isSel ? '✓' : '']),
+        h('span', { class: 'name' }, [sn.name]),
+        h('span', { class: 'tag' }, [sn.type])
+      ]);
+      row.addEventListener('click', () => {
+        closeElementPicker();
+        store.setSel([el.id]);
+        renderSelection();
+        renderInspector();
+      });
+      list.append(row);
+    }
+  };
+
+  search.addEventListener('input', () => build(search.value));
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      closeElementPicker();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      (list.querySelector('.el-picker-item') as HTMLElement | null)?.click();
+    }
+  });
+
+  build('');
+  box.append(search, list);
+  document.body.append(box);
+  pickerPopup = box;
+  pickerAnchor = anchor;
+  document.addEventListener('pointerdown', onPickerDocDown, true);
+  window.addEventListener('blur', closeElementPicker);
+  window.addEventListener('resize', closeElementPicker);
+  placeElementPicker(anchor, box);
+  search.focus({ preventScroll: true });
+}
+
+/** Click outside closes the dropdown; a click on the trigger is handled by the button itself. */
+function onPickerDocDown(e: PointerEvent): void {
+  if (!pickerPopup) return;
+  const target = e.target as Node;
+  if (pickerPopup.contains(target)) return;
+  if (pickerAnchor && pickerAnchor.contains(target)) return;
+  closeElementPicker();
 }
 
 // Multi-selection panel: arrange / order / group actions shared across the selection.
@@ -3234,6 +3371,10 @@ function onKeyDown(e: KeyboardEvent) {
     (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
   // An open popup menu owns Esc / ↑ ↓ / ↵ — checked first so Esc closes the menu rather than
   // falling through to "cancel the current selection".
+  if (pickerPopup && e.key === 'Escape') {
+    closeElementPicker();
+    return;
+  }
   if (popupKeydown(e)) return;
   if (e.key === 'Escape' && hasOpenModal()) {
     closeModal();
