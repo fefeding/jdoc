@@ -13,6 +13,14 @@ English | [简体中文](./README.zh-CN.md)
 - **Built-in HTML rendering** — DOCX and XLSX results render to inline-styled HTML out of the box
 - **No framework dependency** — pure TypeScript shipping ESM, CJS and browser bundles
 
+## Rendered output
+
+Both screenshots come from the [`jdoc` VS Code extension](./vscode), which is built entirely on the APIs below — the paginated DOCX view (with table-of-contents sidebar) and the Excel-like XLSX grid (sheet tabs, formula bar, live formulas and charts) are rendered from the parsed JSON:
+
+| DOCX | XLSX |
+| --- | --- |
+| ![DOCX](./vscode/images/docx.png) | ![XLSX](./vscode/images/xls.png) |
+
 ## Install
 
 ```bash
@@ -168,7 +176,7 @@ const bytes = await jsonToPdf({
 
 - **PDF parsing covers text and page info only** — no layout analysis, table structuring or image extraction.
 - **DOCX does not restore columns, headers/footers, footnotes, comments or tracked changes**; floating objects (text boxes, SmartArt) are skipped.
-- **XLSX does not preserve pivot tables, charts, conditional formatting or comments** (comments require `includeNotes`).
+- **XLSX does not preserve pivot tables, conditional formatting or comments** (charts and drawings are preserved on round-trip, with their cell-referenced series re-linked on load; comments require `includeNotes`).
 - **PPTX fidelity follows `@fefeding/ppt-parser`** (shapes, charts, SmartArt rendering and round-trip).
 
 ## Skills
