@@ -4,7 +4,7 @@
 
 **DOCX** — paginated paper view with a table-of-contents sidebar (`examples/商业计划书.docx`):
 
-![DOCX preview](https://github.com/fefeding/jdoc/blob/main/examples/docx.png)
+![DOCX preview](https://github.com/fefeding/jdoc/raw/main/examples/docx.png)
 
 **XLSX** — Excel-like grid with sheet tabs, formula bar, live formulas and charts anchored to cells (`examples/销售分析表 副本.xlsx`):
 
