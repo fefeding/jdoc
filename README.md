@@ -19,7 +19,7 @@ Both screenshots come from the [`jdoc` VS Code extension](./vscode), which is bu
 
 | DOCX | XLSX |
 | --- | --- |
-| ![DOCX](./vscode/images/docx.png) | ![XLSX](./vscode/images/xls.png) |
+| ![DOCX](./examples/docx.png) | ![XLSX](./examples/xls.png) |
 
 ## Install
 
