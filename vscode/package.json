@@ -2,7 +2,7 @@
   "name": "jdoc-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "keywords": [
     "docx",
     "xlsx",
@@ -111,7 +111,7 @@
       "editor/title": [
         {
           "command": "jdoc.convert",
-          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "when": "activeCustomEditor == 'jdoc.documentEditor' && resourceExtname =~ /\\.(docx|xlsx|pptx|pdf|md|markdown|html|htm|txt)$/",
           "group": "navigation@1"
         },
         {
@@ -143,7 +143,7 @@
       "editor/title/context": [
         {
           "command": "jdoc.convert",
-          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "when": "resourceExtname =~ /\\.(docx|xlsx|pptx|pdf|md|markdown|html|htm|txt)$/",
           "group": "navigation@1"
         },
         {
@@ -167,7 +167,7 @@
         },
         {
           "command": "jdoc.convert",
-          "when": "resourceExtname =~ /\\.(docx|pdf|md|markdown|html|htm|txt)$/",
+          "when": "resourceExtname =~ /\\.(docx|xlsx|pptx|pdf|md|markdown|html|htm|txt)$/",
           "group": "navigation@2"
         },
         {
@@ -205,6 +205,7 @@
     "dev": "node esbuild.js --watch",
     "verify:roundtrip": "node scripts/verify-roundtrip.mjs",
     "verify:xlsx": "node scripts/verify-xlsx.mjs",
+    "verify:convert": "node scripts/verify-convert-formats.mjs",
     "sync:md-assets": "node -e \"const fs=require('fs'),p=require('path');const src=p.resolve(__dirname,'..','node_modules','katex','dist'),dst=p.resolve(__dirname,'media');fs.copyFileSync(p.join(src,'katex.min.css'),p.join(dst,'katex.min.css'));fs.rmSync(p.join(dst,'fonts'),{recursive:true,force:true});fs.cpSync(p.join(src,'fonts'),p.join(dst,'fonts'),{recursive:true})\"",
     "install:jdoc": "npm install file:..",
     "package": "vsce package --no-dependencies",
