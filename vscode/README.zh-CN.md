@@ -1,5 +1,15 @@
 # jdoc Document Viewer
 
+## 示例截图
+
+**DOCX** — 按纸张分页、带目录侧栏的视图（`examples/商业计划书.docx`）：
+
+![DOCX 预览](https://github.com/fefeding/jdoc/blob/main/examples/docx.png)
+
+**XLSX** — 带工作表标签、公式栏、实时公式与图表的 Excel 式网格（`examples/销售分析表 副本.xlsx`）：
+
+![XLSX 预览](https://github.com/fefeding/jdoc/raw/main/examples/xls.png)
+
 VS Code 扩展，基于 [`@fefeding/jdoc`](https://github.com/fefeding/jdoc) 在编辑器内**查看并编辑**办公文档：
 
 - **PPTX** — 幻灯片渲染（含图表），可编辑

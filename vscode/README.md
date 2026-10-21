@@ -1,5 +1,15 @@
 # jdoc Document Viewer
 
+## Screenshots
+
+**DOCX** — paginated paper view with a table-of-contents sidebar (`examples/商业计划书.docx`):
+
+![DOCX preview](https://github.com/fefeding/jdoc/blob/main/examples/docx.png)
+
+**XLSX** — Excel-like grid with sheet tabs, formula bar, live formulas and charts anchored to cells (`examples/销售分析表 副本.xlsx`):
+
+![XLSX preview](https://github.com/fefeding/jdoc/raw/main/examples/xls.png)
+
 A VS Code extension that lets you **view and edit** office documents right inside the editor, built on [`@fefeding/jdoc`](https://github.com/fefeding/jdoc):
 
 - **PPTX** — slide rendering (including charts), editable
