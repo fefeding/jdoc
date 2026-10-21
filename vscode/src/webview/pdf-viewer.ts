@@ -9,7 +9,7 @@
 // - 旋转：viewport.rotation 变化后页面尺寸会换（width/height 对调），必须重算占位与
 //   缩略图，所以旋转不是 CSS transform，而是把渲染重走一遍。
 import { createZoomCluster, type ZoomController } from './zoom';
-import { escapeHtml } from './util';
+import { escapeHtml, resolvePdfWorkerSrc } from './util';
 
 /** 缩略图渲染宽度（CSS px，与 .pdf-thumb .frame 宽度一致） */
 const THUMB_WIDTH = 132;
@@ -842,10 +842,10 @@ export function createPdfViewer(
             onStatus('加载失败');
             return;
         }
-        const worker = (window as any).__JDC_PDF_WORKER__;
-        if (worker && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
-            pdfjs.GlobalWorkerOptions.workerSrc = worker;
-        }
+        // 把 worker 解析成同源 Blob URL：避免 VS Code 官方 webview 下因页面与
+        // asWebviewUri 给出的 worker 不同源而触发 pdfjs 的 CDN 包装（跨源 import，
+        // 极慢/失败回退主线程），详见 util.ts 的 resolvePdfWorkerSrc。
+        await resolvePdfWorkerSrc(pdfjs);
         let doc: any;
         try {
             // pdfjs 会把 data 转移给 worker（原 ArrayBuffer 会被 detach），必须传副本。
