@@ -3,6 +3,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { JdocDocument } from './document';
 import { convert, type ConvertTarget } from '@fefeding/jdoc';
+import { extToFormat, targetFormats, type SourceFormat } from './convert-formats';
 import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } from './protocol';
 
 /**
@@ -15,8 +16,25 @@ import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } 
  */
 const PDF_WORKER_URL = pathToFileURL(path.join(__dirname, 'pdf.worker.mjs')).href;
 
-/** 可被转换命令识别的源格式（与扩展名对应） */
-const SUPPORTED_EXT = /\.(docx|pdf|md|markdown|html|htm|txt)$/;
+/**
+ * 给可能挂起的异步操作加超时。
+ *
+ * pdfjs 在 worker 加载失败（文件缺失 / 路径失效 / 宿主 CSP）时不会 reject，
+ * 而是永远 pending——表现就是转换卡在「正在请求转换…」/「Converting document…」
+ * 且无任何报错。这里统一兜一个超时，把静默挂起变成明确错误。
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+            setTimeout(
+                () => reject(new Error(`${label} 超时（${Math.round(ms / 1000)}s），可能是 PDF worker 未能加载`)),
+                ms
+            )
+        )
+    ]);
+}
+
 /** 各目标格式对应的展示名 / 扩展名 / 保存过滤器 */
 const TARGET_META: Record<ConvertTarget, { label: string; ext: string; filter: Record<string, string[]> }> = {
     docx: { label: loc('extension.target.docx', 'Word Document (.docx)'), ext: 'docx', filter: { Word: ['docx'] } },
@@ -24,15 +42,6 @@ const TARGET_META: Record<ConvertTarget, { label: string; ext: string; filter: R
     md: { label: loc('extension.target.md', 'Markdown (.md)'), ext: 'md', filter: { Markdown: ['md', 'markdown'] } },
     html: { label: loc('extension.target.html', 'HTML Web Page (.html)'), ext: 'html', filter: { HTML: ['html', 'htm'] } }
 };
-/** 文件扩展名 -> 源格式（传给 convert 的 from 参数） */
-function extToFormat(path: string): ConvertTarget | 'txt' | undefined {
-    if (/\.docx$/i.test(path)) return 'docx';
-    if (/\.pdf$/i.test(path)) return 'pdf';
-    if (/\.markdown?$/i.test(path)) return 'md';
-    if (/\.html?$/i.test(path)) return 'html';
-    if (/\.txt$/i.test(path)) return 'txt';
-    return undefined;
-}
 
 /** 「导出为图片」在 QuickPick 里的哨兵值（库的 ConvertTarget 里没有 png，故用独立标记） */
 const IMAGE_TARGET = '__images__';
@@ -137,6 +146,12 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                 this.syncContext();
             }
         });
+        // 立即登记为活动文档：部分宿主在打开面板时不一定触发 onDidChangeViewState，
+        // 不登记的话标题栏「转换格式」按钮（jdoc.convert 命令，不经 webview）取不到
+        // _activeDoc，convertUri(undefined) 会落到 undefined，只弹一条易被忽略的提示，
+        // 表现成「点了没反应」。焦点变化后上面的事件仍会持续校正。
+        this._activeDoc = document;
+        this._activePanel = webviewPanel;
 
         const send = (msg: HostToWebview) => webviewPanel.webview.postMessage(msg);
         const sendInit = async () => {
@@ -330,7 +345,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
     }
 
     /**
-     * 文档格式转换入口：把选中的文件转换成另一种格式（docx / pdf / md / html 互转）。
+     * 文档格式转换入口：把选中的文件转换成另一种格式（docx / xlsx / pdf / md / html / txt 互转）。
      * 通过 QuickPick 选择目标格式，转换后在扩展宿主（Node）完成并另存为新文件。
      */
     public async convertUri(uri?: vscode.Uri): Promise<void> {
@@ -345,15 +360,21 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         const sourceName = target.path.split('/').pop() || 'document';
         const from = extToFormat(target.path);
         if (!from) {
-            vscode.window.showWarningMessage(loc('extension.unsupported', 'Unsupported file format for conversion.'));
+            vscode.window.showWarningMessage(
+                loc(
+                    'extension.unsupported',
+                    'Unsupported file format for conversion. Supported: .docx, .xlsx, .pptx, .pdf, .md, .html, .txt'
+                )
+            );
             return;
         }
 
         const items = [
             { label: loc('extension.toImages', 'Images (PNG, one per page)'), target: IMAGE_TARGET },
-            ...(Object.keys(TARGET_META) as ConvertTarget[])
-                .filter((k) => k !== from)
-                .map((k) => ({ label: TARGET_META[k].label, target: k }))
+            ...targetFormats(from, Object.keys(TARGET_META) as ConvertTarget[]).map((k) => ({
+                label: TARGET_META[k].label,
+                target: k
+            }))
         ];
         const picked = await vscode.window.showQuickPick(items, {
             placeHolder: loc('extension.convertTo', 'Convert "{0}" to which format?', sourceName),
@@ -373,7 +394,11 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             async () => {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
-                    const result = await convert(data, to, { from, workerSrc: PDF_WORKER_URL });
+                    const result = await withTimeout(
+                        convert(data, to, { from, workerSrc: PDF_WORKER_URL }),
+                        30000,
+                        loc('extension.converting', 'Converting document…')
+                    );
                     const base = sourceName.replace(/\.[^.]+$/, '');
                     const dir = target.path.replace(/[^/]+$/, '');
                     const outUri = await vscode.window.showSaveDialog({
@@ -467,7 +492,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
      * 转 PDF（已修子集化，中文文档也只有几百 KB），再交给一次性 webview 逐页栅格化。
      * 全程不需要任何原生依赖，没打开任何文档时也能用。
      */
-    private async exportImages(target: vscode.Uri, from: ConvertTarget | 'txt', sourceName: string): Promise<void> {
+    private async exportImages(target: vscode.Uri, from: SourceFormat, sourceName: string): Promise<void> {
         // 先选目录再栅格化：页数要等 webview 渲染完才知道，这样还能边渲染边落盘，
         // 不必把所有 PNG 暂存在内存里。
         const picked = await vscode.window.showOpenDialog({
@@ -487,7 +512,11 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             async () => {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
-                    const pdf = await convert(data, 'pdf', { from, workerSrc: PDF_WORKER_URL });
+                    const pdf = await withTimeout(
+                        convert(data, 'pdf', { from, workerSrc: PDF_WORKER_URL }),
+                        30000,
+                        loc('extension.converting', 'Converting document…')
+                    );
                     const base = sourceName.replace(/\.[^.]+$/, '') || 'page';
                     // scale=2 约 144dpi，A4 输出约 1191x1684，清晰度足够印刷预览
                     const written = await this.rasterizePdf(pdf, 2, async (index, png) => {

@@ -17,7 +17,7 @@
   "extension.exportCopy": "Export Copy",
   "extension.exported": "Exported copy: {0}",
   "extension.pickConvert": "Select a file to convert with jdoc.",
-  "extension.unsupported": "Unsupported file format for conversion.",
+  "extension.unsupported": "Unsupported file format for conversion. Supported: .docx, .xlsx, .pptx, .pdf, .md, .html, .txt",
   "extension.toImages": "Images (PNG, one per page)",
   "extension.convertTo": "Convert \"{0}\" to which format?",
   "extension.convertTitle": "jdoc: Convert Document Format",

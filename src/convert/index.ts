@@ -3,7 +3,7 @@
  *
  * 以「文档块模型（DocxBlock）」为中间表示，提供任意格式间的转换：
  *
- *   md / docx / html / pdf  ->  blocks  ->  md / docx / html / pdf
+ *   md / docx / xlsx / pptx / html / pdf  ->  blocks  ->  md / docx / html / pdf
  *
  * 各格式分别提供细粒度函数（如 `markdownToBlocks` / `blocksToPdf`），
  * `convert()` 则是「自动识别源格式 -> 转成目标格式」的一站式入口。
@@ -18,6 +18,8 @@ import { markdownToBlocks, blocksToMarkdown } from './markdown';
 import { htmlToBlocks } from './html';
 import { pdfToBlocks } from './pdf';
 import { blocksToPdf } from './blocks-to-pdf';
+import { xlsxToBlocks } from './xlsx';
+import { pptxToBlocks } from './pptx';
 import type { DocxBlock, DocxDocument } from '../docx/types';
 import type { DocAsset } from '../core/asset';
 import type { PdfFontSet } from '../pdf/types';
@@ -26,9 +28,13 @@ export { markdownToBlocks, blocksToMarkdown } from './markdown';
 export { htmlToBlocks } from './html';
 export { pdfToBlocks } from './pdf';
 export { blocksToPdf } from './blocks-to-pdf';
+export { xlsxToBlocks } from './xlsx';
+export { pptxToBlocks } from './pptx';
 export type { MarkdownToBlocksOptions, BlocksToMarkdownOptions } from './markdown';
 export type { PdfToBlocksOptions, PdfToBlocksResult } from './pdf';
 export type { BlocksToPdfOptions } from './blocks-to-pdf';
+export type { XlsxToBlocksOptions, XlsxToBlocksResult } from './xlsx';
+export type { PptxToBlocksOptions, PptxToBlocksResult } from './pptx';
 
 /** 可转换的目标格式 */
 export type ConvertTarget = 'docx' | 'pdf' | 'md' | 'html';
@@ -112,6 +118,16 @@ export async function convert(
 
     if (from === 'docx') {
         const result = await docxToJson(bytes, { assets: 'extract' });
+        blocks = result.blocks;
+        metadata = result.metadata;
+        assets = result.assets;
+    } else if (from === 'xlsx') {
+        const result = await xlsxToBlocks(bytes);
+        blocks = result.blocks;
+        metadata = result.metadata;
+        assets = result.assets;
+    } else if (from === 'pptx') {
+        const result = await pptxToBlocks(bytes);
         blocks = result.blocks;
         metadata = result.metadata;
         assets = result.assets;

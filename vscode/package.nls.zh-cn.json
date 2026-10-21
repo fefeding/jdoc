@@ -17,7 +17,7 @@
   "extension.exportCopy": "导出副本",
   "extension.exported": "已导出副本：{0}",
   "extension.pickConvert": "请选择一个文件以用 jdoc 转换。",
-  "extension.unsupported": "不支持转换的文件格式。",
+  "extension.unsupported": "不支持转换的文件格式。支持：.docx、.xlsx、.pptx、.pdf、.md、.html、.txt",
   "extension.toImages": "图片（PNG，每页一张）",
   "extension.convertTo": "将 “{0}” 转换为哪种格式？",
   "extension.convertTitle": "jdoc: 转换文档格式",
