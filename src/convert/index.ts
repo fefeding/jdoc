@@ -70,6 +70,39 @@ function looksLikeHtml(text: string): boolean {
     return /^\s*<(!doctype\s+html|html|head|body|div|p|table|section|article)\b/i.test(text);
 }
 
+/** 把 HTML 片段包成可直接在浏览器 / IDE 预览打开的完整文档 */
+function wrapStandaloneHtml(fragment: string, title?: string): string {
+    // 片段本身只带 .docx-body（深色文字）不带页面背景，暗色主题的预览器里会变成
+    // 深色文字落在暗背景上几乎不可见；这里显式声明 charset 与页面底色。
+    const safeTitle = (title || 'Document')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    // 纸张之外留中性底色、页面居中；打印时去掉阴影与底色。
+    // 缩放一律交给 CSS：纸张 max-width:100% 自适应，窄屏不出现横向滚动条，
+    // 不往文档里注入任何脚本 / 工具条（转换产物应保持纯内容）。
+    const shellStyle = `html,body{margin:0;padding:0;background:#eef0f3}
+body{padding:24px 12px}
+/* body > 提高优先级：片段自带样式表在其后输出，同名的 .docx-page 规则会赢 */
+body > .docx-page{margin:0 auto;max-width:100%}
+@media print{html,body{background:#fff;padding:0}body > .docx-page{margin:0;box-shadow:none;width:auto!important;min-height:auto;padding:0}}`;
+    return [
+        '<!DOCTYPE html>',
+        '<html lang="zh">',
+        '<head>',
+        '<meta charset="utf-8"/>',
+        '<meta name="viewport" content="width=device-width, initial-scale=1"/>',
+        `<title>${safeTitle}</title>`,
+        `<style>${shellStyle}</style>`,
+        '</head>',
+        '<body>',
+        fragment,
+        '</body>',
+        '</html>'
+    ].join('\n');
+}
+
 /**
  * 格式互转：源格式 -> 文档块模型 -> 目标格式
  *
@@ -115,12 +148,14 @@ export async function convert(
     let blocks: DocxBlock[] = [];
     let metadata: DocxDocument['metadata'];
     let assets: DocAsset[] | undefined;
+    let section: DocxDocument['section'];
 
     if (from === 'docx') {
         const result = await docxToJson(bytes, { assets: 'extract' });
         blocks = result.blocks;
         metadata = result.metadata;
         assets = result.assets;
+        section = result.section;
     } else if (from === 'xlsx') {
         const result = await xlsxToBlocks(bytes);
         blocks = result.blocks;
@@ -139,9 +174,17 @@ export async function convert(
         const result = await pdfToBlocks(bytes, { quality: options.quality, workerSrc: options.workerSrc });
         blocks = result.blocks;
         metadata = result.metadata as DocxDocument['metadata'];
+        // 页面图像：图片块只存 assetId，字节在这张表里，缺了 md / html 会整篇丢图
+        assets = result.assets;
     } else {
         // txt 或其它：当作纯文本 markdown
         blocks = markdownToBlocks(decodeText(bytes));
+    }
+
+    // 图表块只在 HTML 目标渲染成矢量 SVG；md / docx / pdf 没有矢量绘图能力，
+    // 退化成随块携带的数据表（图表数据不丢，只是换了呈现形式）。
+    if (target !== 'html' && blocks.some((block) => block.type === 'chart')) {
+        blocks = blocks.flatMap((block) => (block.type === 'chart' ? (block.fallback ? [block.fallback] : []) : [block]));
     }
 
     // ---- blocks -> 目标 ----
@@ -156,7 +199,13 @@ export async function convert(
         return blocksToMarkdown({ blocks }, { assets: pool });
     }
     if (target === 'html') {
-        return blocksToHtml({ metadata, blocks }, { includeStyle: true });
+        // assets 必须带上：图片块只存 assetId，缺资源表会解析不出 data URL 而整块丢弃
+        // （表现就是「转出来的 HTML 一张图都没有」）。section 同理，缺了就退回 A4 兜底纸张。
+        const fragment = blocksToHtml(
+            { metadata, blocks, section, assets: Array.isArray(pool) ? pool : (pool ? Object.values(pool) : undefined) },
+            { includeStyle: true }
+        );
+        return wrapStandaloneHtml(fragment, (metadata as { title?: string } | undefined)?.title);
     }
     throw new TypeError(`不支持的目标格式：${target}`);
 }

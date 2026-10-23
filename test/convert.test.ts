@@ -10,7 +10,7 @@ import {
 import { jsonToDocx } from '../src/docx/index';
 import { blocksToHtml } from '../src/docx/index';
 import { docxToJson } from '../src/docx/index';
-import type { DocxBlock } from '../src/docx/types';
+import type { DocxBlock, DocxCell, DocxCellDetail } from '../src/docx/types';
 
 describe('convert: markdown <-> blocks', () => {
     it('解析标题/段落/列表/表格/代码块', () => {
@@ -193,6 +193,67 @@ describe('convert: code review 修复回归', () => {
         const result = await pdfToBlocks(pdf, { pageBreaks: true });
         expect(result.blocks.some((b) => b.type === 'pageBreak')).toBe(true);
         expect(result.blocks[result.blocks.length - 1].type).not.toBe('pageBreak');
+    });
+
+    it('合并单元格的表格 -> md 输出 HTML 表格（不压成行列数不一致的管道表）', () => {
+        // 真实样例：过载保护优化方案.docx 的表头两格各 gridSpan=8，数据行 18 格
+        const detail = (text: string, colspan?: number): DocxCell => {
+            const cell: DocxCellDetail = { type: 'cell', text };
+            if (colspan && colspan > 1) cell.colspan = colspan;
+            return cell as DocxCell;
+        };
+        const blocks: DocxBlock[] = [
+            {
+                type: 'table',
+                rows: [
+                    [detail(''), detail('business priority 1', 8), detail('business priority 2', 8), detail('…')],
+                    [
+                        ['user priority', '0', '1', '2', '3', '4', '…', '98', '99', '0', '1', '2', '3', '4', '…', '98', '99', '…'].map(
+                            (t) => [{ text: t }] as DocxCell
+                        )
+                    ]
+                ]
+            }
+        ];
+        const md = blocksToMarkdown(blocks);
+        expect(md).toContain('<table>');
+        expect(md).toContain('colspan="8"');
+        // 不能退化成管道表：表头 4 列 / 数据行 18 列会被渲染器直接丢弃或错位
+        expect(md).not.toContain('| --- |');
+    });
+
+    it('HTML 表格可往返回带 colspan 的表格块', () => {
+        const md = [
+            '<table>',
+            '  <tr>',
+            '    <td colspan="8">business priority 1</td>',
+            '    <td>…</td>',
+            '  </tr>',
+            '  <tr>',
+            '    <td>0</td>',
+            '    <td>1</td>',
+            '  </tr>',
+            '</table>'
+        ].join('\n');
+        const blocks = markdownToBlocks(md);
+        const table = blocks.find((b) => b.type === 'table') as Extract<DocxBlock, { type: 'table' }>;
+        expect(table).toBeTruthy();
+        expect((table.rows[0][0] as DocxCellDetail).colspan).toBe(8);
+        expect(cellText(table.rows[0][0])).toBe('business priority 1');
+    });
+
+    it('无合并但行列不齐的表格 -> 管道表补齐列数', () => {
+        const md = blocksToMarkdown([
+            {
+                type: 'table',
+                rows: [
+                    [[{ text: 'a' }], [{ text: 'b' }], [{ text: 'c' }]],
+                    [[{ text: '1' }]]
+                ]
+            } as DocxBlock
+        ]);
+        expect(md.split('\n').every((line) => line.split('|').length - 2 === 3)).toBe(true);
+        expect(md).toContain('| 1 |  |  |');
     });
 
     it('hr 走流式分隔线元素，生成成功', async () => {

@@ -16,7 +16,8 @@
  */
 
 import { parsePdf } from '../pdf/parse';
-import type { PdfMetadata, PdfTextItem, PdfVector } from '../pdf/types';
+import { createAsset, createAssetId, type DocAsset } from '../core/asset';
+import type { PdfImage, PdfMetadata, PdfTextItem, PdfVector } from '../pdf/types';
 import type { DocxBlock } from '../docx/types';
 
 /** PDF -> blocks 选项 */
@@ -30,6 +31,19 @@ export interface PdfToBlocksOptions {
     /** 是否在各页之间插入 pageBreak 块，默认 false */
     pageBreaks?: boolean;
     /**
+     * 是否还原页面图像，默认 true
+     *
+     * PDF 没有「块」概念，图文都是绝对定位的，图像必须靠坐标插回阅读顺序。
+     * 关掉可省掉图像解码与 PNG 编码的开销（纯文本批量抽取场景）。
+     */
+    images?: boolean;
+    /**
+     * 单张图的像素上限，超出后降采样（默认 2e6，约 1600x1250）；0 表示不降采样
+     *
+     * 扫描件整页图常达 3000x4000，原样编码会让 md / html 膨胀到几百 MB。
+     */
+    maxImagePixels?: number;
+    /**
      * pdfjs worker 地址（Node 端）。pdfjs 被打包器内联进 bundle 时，
      * 它内置的相对 worker 路径会失效，必须显式给出可加载的地址。
      */
@@ -41,6 +55,19 @@ export interface PdfToBlocksResult {
     blocks: DocxBlock[];
     /** 文档元数据（若有） */
     metadata?: PdfMetadata;
+    /**
+     * 页面图像资源（图片块只存 assetId，字节在这里按 id 取）
+     *
+     * 转 md / html 时要把这张表一起传下去，否则图片解析不出 data URL 会整块丢弃。
+     */
+    assets?: DocAsset[];
+}
+
+/** 带纵向位置的图片块（用于按阅读顺序插回文本流） */
+interface PlacedImage {
+    /** 图像下边缘 y（PDF 坐标系，y 越大越靠上） */
+    y: number;
+    block: DocxBlock;
 }
 
 /** 一行文本（已含空格估算） */
@@ -65,32 +92,58 @@ export async function pdfToBlocks(
     options: PdfToBlocksOptions = {}
 ): Promise<PdfToBlocksResult> {
     const quality = options.quality ?? 'layout';
+    const wantImages = options.images !== false;
     const { document } = await parsePdf(input, {
         items: true,
         vectors: quality === 'layout',
         text: false,
+        images: wantImages,
+        maxImagePixels: options.maxImagePixels,
         pages: options.pages,
         maxPages: options.maxPages,
         workerSrc: options.workerSrc
     });
 
     const allBlocks: DocxBlock[] = [];
+    const assets: DocAsset[] = [];
 
     for (const page of document.pages || []) {
         const items = page.items || [];
-        if (!items.length) continue;
+        const pageImages = wantImages ? page.images || [] : [];
+
+        // 纯图片页（扫描件、整页插图）：没有文本也要把图产出来
+        if (!items.length) {
+            if (!pageImages.length) continue;
+            allBlocks.push(
+                ...[...pageImages]
+                    .sort((a, b) => b.y - a.y)
+                    .map((img) => imageBlockOf(img, page.index, assets))
+                    .filter((b): b is DocxBlock => !!b)
+            );
+            if (options.pageBreaks && page.index < (document.pageCount || 1)) {
+                allBlocks.push({ type: 'pageBreak' });
+            }
+            continue;
+        }
 
         // 正文字号：取出现频率最高者（直方图众数）
         const bodySize = modeSize(items.map((i) => i.fontSize)).size;
         const lineGroups = splitColumns(items, page.width);
+        // 图像按 x 归属到栏，保证双栏排版时图跟着所在栏的文字走
+        const imageGroups = assignImagesToGroups(pageImages, lineGroups);
 
         const pageBlocks: DocxBlock[] = [];
-        for (const group of lineGroups) {
-            const lines = groupLines(group, bodySize);
+        for (let g = 0; g < lineGroups.length; g++) {
+            const lines = groupLines(lineGroups[g], bodySize);
+            const placed: PlacedImage[] = [];
+            for (const img of imageGroups[g]) {
+                const block = imageBlockOf(img, page.index, assets);
+                if (block) placed.push({ y: img.y, block });
+            }
             if (quality === 'layout' && page.vectors?.length) {
                 extractTables(lines, page.vectors, pageBlocks);
             }
-            pageBlocks.push(...linesToBlocks(lines, bodySize));
+            pageBlocks.push(...linesToBlocks(lines, bodySize, placed));
         }
         allBlocks.push(...pageBlocks);
         // 非末页才补分页符，避免文档结尾多一个空页标记
@@ -100,7 +153,71 @@ export async function pdfToBlocks(
         }
     }
 
-    return { blocks: allBlocks, metadata: document.metadata };
+    return { blocks: allBlocks, metadata: document.metadata, assets: assets.length ? assets : undefined };
+}
+
+/** 页面图像 -> 图片块（字节进资源表，块上只留 assetId 引用） */
+function imageBlockOf(image: PdfImage, pageIndex: number, assets: DocAsset[]): DocxBlock | undefined {
+    if (!image.data?.length) return undefined;
+    const assetId = createAssetId('pdf', assets.length + 1);
+    const asset = createAsset({
+        id: assetId,
+        data: image.data,
+        mime: image.mime || 'image/png',
+        part: `Page${pageIndex}:${image.id}`,
+        anchor: {
+            scope: 'pdf',
+            kind: 'page',
+            index: pageIndex,
+            path: `pages[${pageIndex - 1}]`,
+            label: `第 ${pageIndex} 页`
+        },
+        width: image.pixelWidth,
+        height: image.pixelHeight
+    });
+    assets.push(asset);
+    return {
+        type: 'image',
+        src: { assetId },
+        assetId,
+        // DocxImage 的宽高单位是磅，PDF 坐标本来就是磅，直接沿用
+        width: image.width,
+        height: image.height,
+        alt: `第 ${pageIndex} 页图片`
+    };
+}
+
+/** 图像按横向位置归属到栏（单栏时全部归该栏） */
+function assignImagesToGroups(images: PdfImage[], groups: PdfTextItem[][]): PdfImage[][] {
+    const out: PdfImage[][] = groups.map(() => []);
+    if (!images.length) return out;
+    if (groups.length === 1) {
+        out[0] = images.slice();
+        return out;
+    }
+    const ranges = groups.map((group) => {
+        let min = Infinity;
+        let max = -Infinity;
+        for (const item of group) {
+            min = Math.min(min, item.x);
+            max = Math.max(max, item.x + item.width);
+        }
+        return { min, max };
+    });
+    for (const image of images) {
+        const cx = image.x + image.width / 2;
+        let best = 0;
+        let bestDist = Infinity;
+        ranges.forEach((range, index) => {
+            const dist = cx < range.min ? range.min - cx : cx > range.max ? cx - range.max : 0;
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = index;
+            }
+        });
+        out[best].push(image);
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,11 +294,33 @@ function splitColumns(items: PdfTextItem[], pageWidth: number): PdfTextItem[][] 
     return [items];
 }
 
-/** 把行序列转成块（标题/列表/段落） */
-function linesToBlocks(lines: Line[], bodySize: number): DocxBlock[] {
+/** 行的右边界（文本实际排到的位置，用来判断该行是否排到了行尾） */
+function lineRight(line: Line): number {
+    let right = 0;
+    for (const it of line.items) right = Math.max(right, it.x + it.width);
+    return right;
+}
+
+/** 折行拼接：中文之间不加空格，英文/数字之间保留空格 */
+function joinWrapped(prev: string, next: string): string {
+    const cjk = /[㐀-鿿豈-﫿＀-￯]/;
+    if (!prev || !next) return prev + next;
+    if (cjk.test(prev[prev.length - 1]) && cjk.test(next[0])) return prev + next;
+    return `${prev} ${next}`;
+}
+
+/** 把行序列转成块（标题/列表/段落，并按 y 插入图片块） */
+function linesToBlocks(lines: Line[], bodySize: number, images: PlacedImage[] = []): DocxBlock[] {
     const blocks: DocxBlock[] = [];
     let paraBuffer: string[] = [];
     let listBuffer: string[] = [];
+    // 列表项折行后第二行没有编号/符号，会被当成普通段落拆出去，结果每个 <li>
+    // 各自变成一个 <ol>，编号全部从 1 重新开始。用「上一行排到行尾 + 续行与列表
+    // 项同列（未缩进）」识别折行，并回并进上一个列表项。
+    const rightEdge = lines.reduce((max, line) => Math.max(max, lineRight(line)), 0);
+    const fullLine = (line: Line) => lineRight(line) >= rightEdge - bodySize * 2;
+    let listStartX = 0;
+    let listLastFull = false;
 
     const flushPara = () => {
         const text = paraBuffer.join(' ').replace(/\s+/g, ' ').trim();
@@ -201,7 +340,22 @@ function linesToBlocks(lines: Line[], bodySize: number): DocxBlock[] {
         listBuffer = [];
     };
 
+    // 图像按「下边缘 y」从大到小（自上而下）排队：行也是自上而下遍历，
+    // 遇到某行时把它上方的图先输出，图文顺序就与版面一致。
+    const pending = [...images].sort((a, b) => b.y - a.y);
+    let nextImage = 0;
+    const flushImagesAbove = (y: number) => {
+        while (nextImage < pending.length && pending[nextImage].y > y) {
+            // 图文之间必须断开：否则图片会被并进正在攒的段落
+            flushPara();
+            flushList();
+            blocks.push(pending[nextImage].block);
+            nextImage++;
+        }
+    };
+
     for (const line of lines) {
+        flushImagesAbove(line.y);
         const isHeading = line.size > bodySize * 1.18 && line.text.length <= Math.max(60, bodySize * 6);
         const isList = LIST_LEAD.test(line.text);
 
@@ -214,11 +368,23 @@ function linesToBlocks(lines: Line[], bodySize: number): DocxBlock[] {
         } else if (isList) {
             flushPara();
             listBuffer.push(line.text);
+            listStartX = line.x;
+            listLastFull = fullLine(line);
+        } else if (
+            listBuffer.length &&
+            listLastFull &&
+            // 续行与列表项同列：缩进行（目录子条目等）是新内容，不并进列表项
+            line.x <= listStartX + Math.max(1.5, bodySize * 0.3)
+        ) {
+            listBuffer[listBuffer.length - 1] = joinWrapped(listBuffer[listBuffer.length - 1], line.text);
+            listLastFull = fullLine(line);
         } else {
             flushList();
             paraBuffer.push(line.text);
         }
     }
+    // 行走完后剩下的是排在末尾的图（页脚上方 / 文末插图）
+    flushImagesAbove(-Infinity);
     flushPara();
     flushList();
     return blocks;

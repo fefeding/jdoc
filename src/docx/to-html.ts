@@ -15,6 +15,7 @@ import {
     type AssetTable,
     type DocAsset
 } from '../core/asset';
+import { renderChartSvg } from '../chart/svg';
 import type {
     DocxBlock,
     DocxCell,
@@ -84,6 +85,39 @@ function listItemToHtml(item: DocxListItem, ordered: boolean): string {
     return `<li>${self}<${tag}>${children.map((child) => listItemToHtml(child, ordered)).join('')}</${tag}></li>`;
 }
 
+/**
+ * 深色底纹上的文字颜色：底色偏暗时返回白色，保证可读。
+ *
+ * Excel 的表头、Word 的文本框都常是「深色底 + 默认深色字」，不反白的话
+ * 文字和底色糊成一片（暗色主题的预览器里尤其致命）。
+ */
+function contrastTextColor(fill: string | undefined): string | undefined {
+    if (!fill) return undefined;
+    const hex = fill.replace(/^#/, '');
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) return undefined;
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return r * 0.299 + g * 0.587 + b * 0.114 < 128 ? '#ffffff' : undefined;
+}
+
+/** 单元格内容里是否已有显式文字颜色（已有则不再叠加反白，尊重原配色） */
+function cellHasRunColor(cell: DocxCell): boolean {
+    if (typeof cell === 'string' || Array.isArray(cell)) {
+        const runs = Array.isArray(cell) ? cell : undefined;
+        return !!runs?.some((run) => !!run.color);
+    }
+    const detail = cell as DocxCellDetail;
+    if (detail.runs) return detail.runs.some((run) => !!run.color);
+    if (detail.blocks) {
+        return detail.blocks.some((block) => {
+            const runs = (block as { runs?: DocxRun[] }).runs;
+            return !!runs?.some((run) => !!run.color);
+        });
+    }
+    return false;
+}
+
 /** 单元格边框单边 -> CSS 声明 */
 function borderSideToCss(side: string, border: DocxCellBorder | undefined, fallback: string): string {
     if (border && border.style === 'nil') return `${side}:none`;
@@ -125,7 +159,12 @@ function cellToHtml(cell: DocxCell, isHeader: boolean, defaultBorder: string, as
             borderSideToCss('border-bottom', b?.bottom, defaultBorder),
             borderSideToCss('border-left', b?.left, defaultBorder)
         );
-        if (detail.fill) styles.push(`background-color:${detail.fill}`);
+        if (detail.fill) {
+            styles.push(`background-color:${detail.fill}`);
+            // 深色底纹（Excel 深蓝表头最常见）配默认深色字会看不见，自动反白
+            const contrast = contrastTextColor(detail.fill);
+            if (contrast && !cellHasRunColor(cell)) styles.push(`color:${contrast}`);
+        }
         if (detail.verticalAlign) styles.push(`vertical-align:${detail.verticalAlign}`);
         if (detail.width) styles.push(`width:${detail.width}pt`);
     } else {
@@ -172,7 +211,7 @@ function tableToHtml(block: DocxTable, assets?: AssetTable): string {
         ? ' style="border-collapse:collapse;border:none"'
         : ' style="border-collapse:collapse"';
 
-    return `<table${tableStyle}>${colgroup}${body}</table>`;
+    return `<div class="docx-table-wrap"><table${tableStyle}>${colgroup}${body}</table></div>`;
 }
 
 /** Word 的 w:numFmt -> CSS list-style-type（未知格式退回 decimal） */
@@ -303,18 +342,24 @@ export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
                 : '';
             return `<figure style="margin:12px 0;text-align:center">${img}${caption}</figure>`;
         }
+        case 'chart': {
+            // 原生图表（XLSX / PPTX）画成内嵌矢量 SVG：随页面缩放不失真、可选中文字、
+            // 打印也清晰，且不需要任何外部图表库或网络资源。
+            const width = Math.max(240, Math.round(block.width || 640));
+            const height = Math.max(180, Math.round(block.height || 380));
+            const svg = renderChartSvg(block.spec, { width, height });
+            const caption = block.caption
+                ? `<figcaption style="text-align:center;font-size:11px;color:#57606a;margin-top:4px">${escapeHtml(block.caption)}</figcaption>`
+                : '';
+            return `<figure class="docx-chart" style="margin:12px 0;text-align:center">${svg}${caption}</figure>`;
+        }
         case 'textBox': {
             const styles: string[] = ['margin:8px 0', 'padding:8px 12px', 'overflow:auto'];
             if (block.fill) {
                 styles.push(`background-color:${block.fill}`);
                 // 深色底自动反白（run 未显式指定颜色时保证可读）
-                const hex = block.fill.replace(/^#/, '');
-                if (/^[0-9a-fA-F]{6}$/.test(hex)) {
-                    const r = parseInt(hex.slice(0, 2), 16);
-                    const g = parseInt(hex.slice(2, 4), 16);
-                    const b = parseInt(hex.slice(4, 6), 16);
-                    if (r * 0.299 + g * 0.587 + b * 0.114 < 128) styles.push('color:#ffffff');
-                }
+                const contrast = contrastTextColor(block.fill);
+                if (contrast) styles.push(`color:${contrast}`);
             }
             if (block.stroke) styles.push(`border:1px solid ${block.stroke}`);
             if (block.width) styles.push(`width:${block.width}pt`);
@@ -333,8 +378,9 @@ export function blockToHtml(block: DocxBlock, assets?: AssetTable): string {
 }
 
 /** 默认样式表（便于开箱即用，也可忽略自带样式自行渲染） */
-export const DOCX_HTML_STYLE = `.docx-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;font-size:11pt;line-height:1.6;color:#1f2328}
-.docx-page{background:#fff;margin:24px auto;box-shadow:0 1px 6px rgba(0,0,0,.2);box-sizing:border-box}
+export const DOCX_HTML_STYLE = `.docx-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;font-size:11pt;line-height:1.6;color:#1f2328;overflow-wrap:break-word}
+/* max-width 兜底：容器比纸窄时先自适应，缩放脚本（独立文档里才有）会按纸宽整页缩放 */
+.docx-page{background:#fff;margin:24px auto;box-shadow:0 1px 6px rgba(0,0,0,.2);box-sizing:border-box;max-width:100%}
 .docx-body h1,.docx-body h2,.docx-body h3,.docx-body h4,.docx-body h5,.docx-body h6{font-weight:700;line-height:1.35;color:#1f2328;break-after:avoid}
 .docx-body h1{font-size:20pt;margin:22px 0 12px}
 .docx-body h2{font-size:16pt;margin:20px 0 10px}
@@ -343,11 +389,21 @@ export const DOCX_HTML_STYLE = `.docx-body{font-family:-apple-system,BlinkMacSys
 .docx-body h5,.docx-body h6{font-size:11.5pt;margin:14px 0 7px;font-weight:600}
 .docx-h-num{margin-right:.45em;white-space:nowrap}
 .docx-body p{margin:0}
+/* 顶层段落的兜底间距：PDF / Markdown 来源没有段前段后值，不给就是一整坨连排
+   （docx 段落带内联 margin，优先级更高，不受这条影响；单元格里的 p 非直接子元素） */
+.docx-body > p{margin:0 0 6pt}
 .docx-body blockquote{margin:8px 0;padding:4px 12px;border-left:3px solid #d0d7de;color:#57606a}
 .docx-body table{margin:10px 0;font-size:10.5pt}
 .docx-body th{background:#f6f8fa;font-weight:600}
+/* 图表：SVG 按纸宽自适应缩放（viewBox + 百分比宽度），高度按原始比例 */
+.docx-chart svg{width:100%;height:auto;max-width:100%}
+/* 列数多的宽表（Excel 尤其常见）不撑破纸张，自己在纸内横向滚动 */
+.docx-table-wrap{overflow-x:auto;max-width:100%}
+.docx-body pre{white-space:pre-wrap;word-break:break-word}
 .docx-body img{max-width:100%}
-.docx-textbox{margin:8px 0;font-size:10pt;line-height:1.45}
+/* max-width + box-sizing：Word 文本框宽度按原样照搬，可能比纸张内容区还宽
+   （A4 兜底纸张时尤其明显），不收敛就会把整页撑出横向滚动条 */
+.docx-textbox{margin:8px 0;font-size:10pt;line-height:1.45;max-width:100%;box-sizing:border-box}
 .docx-textbox p{margin:0}
 .docx-toc{margin:6px 0 14px}
 .docx-toc-row{display:flex;align-items:baseline;gap:.3em;padding:2px 0;line-height:1.5}
@@ -373,17 +429,16 @@ export function docxToHtmlString(
     const assets = doc?.assets?.length ? toAssetTable(doc.assets) : undefined;
     const body = blocks.map((block) => blockToHtml(block, assets)).filter(Boolean).join('\n');
 
-    // 有页面设置时还原纸张：固定页宽 + 页边距，接近 Word 的版面
-    let pageOpen = '<div class="docx-body">';
-    let pageClose = '</div>';
+    // 还原纸张：固定页宽 + 页边距，接近 Word 的版面。没有页面设置的来源
+    // （PDF / Excel / Markdown）按 A4 兜底，否则内容会铺满整个浏览器宽度，
+    // 长行读起来很累，也完全没有文档感。
     const section = doc?.section;
-    if (section) {
-        pageOpen =
-            `<div class="docx-page" style="width:${section.width}pt;min-height:${section.height}pt;` +
-            `padding:${section.marginTop}pt ${section.marginRight}pt ${section.marginBottom}pt ${section.marginLeft}pt">` +
-            '<div class="docx-body">';
-        pageClose = '</div></div>';
-    }
+    const pageStyle = section
+        ? `width:${section.width}pt;min-height:${section.height}pt;` +
+          `padding:${section.marginTop}pt ${section.marginRight}pt ${section.marginBottom}pt ${section.marginLeft}pt`
+        : 'width:210mm;min-height:297mm;padding:20mm 18mm';
+    const pageOpen = `<div class="docx-page" style="${pageStyle}"><div class="docx-body">`;
+    const pageClose = '</div></div>';
 
     // 中文 Word/WPS 几乎都会开「行网格」（w:docGrid w:type="lines"），未显式设行距的
     // 段落其单倍行距就是 linePitch。不还原它会用 CSS 的 1.6 倍，行距偏小、每页塞进

@@ -15,6 +15,7 @@ import { parse } from 'parse5';
 import type {
     DocxBlock,
     DocxCell,
+    DocxCellDetail,
     DocxListItem,
     DocxRun
 } from '../docx/types';
@@ -238,9 +239,33 @@ function listToBlock(node: HtmlNode): Extract<DocxBlock, { type: 'list' }> {
 function tableToBlocks(node: HtmlNode): DocxBlock[] {
     const rows: DocxCell[][] = [];
     let header = false;
+    // 列 -> 该列还被上方的 rowspan 占用多少行
+    const spanRows = new Map<number, number>();
 
     const addRow = (rowNode: HtmlNode, isHead: boolean) => {
-        const cells = cellsFromRow(rowNode);
+        // 本行开始前就存在的跨行占用
+        const occupied = new Set<number>();
+        for (const [col, rest] of spanRows) {
+            if (rest > 0) occupied.add(col);
+        }
+        const cells = cellsFromRow(rowNode, occupied);
+        // 记录本行新产生的跨行占用（rowspan=N 时还要占住后面 N-1 行）
+        let col = 0;
+        for (const cell of cells) {
+            const detail = cell as DocxCellDetail;
+            const colspan = detail.colspan ?? 1;
+            const rowspan = detail.rowspan ?? 1;
+            if (rowspan > 1) {
+                for (let c = col; c < col + colspan; c++) spanRows.set(c, rowspan - 1);
+            }
+            col += colspan;
+        }
+        // 本行结束：老占用各减一行
+        for (const [c, rest] of spanRows) {
+            const left = rest - 1;
+            if (left > 0) spanRows.set(c, left);
+            else spanRows.delete(c);
+        }
         if (isHead || (!rows.length && cells.some((c) => isHeaderCell(c)))) header = true;
         rows.push(cells);
     };
@@ -259,22 +284,34 @@ function tableToBlocks(node: HtmlNode): DocxBlock[] {
     return [{ type: 'table', header, rows }];
 }
 
-/** 取一行内的单元格（th/td） */
-function cellsFromRow(row: HtmlNode): DocxCell[] {
+/** 取一行内的单元格（th/td），识别 colspan / rowspan */
+function cellsFromRow(row: HtmlNode, occupied: Set<number>): DocxCell[] {
     const cells: DocxCell[] = [];
+    let col = 0;
     for (const child of (row as { childNodes?: HtmlNode[] }).childNodes || []) {
-        if (child.nodeName === 'td' || child.nodeName === 'th') {
-            const children = (child as { childNodes?: HtmlNode[] }).childNodes || [];
-            const inherited: Partial<DocxRun> = child.nodeName === 'th' ? { bold: true } : {};
-            cells.push(inlineRuns(children, inherited) as DocxCell);
-        }
+        if (child.nodeName !== 'td' && child.nodeName !== 'th') continue;
+        // 跳过被上方 rowspan 占住的列
+        while (occupied.has(col)) col++;
+        const colspan = Math.max(1, parseInt(attr(child, 'colspan') || '1', 10) || 1);
+        const rowspan = Math.max(1, parseInt(attr(child, 'rowspan') || '1', 10) || 1);
+        const children = (child as { childNodes?: HtmlNode[] }).childNodes || [];
+        const inherited: Partial<DocxRun> = child.nodeName === 'th' ? { bold: true } : {};
+        const runs = inlineRuns(children, inherited) as DocxRun[];
+        const detail: DocxCellDetail = { type: 'cell', text: runs.map((r) => r.text).join('') };
+        if (runs.length) detail.runs = runs;
+        if (colspan > 1) detail.colspan = colspan;
+        if (rowspan > 1) detail.rowspan = rowspan;
+        cells.push(detail);
+        col += colspan;
     }
     return cells;
 }
 
 /** 单元格是否表头单元格（th 默认加粗，这里以加粗 run 近似） */
 function isHeaderCell(cell: DocxCell): boolean {
-    return Array.isArray(cell) && cell.some((r) => r.bold);
+    if (Array.isArray(cell)) return cell.some((r) => r.bold);
+    const detail = cell as DocxCellDetail;
+    return !!detail.runs?.some((r) => r.bold);
 }
 
 /** 图片节点 -> DocxImage */

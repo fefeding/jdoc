@@ -16,8 +16,9 @@ import type { DocInput } from '../core/input';
 import type { DocAsset, DocAssetMode } from '../core/asset';
 import { xlsxToJson } from '../xlsx/index';
 import { cellText } from '../xlsx/to-html';
+import { resolveRefValues, xlsxChartToSpec, type XlsxChartSeriesData } from '../xlsx/chart';
 import type { XlsxCellObject, XlsxMetadata, XlsxRow, XlsxSheet } from '../xlsx/types';
-import type { DocxBlock, DocxCell, DocxCellDetail, DocxMetadata, DocxRun } from '../docx/types';
+import type { DocxBlock, DocxCell, DocxCellDetail, DocxMetadata, DocxRun, DocxTable } from '../docx/types';
 
 /** xlsxToBlocks 选项 */
 export interface XlsxToBlocksOptions {
@@ -223,6 +224,75 @@ function sheetImages(sheet: XlsxSheet, rows: XlsxRow[]): DocxBlock[] {
     return images;
 }
 
+/** 纯文本单元格（避免字面量 type 被拓宽成 string） */
+function chartTextCell(text: string): DocxCell {
+    return { type: 'cell', text };
+}
+
+/** EMU -> px（OOXML 尺寸单位，1 px = 9525 EMU） */
+function emuToPx(value: number | undefined): number | undefined {
+    if (!value || !Number.isFinite(value)) return undefined;
+    return Math.round(value / 9525);
+}
+
+/** 引用取值 -> 数值（空值 / 非数字 -> null，缺值在图表里显示为断口） */
+function toNumbers(values: (string | number | null)[]): (number | null)[] {
+    return values.map((v) => {
+        if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+        if (v === null || v === undefined || v === '') return null;
+        // 单元格里可能是带货币符号 / 千分位的显示文本
+        const n = Number(String(v).replace(/[,¥$€%\s]/g, ''));
+        return Number.isFinite(n) ? n : null;
+    });
+}
+
+/**
+ * 工作表内的原生图表 -> 图表块
+ *
+ * Excel 的图表不在单元格网格里（存在 xl/charts/chartN.xml + 绘图锚点），
+ * 因此表格转换天然看不到它——这里按引用回查当前单元格取值后转成 ChartSpec，
+ * HTML 目标渲染成矢量 SVG，其余目标退化成兜底数据表。
+ */
+function sheetCharts(sheet: XlsxSheet, allSheets: XlsxSheet[]): DocxBlock[] {
+    return (sheet.charts || []).map((chart) => {
+        const data: XlsxChartSeriesData[] = (chart.series || []).map((s) => {
+            const cats = s.catRef
+                ? resolveRefValues(s.catRef, allSheets, sheet.name)
+                : (s.cats ?? []);
+            const valsRef = s.valRef ? resolveRefValues(s.valRef, allSheets, sheet.name) : undefined;
+            const nameRef = s.nameRef ? resolveRefValues(s.nameRef, allSheets, sheet.name) : undefined;
+            return {
+                name: (nameRef?.[0] ?? s.name) ? String(nameRef?.[0] ?? s.name ?? '') : undefined,
+                cats,
+                vals: toNumbers(valsRef ?? s.vals ?? []),
+                xVals: s.xRef ? toNumbers(resolveRefValues(s.xRef, allSheets, sheet.name)) : s.xVals,
+                color: s.color
+            };
+        });
+        const spec = xlsxChartToSpec(chart, data);
+        const categories = data[0]?.cats ?? [];
+        const fallback: DocxTable = {
+            type: 'table',
+            header: true,
+            rows: [
+                [chartTextCell(''), ...data.map((d) => chartTextCell(d.name ?? ''))],
+                ...categories.map((cat, i) => [
+                    chartTextCell(cat === null || cat === undefined ? '' : String(cat)),
+                    ...data.map((d) => chartTextCell(String(d.vals?.[i] ?? '')))
+                ])
+            ]
+        };
+        return {
+            type: 'chart',
+            spec,
+            width: emuToPx(chart.anchor?.ext?.cx),
+            height: emuToPx(chart.anchor?.ext?.cy),
+            caption: chart.title,
+            fallback
+        } as DocxBlock;
+    });
+}
+
 /** XLSX 元数据 -> 文档元数据 */
 function toDocxMetadata(metadata?: XlsxMetadata): DocxMetadata | undefined {
     if (!metadata) return undefined;
@@ -285,6 +355,7 @@ export async function xlsxToBlocks(
         const table = sheetToTable(sheet, rows, { header, skipEmptyRows });
         if (table) blocks.push(table);
         blocks.push(...sheetImages(sheet, rows));
+        blocks.push(...sheetCharts(sheet, parsed.sheets));
     }
 
     return {

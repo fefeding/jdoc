@@ -19,6 +19,7 @@ import { htmlToBlocks } from './html';
 import type {
     DocxBlock,
     DocxCell,
+    DocxCellDetail,
     DocxImage,
     DocxListItem,
     DocxRun
@@ -138,16 +139,115 @@ function cellToRuns(cell: { tokens?: Token[] } | undefined): DocxRun[] {
     return inlineToRuns(cell?.tokens);
 }
 
+/** 列表项的行内 token（展开 loose list 的 paragraph 包装与 tight list 的 text 包装） */
+function listItemInline(item: Tokens.ListItem): Token[] {
+    const out: Token[] = [];
+    for (const t of item.tokens || []) {
+        if (t.type === 'list') continue;
+        if (t.type === 'paragraph') {
+            // loose list（项之间有空行）时 marked 把项内容包在 paragraph 里
+            const inner = (t as Tokens.Paragraph).tokens;
+            if (inner?.length) out.push(...inner);
+            else out.push(t);
+            continue;
+        }
+        if (t.type === 'text') {
+            // tight list 时 marked 把项内容包在 text token 里，其 text 是未解码的
+            // 原文（`1\. 背景` 里的转义不会还原），要用内层已解码的 token
+            const inner = (t as Tokens.Text).tokens;
+            if (inner?.length) {
+                out.push(...inner);
+                continue;
+            }
+        }
+        out.push(t);
+    }
+    return out;
+}
+
 /** 把列表 token（含嵌套）转成 DocxList */
 function listToBlock(token: Tokens.List): DocxBlock {
     const itemRuns = (item: Tokens.ListItem): DocxListItem => {
-        const inline = (item.tokens || []).filter((t) => t.type !== 'list');
+        const inline = listItemInline(item);
         const nested = (item.tokens || []).find((t) => t.type === 'list') as Tokens.List | undefined;
         const runs: DocxRun[] & { children?: DocxListItem[] } = inlineToRuns(inline);
         if (nested) runs.children = nested.items.map(itemRuns);
         return runs;
     };
     return { type: 'list', ordered: token.ordered, items: token.items.map(itemRuns) };
+}
+
+/** 目录条目的页码标记（写在条目文本尾部，往返时还原成页码） */
+const TOC_PAGE_PATTERN = /<!--\s*page:(\d+)\s*-->/;
+
+/** 列表 -> 目录条目（层级按嵌套深度，页码从条目尾部的标记里取） */
+function listToTocEntries(list: Tokens.List, level = 1): { level: number; text: string; page?: number }[] {
+    const entries: { level: number; text: string; page?: number }[] = [];
+    for (const item of list.items) {
+        const inline = listItemInline(item);
+        const nested = (item.tokens || []).find((t) => t.type === 'list') as Tokens.List | undefined;
+        const raw = tokensToText(inline);
+        const pageMatch = TOC_PAGE_PATTERN.exec(raw);
+        const text = raw.replace(TOC_PAGE_PATTERN, '').trim();
+        if (text) {
+            entries.push({
+                level,
+                text,
+                page: pageMatch ? Number(pageMatch[1]) : undefined
+            });
+        }
+        if (nested) entries.push(...listToTocEntries(nested, level + 1));
+    }
+    return entries;
+}
+
+/**
+ * 段落 -> 块序列
+ *
+ * 图片（`![alt](src "w=..,h=..")`）无法塞进 run，单独拆成图片块，
+ * 文字部分照常成段。
+ */
+function paragraphToBlocks(token: Tokens.Paragraph): DocxBlock[] {
+    const inline = token.tokens || [];
+    if (!inline.some((t) => t.type === 'image')) {
+        const runs = inlineToRuns(inline);
+        return [{ type: 'paragraph', runs, text: token.text }];
+    }
+    const blocks: DocxBlock[] = [];
+    let buffer: Token[] = [];
+    const flush = () => {
+        if (!buffer.length) return;
+        const runs = inlineToRuns(buffer);
+        if (runs.length) {
+            blocks.push({ type: 'paragraph', runs, text: runs.map((r) => r.text).join('') });
+        }
+        buffer = [];
+    };
+    for (const t of inline) {
+        if (t.type === 'image') {
+            flush();
+            blocks.push(imageBlockFromToken(t as Tokens.Image));
+            continue;
+        }
+        buffer.push(t);
+    }
+    flush();
+    if (!blocks.length) blocks.push({ type: 'paragraph', runs: [], text: token.text });
+    return blocks;
+}
+
+/** Markdown 图片 token -> 图片块（尺寸写在 title 里，往返保留显示大小） */
+function imageBlockFromToken(token: Tokens.Image): DocxImage {
+    const title = token.title || '';
+    const w = /(?:^|,)w=([\d.]+)/.exec(title);
+    const h = /(?:^|,)h=([\d.]+)/.exec(title);
+    return {
+        type: 'image',
+        src: token.href || '',
+        alt: token.text || undefined,
+        width: w ? Number(w[1]) : undefined,
+        height: h ? Number(h[1]) : undefined
+    };
 }
 
 /** 取一个 token 流里的全部纯文本（用于引用块降级等） */
@@ -173,6 +273,8 @@ export function markdownToBlocks(markdown: string | Uint8Array, options: Markdow
     const text = typeof markdown === 'string' ? markdown : new TextDecoder('utf-8').decode(markdown);
     const tokens = getMarked(options).lexer(text);
     const blocks: DocxBlock[] = [];
+    // `<!-- toc -->` 标记：后随的列表按目录还原（docx -> md 写入的往返约定）
+    let expectToc = false;
 
     for (const token of tokens) {
         switch (token.type) {
@@ -188,13 +290,24 @@ export function markdownToBlocks(markdown: string | Uint8Array, options: Markdow
                 break;
             }
             case 'paragraph': {
-                const t = token as Tokens.Paragraph;
-                blocks.push({ type: 'paragraph', runs: inlineToRuns(t.tokens), text: t.text });
+                // 段落里可能夹着图片（`![alt](data:...)`），要拆成独立的图片块，
+                // 否则图片会退化成一行字面量 `![alt](...)`，转回 docx 就没有图了
+                blocks.push(...paragraphToBlocks(token as Tokens.Paragraph));
                 break;
             }
-            case 'list':
-                blocks.push(listToBlock(token as Tokens.List));
+            case 'list': {
+                const listToken = token as Tokens.List;
+                if (expectToc) {
+                    expectToc = false;
+                    const entries = listToTocEntries(listToken);
+                    if (entries.length) {
+                        blocks.push({ type: 'toc', entries });
+                        break;
+                    }
+                }
+                blocks.push(listToBlock(listToken));
                 break;
+            }
             case 'table': {
                 // marked 的表格 token 结构随版本略有差异，这里用宽松断言访问
                 const t = token as unknown as {
@@ -235,8 +348,14 @@ export function markdownToBlocks(markdown: string | Uint8Array, options: Markdow
                 break;
             }
             case 'html': {
+                const html = (token as Tokens.HTML).text;
+                // 目录标记：docx -> md 用 `<!-- toc -->` + 列表表示目录，这里识别回来
+                if (/^\s*<!--\s*toc\s*-->\s*$/i.test(html)) {
+                    expectToc = true;
+                    break;
+                }
                 // 原始 HTML 块：交给 htmlToBlocks 还原，保持 HTML 互转能力
-                blocks.push(...htmlToBlocks((token as Tokens.HTML).text));
+                blocks.push(...htmlToBlocks(html));
                 break;
             }
             case 'space':
@@ -251,14 +370,79 @@ export function markdownToBlocks(markdown: string | Uint8Array, options: Markdow
 // blocks -> Markdown
 // ---------------------------------------------------------------------------
 
+/**
+ * 转义 Markdown 行内语法字符
+ *
+ * 原文里的 `*` `_` `[` `]` 会被当成语法：`U*` 与 `U*` 之间的内容会被解析成斜体，
+ * 文字直接消失（docx -> md -> docx 往返后语义就变了）。
+ */
+function escapeMarkdownText(text: string): string {
+    // 用反斜杠转义而不是 HTML 实体：marked 解析时会把 `\<` 还原成 `<`，
+    // 但不会解码 `&lt;`（原样保留，往返后文本就变了）
+    return text.replace(/([\\`*_[\]~<>])/g, '\\$1');
+}
+
+/** 转义行首的块级语法（`# `、`- `、`1. `、`> `），否则会被解析成标题 / 列表 / 引用 */
+function escapeLineStart(line: string): string {
+    return line.replace(
+        /^(\s*)(#{1,6}\s|[-+]\s|\d+[.)]\s|>\s)/,
+        (_all, space: string, mark: string) => space + mark.replace(/([#\-+.>])/g, '\\$1')
+    );
+}
+
+/** 块的原始文本（不含 Markdown 标记），用于代码块等场景 */
+function plainTextOf(block: DocxBlock): string {
+    const runsText = (runs: DocxRun[] | undefined, text: string | undefined) =>
+        runs ? runs.map((r) => r.text ?? '').join('') : (text ?? '');
+    switch (block.type) {
+        case 'paragraph':
+            return runsText(block.runs, block.text);
+        case 'heading':
+            return runsText(block.runs, block.text);
+        case 'quote':
+            return runsText(block.runs, block.text);
+        case 'code':
+            return block.text ?? '';
+        case 'list':
+            return block.items
+                .map((item) => (Array.isArray(item) ? item.map((r) => r.text ?? '').join('') : String(item)))
+                .join('\n');
+        case 'textBox':
+            return block.paragraphs.map(plainTextOf).join('\n');
+        default:
+            return '';
+    }
+}
+
+/**
+ * 首行是否带 4 空格以上缩进
+ *
+ * CommonMark 里这种行会被当成「缩进代码块」：内容原样保留（连反斜杠转义都不解码），
+ * 往返后文本就变了。缩进段落（伪代码、代码清单）应该用围栏代码块表达。
+ */
+function hasIndentedCode(text: string): boolean {
+    return /^(?: {4,}|\t)/.test(text);
+}
+
+/** 围栏代码块（内容原样保留，不做 Markdown 转义） */
+function fencedCode(text: string): string {
+    // 内容里出现围栏就加长围栏，避免提前闭合
+    const longest = (text.match(/`+/g) || []).reduce((max, m) => Math.max(max, m.length), 0);
+    const fence = '`'.repeat(Math.max(3, longest + 1));
+    return `${fence}\n${text.replace(/\n$/, '')}\n${fence}`;
+}
+
 /** 行内 run 序列 -> Markdown 文本 */
 function runsToMarkdown(runs: DocxRun[], inlineCode: boolean): string {
     let out = '';
     for (const r of runs) {
         if (!r.text) continue;
         let text = r.text;
-        if (r.code && inlineCode) text = '`' + text + '`';
-        else {
+        if (r.code && inlineCode) {
+            // 代码片段内容保持原样（反引号内不再转义）
+            text = '`' + text + '`';
+        } else {
+            text = escapeMarkdownText(text);
             if (r.bold) text = `**${text}**`;
             if (r.italic) text = `*${text}*`;
             if (r.strike) text = `~~${text}~~`;
@@ -295,12 +479,26 @@ function blockToMarkdownLine(block: DocxBlock, inlineCode: boolean): string {
     switch (block.type) {
         case 'heading':
             return `${'#'.repeat(block.level)} ${block.runs ? runsToMarkdown(block.runs, inlineCode) : block.text ?? ''}`;
-        case 'paragraph':
-            return block.runs ? runsToMarkdown(block.runs, inlineCode) : block.text ?? '';
+        case 'paragraph': {
+            const raw = plainTextOf(block);
+            // 缩进段落（伪代码、代码清单）用围栏代码块表达：否则 Markdown 会当成
+            // 缩进代码块，转义不还原，往返后文本就变了
+            if (hasIndentedCode(raw)) return fencedCode(raw);
+            const line = block.runs ? runsToMarkdown(block.runs, inlineCode) : block.text ?? '';
+            return escapeLineStart(line);
+        }
         case 'code':
             return '```' + (block.language || '') + '\n' + block.text + '\n```';
-        case 'image':
-            return `![${block.alt ?? ''}](${imageSrc(block)})`;
+        case 'image': {
+            // 尺寸写进 title（Markdown 没有图片尺寸语法），往返时还原成显示大小
+            const size = [
+                block.width ? `w=${block.width}` : '',
+                block.height ? `h=${block.height}` : ''
+            ]
+                .filter(Boolean)
+                .join(',');
+            return `![${block.alt ?? ''}](${imageSrc(block)}${size ? ` "${size}"` : ''})`;
+        }
         case 'hr':
             return '---';
         case 'pageBreak':
@@ -308,29 +506,62 @@ function blockToMarkdownLine(block: DocxBlock, inlineCode: boolean): string {
         case 'quote':
             // 引用块：保持 `> ` 前缀（内部换行按引用语法逐行补前缀）
             return quoteToMarkdown(block.runs, block.text, inlineCode);
-        case 'textBox':
-            return block.paragraphs.map((p) => blockToMarkdownLine(p, inlineCode)).join('\n');
+        case 'textBox': {
+            // Markdown 没有文本框概念：多段文本框（多为伪代码）用围栏代码块保留
+            // 内容与缩进，单段的按普通段落输出
+            const paragraphs = block.paragraphs.map(plainTextOf);
+            if (paragraphs.length > 1) return fencedCode(paragraphs.join('\n'));
+            const text = paragraphs[0] ?? '';
+            if (hasIndentedCode(text)) return fencedCode(text);
+            return escapeLineStart(text);
+        }
         case 'list':
             return renderList(block, 0, inlineCode);
         case 'table':
             return renderTable(block, inlineCode);
         case 'toc':
-            return '';
+            return renderToc(block);
         default:
             return '';
     }
+}
+
+/**
+ * 目录块 -> Markdown
+ *
+ * Markdown 没有目录语法，这里用 `<!-- toc -->` 标记 + 层级列表表示：
+ * 标记让 md -> blocks 能把它还原成目录块（往返闭合），列表本身也便于人读。
+ */
+function renderToc(toc: Extract<DocxBlock, { type: 'toc' }>): string {
+    const lines: string[] = ['<!-- toc -->'];
+    for (const entry of toc.entries) {
+        const level = Math.min(Math.max(entry.level || 1, 1), 6);
+        const indent = '  '.repeat(level - 1);
+        const page = entry.page !== undefined ? ` <!-- page:${entry.page} -->` : '';
+        // 条目文本自带编号（Word 目录把「1. 背景」写进文本），要转义掉行首的
+        // 「1. 」，否则回读时会被当成有序列表标记，编号就没了
+        const text = escapeLineStart(escapeMarkdownText(entry.text));
+        lines.push(`${indent}- ${text}${page}`);
+    }
+    return lines.join('\n');
 }
 
 /** 列表渲染（支持嵌套，每层 2 空格缩进） */
 function renderList(list: Extract<DocxBlock, { type: 'list' }>, depth: number, inlineCode: boolean): string {
     const indent = '  '.repeat(depth);
     const lines: string[] = [];
-    list.items.forEach((item, index) => {
+    let ordinal = 0;
+    list.items.forEach((item) => {
         // DocxListItem 允许 string 形态（等价于 [{text}]），统一归一为 runs
         const runs: DocxRun[] & { children?: DocxListItem[] } = typeof item === 'string' ? [{ text: item }] : (item as DocxRun[]);
         const children = runs.children;
-        const prefix = list.ordered ? `${index + 1}. ` : '- ';
-        lines.push(indent + prefix + runsToMarkdown(runs, inlineCode));
+        const text = runsToMarkdown(runs, inlineCode);
+        // 空项跳过：Word 里「编号在列表项、文本在下一段」的写法会产生空列表项，
+        // 输出成 "- " 只会得到一堆空行和空项（还会把相邻列表拆成 loose list）
+        if (!text.trim() && !children?.length) return;
+        ordinal += 1;
+        const prefix = list.ordered ? `${ordinal}. ` : '- ';
+        lines.push(indent + prefix + text);
         if (children?.length) {
             const childList: Extract<DocxBlock, { type: 'list' }> = {
                 type: 'list',
@@ -343,14 +574,74 @@ function renderList(list: Extract<DocxBlock, { type: 'list' }>, depth: number, i
     return lines.join('\n');
 }
 
-/** 表格渲染（GFM 管道表） */
+/** 取单元格的 detail 形态（合并信息只挂在 detail 上） */
+function cellDetail(cell: DocxCell | undefined): DocxCellDetail | undefined {
+    if (!cell || typeof cell === 'string' || Array.isArray(cell)) return undefined;
+    return cell as DocxCellDetail;
+}
+
+/** 表格里是否存在合并单元格 */
+function tableHasMerges(table: Extract<DocxBlock, { type: 'table' }>): boolean {
+    return table.rows.some((row) =>
+        row.some((cell) => {
+            const detail = cellDetail(cell);
+            return !!detail && ((detail.colspan ?? 1) > 1 || (detail.rowspan ?? 1) > 1);
+        })
+    );
+}
+
+/**
+ * 表格渲染
+ *
+ * 有合并单元格的表输出 HTML 表格：Markdown 管道表没有 colspan/rowspan，
+ * 硬压成管道表会出现「表头 4 列、数据行 18 列」的畸形表（渲染器直接错位）。
+ * 普通表格仍走 GFM 管道表，并保证各行列数一致。
+ */
 function renderTable(table: Extract<DocxBlock, { type: 'table' }>, inlineCode: boolean): string {
     if (!table.rows.length) return '';
+    if (tableHasMerges(table)) return renderTableHtml(table, inlineCode);
     const cell = (c: DocxCell | undefined) => cellToText(c, inlineCode).replace(/\|/g, '\\|').replace(/\n/g, ' ');
-    const header = table.rows[0].map(cell).join(' | ');
-    const divider = table.rows[0].map(() => '---').join(' | ');
-    const body = table.rows.slice(1).map((row) => row.map(cell).join(' | '));
-    return ['| ' + header + ' |', '| ' + divider + ' |', ...body.map((r) => '| ' + r + ' |')].join('\n');
+    const width = table.rows.reduce((max, row) => Math.max(max, row.length), 0);
+    const line = (row: DocxCell[]) => {
+        const cells = row.slice(0, width);
+        while (cells.length < width) cells.push('');
+        return '| ' + cells.map(cell).join(' | ') + ' |';
+    };
+    const header = line(table.rows[0]);
+    const divider = '| ' + Array.from({ length: width }, () => '---').join(' | ') + ' |';
+    return [header, divider, ...table.rows.slice(1).map(line)].join('\n');
+}
+
+/** 单元格 -> 纯文本（不含 Markdown 标记，HTML 表格里用） */
+function cellPlainText(cell: DocxCell | undefined): string {
+    if (cell == null) return '';
+    if (typeof cell === 'string') return cell;
+    if (Array.isArray(cell)) return cell.map((r) => r.text ?? '').join('');
+    const detail = cell as { blocks?: DocxBlock[]; runs?: DocxRun[]; text?: string };
+    if (detail.blocks) return detail.blocks.map((b) => plainTextOf(b)).join(' ');
+    if (detail.runs) return detail.runs.map((r) => r.text ?? '').join('');
+    return detail.text ?? '';
+}
+
+/** 含合并单元格的表格 -> HTML 表格（保留 colspan / rowspan） */
+function renderTableHtml(table: Extract<DocxBlock, { type: 'table' }>, inlineCode: boolean): string {
+    const esc = (text: string) =>
+        text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const lines: string[] = ['<table>'];
+    table.rows.forEach((row, rowIndex) => {
+        const tag = table.header && rowIndex === 0 ? 'th' : 'td';
+        lines.push('  <tr>');
+        for (const cell of row) {
+            const detail = cellDetail(cell);
+            const colspan = detail?.colspan && detail.colspan > 1 ? ` colspan="${detail.colspan}"` : '';
+            const rowspan = detail?.rowspan && detail.rowspan > 1 ? ` rowspan="${detail.rowspan}"` : '';
+            // HTML 表格里不能带 Markdown 标记（`**` 会变成字面文本）
+            lines.push(`    <${tag}${colspan}${rowspan}>${esc(cellPlainText(cell))}</${tag}>`);
+        }
+        lines.push('  </tr>');
+    });
+    lines.push('</table>');
+    return lines.join('\n');
 }
 
 /** 当前渲染上下文的资源表（blocksToMarkdown 时设置） */

@@ -12,7 +12,27 @@ import { JdocError, wrapError } from '../core/errors';
 import { toUint8Array, type DocInput } from '../core/input';
 import type { DocAsset } from '../core/asset';
 import { extractPdfAssets } from './assets';
+import { extractPageImages } from './images';
 import type { PdfDocument, PdfMetadata, PdfPage, PdfParseOptions, PdfTextItem } from './types';
+
+/** pdfjs 的 OPS 表：操作名 -> 操作码（各版本码值不同，必须运行时读取） */
+function opsTable(pdfjs: PdfjsModule): Record<string, number> {
+    return (pdfjs as unknown as { OPS?: Record<string, number> }).OPS || {};
+}
+
+/** 数字操作码 -> 操作名（pdfjs 各版本的码值不同，必须在运行时从 OPS 表反查） */
+function opNamesOf(pdfjs: PdfjsModule): Record<number, string> {
+    const names: Record<number, string> = {};
+    for (const [name, code] of Object.entries(opsTable(pdfjs))) {
+        if (typeof code === 'number') names[code] = name;
+    }
+    return names;
+}
+
+/** 操作名 -> 操作码（图像提取需要正向查表） */
+function opNamesOfSource(pdfjs: PdfjsModule): Record<string, number> {
+    return opsTable(pdfjs);
+}
 
 /** pdfjs 的文本项结构（避免直接依赖 pdfjs-dist 的类型声明） */
 interface PdfjsTextItem {
@@ -297,12 +317,15 @@ async function extractVectors(
     for (let i = 0; i < opList.fnArray.length; i++) {
         const op = opList.fnArray[i];
         const a = (args[i] as unknown[]) || [];
+        // 拼接方向：pdfjs 的 op list 用行向量约定（后写的矩阵先作用于坐标），
+        // 即 CTM = CTM × M；反过来写会在多段 cm 的页面把平移再乘一次缩放，
+        // 线段坐标直接飞出页面（表格网格因此识别不出来）。
         if (op === OPS.save) stack.push(ctm.slice());
         else if (op === OPS.restore) ctm = stack.pop() || [1, 0, 0, 1, 0, 0];
-        else if (op === OPS.transform) ctm = mulMatrix(a as unknown as number[], ctm);
+        else if (op === OPS.transform) ctm = mulMatrix(ctm, a as unknown as number[]);
         else if (op === OPS.paintFormXObjectBegin) {
             stack.push(ctm.slice());
-            ctm = mulMatrix((a[0] as unknown as number[]) || [1, 0, 0, 1, 0, 0], ctm);
+            ctm = mulMatrix(ctm, (a[0] as unknown as number[]) || [1, 0, 0, 1, 0, 0]);
         } else if (op === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
         else if (op === OPS.rectangle) addRectPath(a[0] as number, a[1] as number, a[2] as number, a[3] as number);
         else if (op === OPS.constructPath) {
@@ -483,7 +506,11 @@ export async function parsePdf(
                 const assets: DocAsset[] = await extractPdfAssets(pdf as never, {
                     mode: options.assets,
                     maxPages: options.maxPages,
-                    pages: options.pages
+                    pages: options.pages,
+                    // 操作码随 pdfjs 版本变化（pdfjs 6 已移除 paintJpegXObject、
+                    // paintImageMaskXObject 也从 88 变成 83），必须按运行时 OPS 表映射，
+                    // 否则图像指令全部识别不出来，结果是「一张图都提取不到」。
+                    opNames: opNamesOf(pdfjs)
                 });
                 if (assets.length) document.assets = assets;
             } catch (error) {
@@ -525,6 +552,18 @@ export async function parsePdf(
                         record.vectors = await extractVectors(pdfjs, page);
                     } catch {
                         // 矢量提取失败不影响文本主流程
+                    }
+                }
+
+                if (options.images) {
+                    try {
+                        // 只透传 OPS 表：pdfjs 模块对象与本模块声明的结构不兼容（缺索引签名）
+                        record.images = await extractPageImages({ OPS: opNamesOfSource(pdfjs) }, page, {
+                            maxPixels: options.maxImagePixels
+                        });
+                    } catch (error) {
+                        // 图像提取失败不影响文本主流程
+                        messages.push(`页面图像提取失败（第 ${index} 页）：${(error as Error)?.message || error}`);
                     }
                 }
 

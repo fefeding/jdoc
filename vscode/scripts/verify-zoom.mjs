@@ -368,7 +368,107 @@ for (const doc of realDocx) {
     }
 }
 
-// 11. 跳转期间侧栏高亮必须锁定在用户点的那条：smooth 滚动一路触发滚动联动，
+// 11. 极小倍率（32% / 20%）下全条目跳转。线上事故场景：文档缩到 32% 后点「4.2
+//     准入级别计算」，视图却滚到了「7.总结」。上面的「缩小」只到 75%，覆盖不到。
+async function setZoomPct(pct) {
+    await page.evaluate(async (target) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const read = () => {
+            const b = [...document.querySelectorAll('.jc-zoom .chip')].find((x) => /%$/.test(x.textContent));
+            return Number(String(b?.textContent).replace('%', ''));
+        };
+        const out = document.querySelector('.jc-zoom .chip[title="缩小"]');
+        const inn = document.querySelector('.jc-zoom .chip[title="放大"]');
+        document.querySelector('.jc-zoom .chip[title="实际大小（100%）"]').click();
+        await sleep(150);
+        let guard = 0;
+        while (read() > target + 1 && guard++ < 60) {
+            out.click();
+            await sleep(90);
+        }
+        guard = 0;
+        while (read() < target - 1 && guard++ < 60) {
+            inn.click();
+            await sleep(90);
+        }
+    }, pct);
+    await page.waitForTimeout(450);
+}
+
+/** 在浏览器里遍历全部目录条目并判定位是否准确 */
+async function sweepOutline() {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const c = document.querySelector('.oe-content');
+    const items = [...document.querySelectorAll('.oe-outline-item')];
+    const bad = [];
+    let checked = 0;
+    for (const t of items) {
+        const id = t.dataset.id;
+        t.click();
+        let prev = -1;
+        for (let k = 0; k < 40; k++) {
+            await sleep(80);
+            if (c.scrollTop === prev) break;
+            prev = c.scrollTop;
+        }
+        await sleep(200);
+        const h = document.querySelector(`[data-oe-anchor="${id}"]`);
+        if (!h) {
+            bad.push({ label: t.textContent.slice(0, 12), why: 'no-anchor' });
+            continue;
+        }
+        checked++;
+        const cr = c.getBoundingClientRect();
+        const hr = h.getBoundingClientRect();
+        const delta = Math.round(hr.top - cr.top);
+        // 能贴顶 -> 必须贴顶；贴不了顶（文档末尾） -> 必须完整可见
+        const ok = Math.abs(delta) <= 30 || (hr.top >= cr.top - 1 && hr.bottom <= cr.bottom + 1);
+        if (!ok) {
+            bad.push({
+                label: t.textContent.slice(0, 12),
+                delta,
+                scrollTop: Math.round(c.scrollTop),
+                max: c.scrollHeight - c.clientHeight
+            });
+        }
+    }
+    return { checked, bad, zoom: document.querySelector('.oe-content > *')?.style.zoom };
+}
+
+for (const pct of [32, 20]) {
+    await setZoomPct(pct);
+    const res = await page.evaluate(sweepOutline);
+    check(
+        `极小倍率全条目跳转准确（目标 ${pct}%，实测 ${res.zoom}）`,
+        res.bad.length === 0 && res.checked > 0,
+        `检查${res.checked}项` + (res.bad.length ? ` 失准: ${JSON.stringify(res.bad.slice(0, 3))}` : '')
+    );
+}
+
+// 12. 祖先层还有一层 CSS zoom 时的跳转。VS Code 的窗口缩放以 CSS zoom 落在 webview
+//     的 body/html 上，此时 getBoundingClientRect 是「视觉坐标」、scrollTop 是「内容
+//     坐标」，两者比值 = 那一层倍率。旧实现直接把 rect 差加 scrollTop，落点被整体
+//     放大，小倍率下更早撞上可滚动上限而被 clamp 到文末（正是上面第 11 项的事故现象）。
+for (const bodyZoom of ['1.4', '0.8']) {
+    await setZoomPct(32);
+    await page.evaluate((z) => {
+        document.body.style.zoom = z;
+    }, bodyZoom);
+    await page.waitForTimeout(350);
+    const res = await page.evaluate(sweepOutline);
+    check(
+        `祖先 CSS zoom=${bodyZoom} 时全条目跳转仍准确`,
+        res.bad.length === 0 && res.checked > 0,
+        `zoom=${res.zoom} 检查${res.checked}项` + (res.bad.length ? ` 失准: ${JSON.stringify(res.bad.slice(0, 3))}` : '')
+    );
+}
+await page.evaluate(() => {
+    document.body.style.zoom = '';
+});
+await setZoomPct(100);
+await page.waitForTimeout(300);
+
+// 13. 跳转期间侧栏高亮必须锁定在用户点的那条：smooth 滚动一路触发滚动联动，
 //     它按「视口顶部实际是哪个标题」改写高亮，落稳那一刻往往不是刚点的那条。
 const lockCase = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -395,7 +495,7 @@ check(
     `target=${lockCase.id} duringScroll=${lockCase.midLock} settled=${lockCase.settled}`
 );
 
-// 12. 跳转锁必须释放：落稳后手动滚动，高亮要重新跟随
+// 14. 跳转锁必须释放：落稳后手动滚动，高亮要重新跟随
 const unlockCase = await page.evaluate(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const c = document.querySelector('.oe-content');
@@ -404,6 +504,31 @@ const unlockCase = await page.evaluate(async () => {
     return { active: document.querySelector('.oe-outline-item.active')?.dataset.id || null };
 });
 check('跳转锁会释放（落稳后手动滚动仍联动高亮）', unlockCase.active !== null, `active=${unlockCase.active}`);
+
+// 15. 动画让位：跳转动画进行中用户滚动（wheel），动画必须立刻停、不得把视图拽回目标。
+//     旧实现（原生 smooth + 落稳补跳）做不到这点；也让「滚动锚定改写 scrollTop」
+//     这类非用户输入不再误伤动画。
+const yieldCase = await page.evaluate(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const c = document.querySelector('.oe-content');
+    c.scrollTop = 0;
+    await sleep(200);
+    const items = [...document.querySelectorAll('.oe-outline-item')];
+    const t = items[items.length - 1]; // 最远条目，动画路径最长
+    const id = t.dataset.id;
+    t.click();
+    await sleep(100); // 动画进行中
+    c.dispatchEvent(new WheelEvent('wheel', { deltaY: 240, bubbles: true }));
+    await sleep(700);
+    const h = document.querySelector(`[data-oe-anchor="${id}"]`);
+    const delta = Math.round(h.getBoundingClientRect().top - c.getBoundingClientRect().top);
+    return { id, delta };
+});
+check(
+    '动画中用户滚动会立刻让位（不拽回目标）',
+    Math.abs(yieldCase.delta - 12) > 40, // 若没让位，动画仍会把标题拽到 +12px 贴顶
+    `delta=${yieldCase.delta}px`
+);
 
 const errs = await page.evaluate(() => window.__ERRS__ || []);
 check('无运行时错误', errs.length === 0, errs.slice(0, 2).join(' | '));

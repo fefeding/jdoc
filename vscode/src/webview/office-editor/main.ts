@@ -47,6 +47,8 @@ let outline: OutlineView | null = null;
 let untrack: ActiveHeadingTracker | null = null;
 /** 目录跳转进行中：期间忽略滚动联动对侧栏高亮的改写，落稳后自动释放 */
 let jumpLock = false;
+/** 目录跳转代数：连续点击时作废旧一轮的落稳回调 */
+let jumpSeq = 0;
 /** 查看模式渲染代数：丢弃过期的异步分页结果 */
 let viewGen = 0;
 
@@ -148,114 +150,205 @@ function resolveScroller(): HTMLElement | null {
     return null;
 }
 
+/** 目录跳转时标题与内容区顶部保留的留白（视觉像素） */
+const JUMP_PAD = 12;
+/** 跳转动画时长：太长显得拖沓，太短在长文档上有瞬移感 */
+const JUMP_DURATION = 320;
+
+/**
+ * 视觉像素 → scrollTop 单位 的换算系数
+ *
+ * getBoundingClientRect 返回的是**视觉**坐标：祖先链上任何一层 CSS zoom 都会把它
+ * 放大；scrollTop / scrollHeight / clientHeight 则是滚动容器自己的**内容**坐标，
+ * 只随容器内部的缩放变化，不受容器之上那层缩放影响。
+ *
+ * 我们自己的文档缩放作用在容器内部的子元素上，两者比值恰好为 1——这正是旧实现
+ * 「rect 差直接加 scrollTop」能跑通的原因，但一旦容器之上还有一层 zoom（VS Code
+ * 的窗口缩放就是以 CSS zoom 落在 webview 的 body/html 上），比值就等于那一层倍率，
+ * 落点会被整体放大：文档缩得越小、目标越靠后，算出的位置越早超过可滚动上限，
+ * 最后被 clamp 到文档末尾——表现就是「点 4.2 却滚到 7.总结」。
+ *
+ * offsetHeight 量的是元素自身坐标系里的布局高度，不随祖先缩放变化，
+ * 所以 rect.height / offsetHeight 就是这个倍率本身。
+ */
+function visualUnit(scroller: HTMLElement): number {
+    const layoutH = scroller.offsetHeight;
+    const visualH = scroller.getBoundingClientRect().height;
+    const k = layoutH > 0 && visualH > 0 ? visualH / layoutH : 1;
+    // 布局塌缩 / 尚未完成时的比值没有意义，按 1 处理
+    return k > 0.1 && k < 10 ? k : 1;
+}
+
+/**
+ * 容器自身是否随文档一起滚动（documentElement，或文档滚动时的 body）
+ *
+ * 这类容器的 rect.top 会跟着滚动量走，此时「rect.top 差」本身已经是内容坐标，
+ * 再加 scrollTop 就重复计算了一次（落点直接翻倍、被 clamp 到文末）。
+ */
+function scrollsWithDocument(scroller: HTMLElement): boolean {
+    const root = document.scrollingElement ?? document.documentElement;
+    return scroller === root || (scroller === document.body && root === document.documentElement);
+}
+
 /** 把带缩放的文档滚动到视口内（大纲点击用） */
 function scrollToAnchor(el: HTMLElement): void {
     el.classList.add('oe-flash');
     window.setTimeout(() => el.classList.remove('oe-flash'), 900);
 
-    const scroller = resolveScroller();
-    // 无处可滚：保持当前视图（否则 scrollTo 会被归零，反而把用户甩回顶部）
-    if (!scroller) return;
-    // 目标已不在文档里（重排后失效）：不猜位置，保持当前视图
-    if (!el.isConnected || !scroller.contains(el)) return;
-
-    /** 本次落点是否退化为「页顶对齐」；退化后 delta 天然偏大，不参与二次校正 */
-    let degraded = false;
-    // 跳转期间锁定侧栏高亮：smooth 滚动一路触发的 trackActiveHeading 会按「视口顶部
-    // 实际是哪个标题」反复改写高亮，落稳那一刻算出的往往不是刚点的那条（末条退化为
-    // 页顶对齐时尤其明显）。锁定到落稳后再交还给滚动联动。
+    // 跳转代数：连续点击时旧一轮动画必须作废，否则它会拿旧目标把视图拽回去
+    const my = ++jumpSeq;
+    // 跳转期间锁定侧栏高亮：动画一路触发的 trackActiveHeading 会按「视口顶部实际是
+    // 哪个标题」反复改写高亮，落稳那一刻算出的往往不是刚点的那条（末条退化为页顶
+    // 对齐时尤其明显）。动画结束再交还给滚动联动。
     jumpLock = true;
 
-    // rect 与 scrollTop 同属「视觉」坐标系：CSS zoom 生效后，滚动容器的 scrollTop
-    // 也按缩放后的距离计，两者直接相加即为目标在滚动内容中的位置，不需要再除 zoom。
-    const goto = (behavior: ScrollBehavior): void => {
-        const sRect = scroller.getBoundingClientRect();
-        const docTopOf = (node: HTMLElement): number =>
-            node.getBoundingClientRect().top - sRect.top + scroller.scrollTop;
-        const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const scroller0 = resolveScroller();
+    // 无处可滚：保持当前视图（否则滚动会被归零，反而把用户甩回顶部）
+    if (!scroller0 || !el.isConnected || !scroller0.contains(el)) {
+        jumpLock = false;
+        return;
+    }
 
-        let desired = docTopOf(el) - 12;
-        // 是否退化为「滚到所在页的页顶」。退化后标题本就推不到内容区顶部（delta 会
-        // 明显大于阈值），二次校正不能再拿 delta 当判据，否则会白跳一次。
-        degraded = false;
+    /** 按当前布局算目标贴顶位置（内容坐标）。null = 目标/容器已失效，保持当前视图 */
+    const destOf = (): number | null => {
+        const scroller = resolveScroller();
+        if (!scroller || !el.isConnected || !scroller.contains(el)) return null;
+        const k = visualUnit(scroller);
+        const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        // 留白按视觉像素给：内容坐标里要除回倍率，否则小倍率下留白会被缩成几个像素
+        const pad = JUMP_PAD / k;
+        /** 节点在内容坐标（scrollTop 单位）里的纵向位置 */
+        const contentTopOf = (node: HTMLElement): number => {
+            const delta = (node.getBoundingClientRect().top - scroller.getBoundingClientRect().top) / k;
+            return delta + (scrollsWithDocument(scroller) ? 0 : scroller.scrollTop);
+        };
+
+        let desired = contentTopOf(el) - pad;
         if (desired > maxScroll) {
             // 末尾条目（末章、附录）后面不足一屏，标题物理上推不到内容区顶部。
-            // 先按页顶对齐试算，全程只用 getBoundingClientRect 的**视觉坐标**：
-            // 不能读 getComputedStyle(page).paddingTop——那是未缩放的布局值（实测恒为
-            // 96px，与 zoom 无关），与视觉值相加就是坐标系混用，偏差 = padTop*(1-zoom)。
+            // 先按页顶对齐试算：全程只用 getBoundingClientRect 的**视觉坐标**换算，
+            // 不能直接读 getComputedStyle(page).paddingTop——那是未缩放的布局值
+            // （实测恒为 96px，与 zoom 无关），混进视觉坐标里偏差 = padTop*(1-zoom)。
             const page = el.closest<HTMLElement>('.oe-page');
             if (page) {
                 const pRect = page.getBoundingClientRect();
                 // 页内首个正文块；没有就退回用标题自身（此时视觉 padding 恰为 0）
                 const firstKid = page.querySelector<HTMLElement>('.docx-body') ?? page.firstElementChild;
                 const visualPadTop = firstKid instanceof HTMLElement ? firstKid.getBoundingClientRect().top - pRect.top : 0;
-                const pageAligned = Math.max(0, Math.min(docTopOf(page) + visualPadTop - 12, maxScroll));
+                const pageTop = contentTopOf(page);
+                const padTop = visualPadTop / k;
+                const pageAligned = Math.max(0, Math.min(pageTop + padTop - pad, maxScroll));
 
                 // 页顶对齐仍不足以把标题带进视口时（页面底部本身就顶到文档底部、
                 // maxScroll 连页顶都到不了），退化为「滚到底」——此时标题必然可见，
                 // 与 Word 导航窗格在文档末尾的落点一致。判断用「目标底边 vs 可视底边」
                 // 这一实际可见性，而不是继续在坐标系上纠缠。
-                const targetBottom = docTopOf(el) + el.getBoundingClientRect().height;
-                const reachable = pageAligned + (el.getBoundingClientRect().top - (pRect.top + visualPadTop));
-                if (targetBottom - maxScroll <= scroller.clientHeight && reachable <= maxScroll) {
-                    degraded = true;
-                    desired = pageAligned;
-                } else {
-                    degraded = true;
-                    desired = maxScroll;
-                }
+                const elTop = contentTopOf(el);
+                const targetBottom = elTop + el.getBoundingClientRect().height / k;
+                const reachable = pageAligned + (elTop - pageTop - padTop);
+                desired =
+                    targetBottom - maxScroll <= scroller.clientHeight && reachable <= maxScroll ? pageAligned : maxScroll;
             } else {
-                degraded = true;
                 desired = maxScroll;
             }
         }
-
-        scroller.scrollTo({ top: Math.max(0, Math.min(desired, maxScroll)), behavior });
+        return Math.max(0, Math.min(desired, maxScroll));
     };
 
-    goto('smooth');
-
-    // 落稳后二次校正：smooth 期间若发生重排（图片解码后重分页）或缩放变化，
-    // 首次算出的位置会偏（表现为滚过头 / 没滚到位）。等滚动停止再量一次，
-    // 偏差仍超过阈值就用 instant 拉回——只校正一次，避免来回抖动。
-    // 退化（页顶对齐）时标题本就推不到顶部，delta 天然大于阈值，不在此列。
-    let stableSince = 0;
-    let lastTop = scroller.scrollTop;
+    const start = scroller0.scrollTop;
+    const t0 = performance.now();
+    /** 本轮跳转是否已收口（落位 / 让位 / 失效），收口后兜底不得再动视图 */
     let done = false;
-    const watch = (): void => {
-        if (done) return;
-        const top = scroller.scrollTop;
-        if (top !== lastTop) {
-            lastTop = top;
-            stableSince = performance.now();
-            window.setTimeout(watch, 100);
-            return;
-        }
-        if (stableSince === 0) stableSince = performance.now();
-        if (performance.now() - stableSince < 180) {
-            window.setTimeout(watch, 100);
-            return;
-        }
+
+    const detach = (): void => {
+        scroller0.removeEventListener('wheel', onUserScroll);
+        scroller0.removeEventListener('touchmove', onUserScroll);
+        scroller0.removeEventListener('pointerdown', onUserScroll);
+        window.removeEventListener('keydown', onKey);
+    };
+
+    /** 让位：保留当前视图，交还高亮联动（用户在滚 / 目标已失效） */
+    const settle = (): void => {
+        if (done || my !== jumpSeq) return;
         done = true;
-        scroller.removeEventListener('scroll', watch);
-        if (degraded || !el.isConnected) {
-            jumpLock = false;
-            return;
-        }
-        const delta = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-        if (Math.abs(delta) > 24) {
-            goto('instant');
-            return; // goto 会重新上锁，等下一轮 watch 落稳再释放
-        }
+        detach();
         jumpLock = false;
     };
-    scroller.addEventListener('scroll', watch, { passive: true });
-    window.setTimeout(watch, 100);
-    // 兜底：watch 因容器被移除 / 事件不触发而没跑到时，必须释放跳转锁，
+
+    /** 落位：终帧直接写精确目标值，交还高亮联动 */
+    const finish = (scroller: HTMLElement, top: number): void => {
+        done = true;
+        detach();
+        scroller.scrollTop = top;
+        jumpLock = false;
+    };
+
+    /**
+     * 用户在动画中手动滚动（wheel/触控板/拖滚动条/滚动键）：立即让位，保留用户的
+     * 滚动结果。不能反过来用「scrollTop 偏离我们写入的值」做推断——图片解码触发的
+     * 滚动锚定也会改写 scrollTop，误判会把动画掐死在半路。
+     */
+    const onUserScroll = (): void => settle();
+    const SCROLL_KEYS = [' ', 'ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'];
+    const onKey = (e: KeyboardEvent): void => {
+        if (!SCROLL_KEYS.includes(e.key)) return;
+        const t = e.target as HTMLElement | null;
+        if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+        settle();
+    };
+    scroller0.addEventListener('wheel', onUserScroll, { passive: true });
+    scroller0.addEventListener('touchmove', onUserScroll, { passive: true });
+    scroller0.addEventListener('pointerdown', onUserScroll, { passive: true });
+    window.addEventListener('keydown', onKey, { passive: true });
+
+    /**
+     * 自绘动画，不用 scrollTo({behavior:'smooth'})
+     *
+     * 原生 smooth 的时长不可控、没有结束事件，之前靠「轮询停稳 + 超差补一次瞬移」
+     * 收口，在真实 webview 里一旦原生动画被打断/没收尾，就退化成用户看到的
+     * 「先滚一段，最后重重跳一下才到位，还带残差」。改为逐帧插值后：
+     * - 落点每帧重算，动画期间的重排 / 缩放变化被自然吸收，不存在二次补跳；
+     * - 终帧直接写精确目标值，残差只剩物理像素量化（亚像素级，不可感知）；
+     * - 用户在动画中手动滚动会立刻让位，不再对拉。
+     */
+    const tick = (): void => {
+        if (my !== jumpSeq || done) {
+            detach(); // 被新一轮接管 / 已收口：摘掉本轮让位监听，避免残留累积
+            return;
+        }
+        const scroller = resolveScroller();
+        const dest = destOf();
+        if (!scroller || dest == null) {
+            settle();
+            return;
+        }
+        const p = Math.min(1, (performance.now() - t0) / JUMP_DURATION);
+        if (p >= 1) {
+            finish(scroller, dest);
+            return;
+        }
+        const eased = 1 - Math.pow(1 - p, 3); // easeOutCubic：起步快、贴顶减速
+        scroller.scrollTop = start + (dest - start) * eased;
+        window.requestAnimationFrame(tick);
+    };
+    window.requestAnimationFrame(tick);
+
+    // 兜底：webview 隐藏时 rAF 停转，动画可能停在中途——到点直接落位并释放跳转锁，
     // 否则侧栏高亮会永久停在点击项，后续手动滚动也不再联动。
     window.setTimeout(() => {
-        jumpLock = false;
-    }, 3000);
+        if (done || my !== jumpSeq) return; // 已正常收口（用户可能已手动滚动），不得拽回
+        jumpSeq++; // 作废残留的 tick，避免兜底落位后又被旧动画拽走
+        const scroller = resolveScroller();
+        const dest = destOf();
+        if (scroller && dest != null) {
+            finish(scroller, dest);
+        } else {
+            // 目标/容器已失效：就地释放（此处 jumpSeq 已自增，settle 会被守卫拦下）
+            done = true;
+            detach();
+            jumpLock = false;
+        }
+    }, JUMP_DURATION + 800);
 }
 
 /** 依据当前内容重建左侧目录并接上滚动联动 */

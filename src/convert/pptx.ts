@@ -38,7 +38,8 @@ import type {
     PptxDiagramNode,
     PptxMetadata
 } from '@fefeding/ppt-parser';
-import type { DocxBlock, DocxCell, DocxCellDetail, DocxHeading, DocxMetadata, DocxRun } from '../docx/types';
+import { pptxChartToSpec } from '../pptx/chart';
+import type { DocxBlock, DocxCell, DocxCellDetail, DocxHeading, DocxMetadata, DocxRun, DocxTable } from '../docx/types';
 
 /** pptxToBlocks 选项 */
 export interface PptxToBlocksOptions {
@@ -138,10 +139,13 @@ function textCell(text: string): DocxCellDetail {
     return { type: 'cell', text };
 }
 
-/** 图表 -> 标题 + 数据表 */
+/**
+ * 图表 -> 图表块
+ *
+ * HTML 目标会把 spec 渲染成内嵌矢量 SVG；md / docx / pdf 画不了矢量图，
+ * 退化成随块携带的兜底数据表。
+ */
 function pptxChartToBlocks(chart: PptxChartElement): DocxBlock[] {
-    const blocks: DocxBlock[] = [];
-    if (chart.title) blocks.push({ type: 'paragraph', runs: [{ text: chart.title, bold: true }] });
     const series = chart.series ?? [];
     const categories = chart.categories ?? [];
     const header: DocxCell[] = [textCell(''), ...series.map((s) => textCell(s.name ?? ''))];
@@ -149,8 +153,17 @@ function pptxChartToBlocks(chart: PptxChartElement): DocxBlock[] {
         textCell(cat),
         ...series.map((s) => textCell(String(s.values?.[i] ?? '')))
     ]);
-    blocks.push({ type: 'table', header: true, rows: [header, ...rows] });
-    return blocks;
+    const fallback: DocxTable = { type: 'table', header: true, rows: [header, ...rows] };
+    return [
+        {
+            type: 'chart',
+            spec: pptxChartToSpec(chart as unknown as Parameters<typeof pptxChartToSpec>[0]),
+            width: Number(chart.width) || undefined,
+            height: Number(chart.height) || undefined,
+            caption: chart.title,
+            fallback
+        }
+    ];
 }
 
 /** 图示节点展平为文本数组 */

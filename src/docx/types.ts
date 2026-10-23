@@ -8,6 +8,7 @@
  */
 
 import type { AssetSource, DocAsset, DocAssetMode } from '../core/asset';
+import type { ChartSpec } from '../chart/svg';
 
 /** 文本级样式（对应一次 run） */
 export interface DocxRun {
@@ -251,6 +252,26 @@ export interface DocxTextBox {
     height?: number;
 }
 
+/**
+ * 图表块（来自 XLSX / PPTX 的原生图表）
+ *
+ * 只存格式无关的绘图描述（ChartSpec），矢量图由 `chart/svg` 统一渲染：
+ * HTML 目标内嵌 <svg>（可无损缩放、可打印），其余目标退化成 `fallback` 数据表。
+ */
+export interface DocxChart {
+    type: 'chart';
+    /** 绘图描述（类型/系列/配色等） */
+    spec: ChartSpec;
+    /** 渲染宽度（px） */
+    width?: number;
+    /** 渲染高度（px） */
+    height?: number;
+    /** 图注 */
+    caption?: string;
+    /** 无法画矢量图的目标（md / docx / pdf）退化成这张数据表 */
+    fallback?: DocxTable;
+}
+
 /** 所有支持的块类型 */
 export type DocxBlock =
     | DocxHeading
@@ -263,6 +284,7 @@ export type DocxBlock =
     | DocxQuote
     | DocxCode
     | DocxTextBox
+    | DocxChart
     | DocxToc;
 
 /** 文档元数据 */

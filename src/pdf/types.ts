@@ -60,6 +60,33 @@ export interface PdfVector {
     vertical: boolean;
 }
 
+/**
+ * 页面图像（含版面位置），仅当解析选项 `images: true` 时返回
+ *
+ * PDF 的图文都是绝对定位的，只有带上坐标才能在转 md / html 时把图插回阅读顺序。
+ * `data` 是可用字节：原始像素已编码成 PNG，原本就是 JPEG/PNG 的直通不重新编码。
+ */
+export interface PdfImage {
+    /** 页内对象 id（同一张图被多次绘制时用于去重） */
+    id: string;
+    /** 左下角 X（pt，PDF 坐标系：原点左下、y 向上） */
+    x: number;
+    /** 左下角 Y（pt） */
+    y: number;
+    /** 页面上的显示宽度（pt） */
+    width: number;
+    /** 页面上的显示高度（pt） */
+    height: number;
+    /** 原始像素宽度 */
+    pixelWidth: number;
+    /** 原始像素高度 */
+    pixelHeight: number;
+    /** 图片字节 */
+    data: Uint8Array;
+    /** MIME，如 image/png / image/jpeg */
+    mime: string;
+}
+
 /** 页面 */
 export interface PdfPage {
     /** 页号（1 起） */
@@ -76,6 +103,8 @@ export interface PdfPage {
     items?: PdfTextItem[];
     /** 矢量线段（表格线等），仅当解析选项 `vectors: true` 时返回 */
     vectors?: PdfVector[];
+    /** 页面图像（含位置与字节），仅当解析选项 `images: true` 时返回 */
+    images?: PdfImage[];
 }
 
 /** 解析结果文档 */
@@ -108,6 +137,19 @@ export interface PdfParseOptions {
     items?: boolean;
     /** 是否额外返回矢量线段（表格线/分隔线），用于版面分析与表格还原，默认 false */
     vectors?: boolean;
+    /**
+     * 是否额外返回页面图像（含位置与字节），默认 false
+     *
+     * 需要等 pdfjs 把图像对象异步解析完，比矢量略慢；图文混排的文档转 md / html
+     * 必须要它，否则整篇图都丢。
+     */
+    images?: boolean;
+    /**
+     * 单张图的像素上限，超出后降采样（默认 2e6，约 1600x1250）；0 表示不降采样
+     *
+     * 扫描件整页图常达 3000x4000，原样编码会让产物体积爆炸。
+     */
+    maxImagePixels?: number;
     /** 只解析指定页（1 起），缺省全部 */
     pages?: number[];
     /** 最大返回页数（配合分页预览场景） */

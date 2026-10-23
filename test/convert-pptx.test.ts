@@ -120,14 +120,17 @@ describe('convert: pptx -> blocks', () => {
         expect((table!.rows[0][0] as { colspan?: number }).colspan).toBe(2);
     });
 
-    it('图表 -> 标题段落 + 数据表', () => {
+    it('图表 -> 图表块（矢量 spec + 兜底数据表）', () => {
         const { blocks } = pptxDocumentToBlocks(deck);
-        const chartTitle = blocks.find(
-            (b) => b.type === 'paragraph' && (b as { runs?: { text?: string }[] }).runs?.[0]?.text === '销量'
-        );
-        expect(chartTitle).toBeTruthy();
-        const tables = blocks.filter((b) => b.type === 'table') as Extract<DocxBlock, { type: 'table' }>[];
-        expect(tables.some((t) => t.rows.length === 3 && (t.rows[2][1] as { text?: string }).text === '20')).toBe(true);
+        const chart = blocks.find((b) => b.type === 'chart') as Extract<DocxBlock, { type: 'chart' }>;
+        expect(chart).toBeTruthy();
+        // OOXML 的 barChart 默认 barDir=col，即纵向柱形
+        expect(chart.spec.type).toBe('column');
+        expect(chart.spec.title).toBe('销量');
+        expect(chart.spec.series?.[0]?.values).toEqual([10, 20]);
+        // 画不了矢量图的目标（md / docx / pdf）退化成这张数据表
+        expect(chart.fallback?.rows.length).toBe(3);
+        expect((chart.fallback!.rows[2][1] as { text?: string }).text).toBe('20');
     });
 });
 
@@ -139,7 +142,10 @@ describe('convert: pptx 统一门面', () => {
         const md = (await convert(bytes, 'md', { from: 'pptx' })) as string;
         expect(md).toContain('# 季度汇报');
         expect(md).toContain('- 完成目标');
-        expect(md).toContain('| 合并标题');
+        // 含合并单元格的表输出 HTML 表格（管道表无法表达 colspan）
+        expect(md).toContain('<table>');
+        expect(md).toContain('colspan="2"');
+        expect(md).toContain('合并标题');
 
         const html = (await convert(bytes, 'html', { from: 'pptx' })) as string;
         expect(html).toContain('<table');
