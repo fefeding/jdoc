@@ -113,7 +113,10 @@ function shapeVisual(el) {
       style.background = normalizeColor(fill) || 'transparent';
     } else if (fill.type === 'gradient') {
       const stops = (fill.stops || []).slice().sort((a, b) => a.position - b.position);
-      const list = stops.map((s) => `${withAlpha(s.color, s.transparency || 0)} ${clamp(s.position, 0, 1) * 100}%`).join(',');
+      // 停点不足两个时 CSS gradient 会是非法值（整条声明失效 → 形状变透明），兜底成纯白
+      const list = stops.length >= 2
+        ? stops.map((s) => `${withAlpha(s.color, s.transparency || 0)} ${clamp(s.position, 0, 1) * 100}%`).join(',')
+        : '#FFFFFF,#FFFFFF';
       // 径向渐变（a:path）：CSS 用 radial-gradient 近似（OOXML 的 path="rect"/"shape" 统一按椭圆近似）
       if (fill.gradientType === 'radial') {
         style.background = `radial-gradient(circle at 50% 50%, ${list})`;
@@ -717,7 +720,12 @@ function renderTableBody(el, ctx) {
       }
     }
   };
+  // 表格级默认字号 / 填充：属性面板改的是 el.fontSize、el.cellFill、el.headerFill，
+  // 单元格没带自己的值时必须用它们兜底，否则面板改了颜色字号、画布毫无变化。
+  const tableFont = el.fontSize || 14;
+  const headerRow = !!el.headerRow;
   rows.forEach((row, ri) => {
+    const isHeader = headerRow && ri === 0;
     let runningCol = 0; // 按 colSpan 累加得到的期望列，用于跳过同 row 被覆盖的占位单元格
     (row.cells || []).forEach((cell, cj) => {
       // 源顺序里被前面单元格 colSpan 覆盖的占位格跳过
@@ -742,8 +750,9 @@ function renderTableBody(el, ctx) {
       d.style.borderRight = side('right');
       d.style.borderTop = side('top');
       d.style.borderBottom = side('bottom');
-      if (cell.fill) d.style.background = normalizeColor(cell.fill) || 'transparent';
-      d.style.fontSize = `${ptToPx(cell.fontSize || 14)}px`;
+      const fill = cell.fill || (isHeader ? el.headerFill : el.cellFill);
+      if (fill) d.style.background = normalizeColor(fill) || 'transparent';
+      d.style.fontSize = `${ptToPx(cell.fontSize || tableFont)}px`;
       d.style.color = normalizeColor(cell.color) || getTheme(ctx.theme).text || '#202124';
       if (cell.bold) d.style.fontWeight = '700';
       d.style.textAlign = cell.align || 'left';

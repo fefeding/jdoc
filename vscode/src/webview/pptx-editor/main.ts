@@ -419,7 +419,8 @@ function ribbonCaps(): Record<string, boolean | string> {
   const sel = editing ? store.selected() : [];
   const one = sel.length === 1 ? sel[0] : null;
   const texty = !!one && (one.type === 'text' || (one.paragraphs || []).length > 0);
-  const fill = one && one.fill ? (typeof one.fill === 'object' && one.fill.color ? one.fill.color : typeof one.fill === 'string' && one.fill !== 'none' ? one.fill : '') : '';
+  // 渐变填充没有单一 color（渲染端读 stops），色板取首个停点色才能反映当前外观
+  const fill = one && one.fill ? (typeof one.fill === 'object' && (one.fill.color || one.fill.stops?.[0]?.color) ? (one.fill.color || one.fill.stops[0].color) : typeof one.fill === 'string' && one.fill !== 'none' ? one.fill : '') : '';
   const line = one && one.line && one.line !== 'none' ? one.line.color || '#000000' : '#000000';
   const bg = editing ? store.slide?.background : '';
   return {
@@ -541,12 +542,12 @@ function ribbonCommands(name: string, ...args: any[]): any {
     case 'toggleItalic': return runAction(() => actions.applyTextStyleSel({ italic: !sel()[0]?.italic }));
     case 'toggleUnderline': return runAction(() => actions.applyTextStyleSel({ underline: !sel()[0]?.underline }));
     case 'toggleBullet': return runAction(() => actions.applyTextStyleSel({ bullet: !sel()[0]?.bullet }));
-    case 'setAlign': return patch({ align: args[0] });
+    case 'setAlign': return applyTextStyle({ align: args[0] });
     case 'setValign': return patch({ valign: args[0] });
-    case 'setLineSpacing': return patch({ lineSpacing: num(args[0], 1.15) });
-    case 'setFontFace': return patch({ fontFace: args[0] });
-    case 'setFontSize': return patch({ fontSize: num(args[0], 24) });
-    case 'setTextColor': return patch({ color: args[0] === 'none' ? undefined : args[0] });
+    case 'setLineSpacing': return applyTextStyle({ lineSpacing: num(args[0], 1.15) });
+    case 'setFontFace': return applyTextStyle({ fontFace: args[0] });
+    case 'setFontSize': return applyTextStyle({ fontSize: num(args[0], 24) });
+    case 'setTextColor': return applyTextStyle({ color: args[0] === 'none' ? undefined : args[0] });
 
     // --- shape ---
     case 'setFill': {
@@ -559,7 +560,7 @@ function ribbonCommands(name: string, ...args: any[]): any {
               v === 'none'
                 ? 'none'
                 : cur && cur.type === 'gradient'
-                  ? { ...cur, colors: [v, cur.colors?.[1] || '#ffffff'] }
+                  ? { ...cur, stops: [{ color: v, position: 0 }, cur.stops?.[1] || { color: '#ffffff', position: 1 }] }
                   : v
           })
         );
@@ -609,7 +610,7 @@ function ribbonCommands(name: string, ...args: any[]): any {
     }
     case 'setSlideBg': return runAction(() => actions.setBackground(args[0] === 'none' ? '#ffffff' : args[0]));
     case 'bgImage': return pickBackgroundImage();
-    case 'bgGradient': return runAction(() => actions.setBackground({ type: 'gradient', angle: 45, colors: ['#1a73e8', '#ffffff'] }));
+    case 'bgGradient': return runAction(() => actions.setBackground({ type: 'gradient', angle: 45, stops: [{ color: '#1a73e8', position: 0 }, { color: '#ffffff', position: 1 }] }));
     case 'bgNone': return runAction(() => actions.setBackground('none'));
 
     // --- transitions ---
@@ -838,6 +839,68 @@ function runAction(fn: () => void, opts: { skipSync?: boolean } = {}) {
   state.version++;
   renderAll();
   if (!opts.skipSync) syncSoon();
+}
+
+/** 可逐 run 覆盖的字符级样式键（与 parser 的 applyTextStyle 保持一致） */
+const RUN_STYLE_KEYS = ['fontSize', 'color', 'bold', 'italic', 'underline', 'fontFace'];
+/**
+ * 文本样式改写（字色 / 字号 / 字体 / 对齐 / 行距…）
+ *
+ * 渲染端按「run 值优先、元素值兜底」绘制：st.color = run.color || el.color || 主题色。
+ * 而导入 PPTX 时解析端把每个 run 的显式 rPr（含从 lstStyle / 母版 defRPr 继承来的值）
+ * 全部写进了 run，段落级 align 也一样被填成元素值。只改元素级属性会被 run 上的原值
+ * 盖掉——表现就是面板/ribbon 里改了颜色、字号、字体、对齐，画布纹丝不动。
+ *
+ * 这里把改动同步写进每个 run（元素级也写，保证新建元素与导出一致），并按 parser 约定
+ * 打 propsSet / alignSet / lineSpacingSet 标记，导出时才不会被当成面板默认值丢弃。
+ * 值为 undefined 表示「清除」，让渲染回落到主题色。
+ */
+function applyTextStyle(patch: Record<string, unknown>): void {
+  runAction(() => {
+    store.update((doc: any) => {
+      for (const id of store.sel.slice()) {
+        const el = findInDoc(doc, id);
+        if (!el || (el.type !== 'text' && !(el.paragraphs || []).length)) continue;
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === undefined) {
+            delete el[k];
+            if (el.propsSet) delete el.propsSet[k];
+          } else {
+            el[k] = v;
+            if (el.propsSet && k in el.propsSet) el.propsSet[k] = true;
+          }
+        }
+        for (const p of el.paragraphs || []) {
+          for (const r of p.runs || []) {
+            for (const k of RUN_STYLE_KEYS) {
+              if (!(k in patch)) continue;
+              if (patch[k] === undefined) delete r[k];
+              else r[k] = patch[k];
+            }
+          }
+          if ('align' in patch) {
+            if (patch.align === undefined) {
+              delete p.align;
+              delete p.alignSet;
+            } else {
+              p.align = patch.align;
+              p.alignSet = true;
+            }
+          }
+          if ('lineSpacing' in patch) {
+            if (patch.lineSpacing === undefined) {
+              delete p.lineSpacing;
+              delete p.lineSpacingSet;
+            } else {
+              p.lineSpacing = patch.lineSpacing;
+              p.lineSpacingSet = true;
+            }
+          }
+          if ('bullet' in patch) p.bullet = patch.bullet === false ? undefined : patch.bullet;
+        }
+      }
+    });
+  });
 }
 
 // ---------- Mode switching ----------
@@ -1783,6 +1846,15 @@ function renderInspector() {
     return;
   }
   if (state.editingText && store.sel.length) return; // don't rebuild while typing (keeps focus)
+  // 正在操作面板里的控件（取色器 / 下拉框 / 数字框）时不要重建：
+  // 每次 edit 都 renderAll 一次，重建会把控件连同它身上的焦点一起换掉，原生取色器随之
+  // 关闭——连续调色只能生效第一下，看着就像「改了颜色但没实时生效」。画布由 renderAll
+  // 里的 renderCanvas 独立重绘，不受这里跳过的影响。
+  const active = document.activeElement as HTMLElement | null;
+  if (active && inspectorEl.contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) {
+    syncChrome();
+    return;
+  }
   inspectorEl.innerHTML = '';
   const slide = store.slide;
   renderInspectorHead();
@@ -2186,14 +2258,14 @@ function renderElementInspector(el: any) {
     );
     inspectorEl.append(h('div', { class: 'field', style: 'align-items:flex-start' }, [h('label', {}, [t('insp.text')]), ta]));
 
-    inspectorEl.append(colorField(t('insp.color'), el.color || '#1e1e1e', (v) => update({ color: v })));
-    inspectorEl.append(numField(t('insp.fontSize'), el.fontSize, (v) => update({ fontSize: v })));
+    inspectorEl.append(colorField(t('insp.color'), el.color || '#1e1e1e', (v) => applyTextStyle({ color: v === 'none' ? undefined : v })));
+    inspectorEl.append(numField(t('insp.fontSize'), el.fontSize, (v) => applyTextStyle({ fontSize: v })));
     inspectorEl.append(
       selectField(
         t('insp.align'),
         ['left', 'center', 'right', 'justify'].map((v) => ({ value: v, label: data('align', v, v) })),
         el.align || 'left',
-        (v) => update({ align: v })
+        (v) => applyTextStyle({ align: v })
       )
     );
     inspectorEl.append(
@@ -2212,10 +2284,10 @@ function renderElementInspector(el: any) {
         t('insp.font'),
         FONT_LIST.map((f: string) => ({ value: f, label: data('font', f, f) })),
         el.fontFace || FONT_LIST[0],
-        (v) => update({ fontFace: v })
+        (v) => applyTextStyle({ fontFace: v })
       )
     );
-    inspectorEl.append(numField(t('insp.lineSpacing'), el.lineSpacing || 1.15, (v) => update({ lineSpacing: Math.max(0.5, v) })));
+    inspectorEl.append(numField(t('insp.lineSpacing'), el.lineSpacing || 1.15, (v) => applyTextStyle({ lineSpacing: Math.max(0.5, v) })));
     inspectorEl.append(checkField(t('cmd.bullets'), !!el.bullet, (v) => runAction(() => actions.applyTextStyleSel({ bullet: !!v }))));
     // Hyperlinks live on runs, so writes are propagated to every run of the element
     inspectorEl.append(
@@ -2234,7 +2306,13 @@ function renderElementInspector(el: any) {
   } else if (el.type === 'shape') {
     inspectorEl.append(textField(t('insp.shape'), el.shapeType || 'rect', (v) => update({ shapeType: v })));
     const fillObj: any = el.fill && typeof el.fill === 'object' ? el.fill : null;
-    const flatFill = fillObj && fillObj.color ? fillObj.color : (typeof el.fill === 'string' && el.fill !== 'none' ? el.fill : '#4285f4');
+    // 渐变没有单一 color：取首个停点色作为面板上的「填充色」，否则会退化成硬编码蓝
+    const flatFill = fillObj && fillObj.color
+      ? fillObj.color
+      : fillObj?.stops?.[0]?.color
+        || (typeof el.fill === 'string' && el.fill !== 'none' ? el.fill : '#4285f4');
+    const gradStops = (over: (string | undefined)[] = []): { color: string; position: number }[] =>
+      [0, 1].map((i) => ({ color: over[i] ?? fillObj?.stops?.[i]?.color ?? (i === 0 ? flatFill : '#ffffff'), position: i }));
     inspectorEl.append(
       selectField(
         t('insp.fill'),
@@ -2242,7 +2320,7 @@ function renderElementInspector(el: any) {
         fillObj?.type || 'solid',
         (v) => {
           if (v === 'none') update({ fill: 'none' });
-          else if (v === 'gradient') update({ fill: { type: 'gradient', angle: fillObj?.angle ?? 90, colors: [flatFill, '#ffffff'] } });
+          else if (v === 'gradient') update({ fill: { type: 'gradient', angle: fillObj?.angle ?? 90, stops: gradStops() } });
           else if (v === 'image') update({ fill: { type: 'image', data: '', extension: 'png', tile: { sx: 1, sy: 1 }, srcRect: { l: 0, t: 0, r: 0, b: 0 } } });
           else if (v === 'pattern') update({ fill: { type: 'pattern', prst: 'pct5', fg: '#000000', bg: '#ffffff' } });
           else update({ fill: flatFill });
@@ -2253,7 +2331,8 @@ function renderElementInspector(el: any) {
       if (!fillObj || (fillObj.type !== 'image' && fillObj.type !== 'pattern')) {
         inspectorEl.append(
           colorField(t('insp.fillColor'), flatFill, (v) => {
-            if (fillObj && fillObj.type === 'gradient') update({ fill: { ...fillObj, colors: [v, fillObj.colors?.[1] || '#ffffff'] } });
+            // 渐变渲染端读 stops（与预览端一致），写 colors 不会有任何视觉变化
+            if (fillObj && fillObj.type === 'gradient') update({ fill: { ...fillObj, stops: gradStops([v]) } });
             else update({ fill: v });
           })
         );
@@ -2272,8 +2351,8 @@ function renderElementInspector(el: any) {
           )
         );
         inspectorEl.append(
-          colorField(t('insp.fillColor2'), fillObj.colors?.[1] || '#ffffff', (v) =>
-            update({ fill: { ...fillObj, colors: [fillObj.colors?.[0] || flatFill, v] } })
+          colorField(t('insp.fillColor2'), fillObj.stops?.[1]?.color || '#ffffff', (v) =>
+            update({ fill: { ...fillObj, stops: gradStops([undefined, v]) } })
           )
         );
       }

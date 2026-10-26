@@ -2,7 +2,7 @@
   "name": "jdoc-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "keywords": [
     "docx",
     "xlsx",
