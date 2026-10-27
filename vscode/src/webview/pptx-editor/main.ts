@@ -842,7 +842,7 @@ function runAction(fn: () => void, opts: { skipSync?: boolean } = {}) {
 }
 
 /** 可逐 run 覆盖的字符级样式键（与 parser 的 applyTextStyle 保持一致） */
-const RUN_STYLE_KEYS = ['fontSize', 'color', 'bold', 'italic', 'underline', 'fontFace'];
+const RUN_STYLE_KEYS = ['fontSize', 'color', 'bold', 'italic', 'underline', 'strike', 'highlight', 'fontFace'];
 /**
  * 文本样式改写（字色 / 字号 / 字体 / 对齐 / 行距…）
  *
@@ -2065,7 +2065,7 @@ function elSnippet(el: any): { name: string; type: string } {
   const label = (type: string) => t(`el.type.${type}`, type);
   switch (el.type) {
     case 'text':
-      return { name: (el.text || '').toString().split('\n')[0].slice(0, 24) || t('el.type.text'), type: label('text') };
+      return { name: (elementText(el) || '').toString().split('\n')[0].slice(0, 24) || t('el.type.text'), type: label('text') };
     case 'shape':
       return { name: (el.shapeType || 'shape').toString(), type: label('shape') };
     case 'image':
@@ -2234,6 +2234,39 @@ function firstHref(el: any): string {
   return '';
 }
 
+/**
+ * 文本元素的展示文字统一取自 `paragraphs`（真实 PPTX 解析后只填充 paragraphs，
+ * 不会填充顶层 el.text）。拼接每行段落内 run 的文字，段落之间用换行分隔。
+ */
+function elementText(el: any): string {
+  if (Array.isArray(el.paragraphs) && el.paragraphs.length) {
+    return el.paragraphs
+      .map((p: any) => (p.runs || []).map((r: any) => (r.text == null ? '' : String(r.text))).join(''))
+      .join('\n');
+  }
+  return el.text || '';
+}
+
+/**
+ * 把纯文本写回 paragraphs：按换行拆成多段，保留每段原有的段落级属性（对齐/项目符号/
+ * 行距）以及首 run 的字符级样式；渲染端只读 paragraphs，因此这样改写才会真正生效。
+ */
+function paragraphsFromText(value: string, el: any): any[] {
+  const lines = (value ?? '').split('\n');
+  const prev = Array.isArray(el.paragraphs) ? el.paragraphs : [];
+  return lines.map((line, i) => {
+    const src = prev[i]?.runs?.[0] || {};
+    const style: any = {};
+    for (const k of RUN_STYLE_KEYS) if (src[k] !== undefined) style[k] = src[k];
+    return {
+      runs: line ? [{ text: line, ...style }] : [{ text: '' }],
+      align: prev[i]?.align || el.align || 'left',
+      bullet: prev[i]?.bullet || undefined,
+      lineSpacing: prev[i]?.lineSpacing || el.lineSpacing || 1.15
+    };
+  });
+}
+
 // ---- Element-level properties ----
 function renderElementInspector(el: any) {
   inspectorEl.append(h('h4', {}, [t('insp.element', t(`el.type.${el.type}`, t('el.type.unknown')))]));
@@ -2249,12 +2282,12 @@ function renderElementInspector(el: any) {
   inspectorEl.append(geom);
 
   if (el.type === 'text') {
-    const ta = h('textarea', { placeholder: t('insp.textPlaceholder') }, [el.text || '']);
+    const ta = h('textarea', { placeholder: t('insp.textPlaceholder') }, [elementText(el)]);
     ta.addEventListener('focus', () => (state.editingText = true));
     ta.addEventListener('blur', () => (state.editingText = false));
     ta.addEventListener(
       'input',
-      debounce(() => runAction(() => actions.updateElement(el.id, { text: ta.value }, { history: false })), 400)
+      debounce(() => runAction(() => actions.updateElement(el.id, { paragraphs: paragraphsFromText(ta.value, el) }, { history: false })), 400)
     );
     inspectorEl.append(h('div', { class: 'field', style: 'align-items:flex-start' }, [h('label', {}, [t('insp.text')]), ta]));
 
