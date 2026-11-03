@@ -645,17 +645,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // 标题栏（editor/title）里的查看/编辑与文档切换
         vscode.commands.registerCommand('jdoc.viewMode', () => provider.setActiveMode('view')),
         vscode.commands.registerCommand('jdoc.editMode', () => provider.setActiveMode('edit')),
-        vscode.commands.registerCommand('jdoc.switchDocument', () => provider.switchDocument()),
-        // Markdown / TXT 等文件 VS Code 有内置编辑器（内置优先级更高），
-        // 因此提供显式入口，用 jdoc 预览当前文件或资源管理器里选中的文件。
-        vscode.commands.registerCommand('jdoc.preview', async (uri?: vscode.Uri) => {
-            const target = uri || vscode.window.activeTextEditor?.document.uri;
-            if (!target) {
-                vscode.window.showInformationMessage(loc('extension.pickFile', 'Select a file to preview with jdoc.'));
-                return;
-            }
-            await vscode.commands.executeCommand('vscode.openWith', target, VIEW_TYPE);
-        })
+        vscode.commands.registerCommand('jdoc.switchDocument', () => provider.switchDocument())
     );
 }
 

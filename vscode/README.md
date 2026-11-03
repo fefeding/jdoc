@@ -19,7 +19,7 @@ A VS Code extension that lets you **view and edit** office documents right insid
 - **Markdown** (`.md` / `.markdown`) — typeset preview (read-only, fenced code blocks with syntax highlighting, Mermaid diagrams and KaTeX formulas supported)
 - **Plain text** (`.txt`) — monospace preview (read-only)
 
-Opening a PPTX / DOCX / XLSX / PDF automatically uses this extension (as the default editor). Because VS Code's built-in editor has higher priority for Markdown / TXT, you need to right-click the file and choose **"jdoc: Open Preview with jdoc"** (command `jdoc.preview`), or pick `jdoc Document Editor` via "Open With".
+Opening a PPTX / DOCX / XLSX / PDF automatically uses this extension (as the default editor). For Markdown / TXT, where VS Code's built-in editor has higher priority, open the file with `jdoc Document Editor` via "Open With".
 
 After editing you can save back to the original file (`Ctrl/Cmd+S`), `Revert` (restore), or `Export Copy` (save a copy).
 

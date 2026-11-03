@@ -20,7 +20,7 @@ VS Code 扩展，基于 [`@fefeding/jdoc`](https://github.com/fefeding/jdoc) 在
 - **纯文本**（`.txt`）— 等宽预览（只读）
 
 打开 PPTX / DOCX / XLSX / PDF 会自动以本扩展打开（作为默认编辑器）。
-Markdown / TXT 因 VS Code 内置编辑器优先级更高，需在文件上右键选择 **“jdoc: 用 jdoc 打开预览”**（命令 `jdoc.preview`），或经“打开方式”选择 `jdoc Document Editor`。
+Markdown / TXT 因 VS Code 内置编辑器优先级更高，请经“打开方式”选择 `jdoc Document Editor`。
 
 支持编辑后保存到原文件（`Ctrl/Cmd+S`）、`Revert`（还原）、`Export Copy`（另存副本）。
 
