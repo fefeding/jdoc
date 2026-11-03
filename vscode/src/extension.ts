@@ -606,7 +606,7 @@ window.__JDC_PDF_FONTS__ = "${pdfAssetUri('standard_fonts/')}";
 window.__JDC_PDF_WASM__ = "${pdfAssetUri('wasm/')}";</script>
 <script nonce="${nonce}" src="${echartsUri}"></script>
 <script nonce="${nonce}" src="${echartsGlUri}"></script>
-<script nonce="${nonce}" src="${scriptUri}"></script>
+<script type="module" nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
     }

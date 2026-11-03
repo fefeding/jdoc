@@ -101,36 +101,6 @@ function copyPdfWorker() {
   console.warn('[esbuild] 警告：未找到 pdf.worker.mjs，PDF 转换在宿主侧将不可用');
 }
 
-/**
- * 把 pdfjs 的 cMaps / 标准字体 / wasm 资源复制到 media/pdfjs/。
- *
- * 中文等 CID 字体的 PDF 必须有 cMaps 才能把 CID 解码成字形，缺了的表现是
- * 「线条、色块、项目符号都渲染出来，唯独文字全部消失」；standard_fonts 是
- * 未内嵌字体（Helvetica 等 14 种标准字体）的替代字形；wasm 用于 JPEG2000
- * 等图像解码。webview 端 getDocument 需显式传 cMapUrl / standardFontDataUrl /
- * wasmUrl（由 extension.ts 注入全局量，util.ts 组装）。
- */
-function copyPdfAssets() {
-  let base;
-  try {
-    const req = require('module').createRequire(path.join(__dirname, 'package.json'));
-    base = path.dirname(req.resolve('pdfjs-dist/package.json'));
-  } catch {
-    base = path.join(__dirname, '..', 'node_modules', 'pdfjs-dist');
-  }
-  const outDir = path.join(__dirname, 'media', 'pdfjs');
-  for (const sub of ['cmaps', 'standard_fonts', 'wasm']) {
-    const from = path.join(base, sub);
-    if (!fs.existsSync(from)) {
-      console.warn(`[esbuild] 警告：未找到 pdfjs-dist/${sub}，相关 PDF 资源将缺失`);
-      continue;
-    }
-    const to = path.join(outDir, sub);
-    fs.cpSync(from, to, { recursive: true });
-    console.log(`[esbuild] pdf ${sub} -> ${path.relative(__dirname, to)}`);
-  }
-}
-
 /** 内嵌 worker 文件的标记（webview 端据此判定资源已内嵌，无需再探 URL） */
 const EMBEDDED_WORKER_MARKER = '/* JDOC_PDF_EMBEDDED_ASSETS */';
 
@@ -146,12 +116,21 @@ const EMBEDDED_WORKER_MARKER = '/* JDOC_PDF_EMBEDDED_ASSETS */';
 function embedPdfAssetsIntoWorker() {
   const mediaDir = path.join(__dirname, 'media');
   const workerPath = path.join(mediaDir, 'pdf.worker.min.mjs');
-  const assetsDir = path.join(mediaDir, 'pdfjs');
+  // 资源素材直接取自 node_modules/pdfjs-dist（构建时用、不进包），不再落盘到 media/pdfjs。
+  // 内嵌后 webview 的 worker 自带全部 cMap/字体/wasm，media/pdfjs 目录因此可删，插件瘦身。
+  let pdfjsDist;
+  try {
+    const req = require('module').createRequire(path.join(__dirname, 'package.json'));
+    pdfjsDist = path.dirname(req.resolve('pdfjs-dist/package.json'));
+  } catch {
+    pdfjsDist = path.join(__dirname, '..', 'node_modules', 'pdfjs-dist');
+  }
+  const assetsDir = pdfjsDist;
   // 原始 worker 取自 node_modules 的 pdfjs-dist（与打包进 webview.js 的版本一致），
   // 不能用 media 里那份——它可能已经是上一次构建的内嵌版本，否则会层层叠加。
   const pristine = path.join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.min.mjs');
-  if (!fs.existsSync(pristine) || !fs.existsSync(assetsDir)) {
-    console.warn('[esbuild] 警告：缺少 pdfjs-dist worker 或 media/pdfjs，跳过资源内嵌');
+  if (!fs.existsSync(pristine) || !fs.existsSync(path.join(assetsDir, 'cmaps'))) {
+    console.warn('[esbuild] 警告：缺少 pdfjs-dist worker 或 cmaps，跳过资源内嵌');
     return;
   }
   const dict = {};
@@ -214,42 +193,20 @@ async function buildWithContext() {
     target: 'node16'
   });
 
-  const webCtx = await esbuild.context({
+  // 三个浏览器端入口合并到同一上下文并开启 splitting：@fefeding/jdoc 等公共依赖
+  // 会被抽成共享 chunk（dist/chunk-*.js），三份入口不再各自打包一份 jdoc，
+  // 安装体积省约 4MB 且功能完全等价。入口改为 ESM 模块，由 extension.ts 以
+  // <script type="module"> 加载；ECharts / echarts-gl 仍以全局 <script> 注入。
+  const webSharedCtx = await esbuild.context({
     ...base,
-    entryPoints: [path.join(__dirname, 'src', 'webview', 'main.ts')],
-    outfile: path.join(__dirname, 'dist', 'webview.js'),
-    format: 'iife',
-    platform: 'browser',
-    target: 'es2020',
-    // 仅别名 jdoc；图表渲染器 chart-renderer.js 已复制到 src/webview 下直接打包，
-    // ECharts / echarts-gl 通过 media/ 以全局 <script> 注入（先于 webview.js 加载）。
-    alias: {
-      '@fefeding/jdoc': resolveJdocEntry()
+    entryPoints: {
+      webview: path.join(__dirname, 'src', 'webview', 'main.ts'),
+      'pptx-editor': path.join(__dirname, 'src', 'webview', 'pptx-editor', 'main.ts'),
+      'office-editor': path.join(__dirname, 'src', 'webview', 'office-editor', 'main.ts')
     },
-    plugins: [nodeStubPlugin]
-  });
-
-  // PPTX 编辑器：独立 webview 入口（自包含，保留 vscode-pptx 的自启动 + ready 逻辑），
-  // 避免与查看版 webview.js 的双 message 监听 / 双 acquireVsCodeApi 冲突。
-  const pptxCt = await esbuild.context({
-    ...base,
-    entryPoints: [path.join(__dirname, 'src', 'webview', 'pptx-editor', 'main.ts')],
-    outfile: path.join(__dirname, 'dist', 'pptx-editor.js'),
-    format: 'iife',
-    platform: 'browser',
-    target: 'es2020',
-    alias: {
-      '@fefeding/jdoc': resolveJdocEntry()
-    },
-    plugins: [nodeStubPlugin]
-  });
-
-  // DOCX / XLSX 编辑器：独立 webview 入口（查看 + 块式/网格编辑），同样自包含。
-  const officeCt = await esbuild.context({
-    ...base,
-    entryPoints: [path.join(__dirname, 'src', 'webview', 'office-editor', 'main.ts')],
-    outfile: path.join(__dirname, 'dist', 'office-editor.js'),
-    format: 'iife',
+    outdir: path.join(__dirname, 'dist'),
+    format: 'esm',
+    splitting: true,
     platform: 'browser',
     target: 'es2020',
     alias: {
@@ -262,22 +219,18 @@ async function buildWithContext() {
     // watch 不 rebuild，但静态资源（含内嵌 cMap 的 worker）必须先生成一次，
     // 否则 F5 "Run Extension (watch)" 会拿到旧 worker，VS Code 调试宿主仍白字。
     copyPdfWorker();
-    copyPdfAssets();
     embedPdfAssetsIntoWorker();
-    await Promise.all([extCtx.watch(), webCtx.watch(), pptxCt.watch(), officeCt.watch()]);
+    await Promise.all([extCtx.watch(), webSharedCtx.watch()]);
     console.log('[esbuild] watching for changes… (press Ctrl+C to stop)');
     console.log('[esbuild] 调试：按 F5 选择 "Run Extension (watch)"；改代码后在扩展开发宿主窗口按 Ctrl/Cmd+R 刷新。');
     return;
   }
 
-  await Promise.all([extCtx.rebuild(), webCtx.rebuild(), pptxCt.rebuild(), officeCt.rebuild()]);
+  await Promise.all([extCtx.rebuild(), webSharedCtx.rebuild()]);
   copyPdfWorker();
-  copyPdfAssets();
   embedPdfAssetsIntoWorker();
   await extCtx.dispose();
-  await webCtx.dispose();
-  await pptxCt.dispose();
-  await officeCt.dispose();
+  await webSharedCtx.dispose();
   console.log('[esbuild] build complete.');
 }
 
