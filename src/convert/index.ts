@@ -20,6 +20,7 @@ import { pdfToBlocks } from './pdf';
 import { blocksToPdf } from './blocks-to-pdf';
 import { xlsxToBlocks } from './xlsx';
 import { pptxToBlocks } from './pptx';
+import { pptxToPdf } from './pptx-pdf';
 import type { DocxBlock, DocxDocument } from '../docx/types';
 import type { DocAsset } from '../core/asset';
 import type { PdfFontSet } from '../pdf/types';
@@ -30,6 +31,7 @@ export { pdfToBlocks } from './pdf';
 export { blocksToPdf } from './blocks-to-pdf';
 export { xlsxToBlocks } from './xlsx';
 export { pptxToBlocks } from './pptx';
+export { pptxToPdf } from './pptx-pdf';
 export type { MarkdownToBlocksOptions, BlocksToMarkdownOptions } from './markdown';
 export type { PdfToBlocksOptions, PdfToBlocksResult } from './pdf';
 export type { BlocksToPdfOptions } from './blocks-to-pdf';
@@ -150,6 +152,13 @@ export async function convert(
     }
 
     // ---- 源 -> blocks ----
+    // PPTX -> PDF 例外：幻灯片是「固定画布 + 绝对定位元素」，走幻灯片版式直排
+    // （每页 = 一张幻灯片）。经 blocks 中转的流式排版会把 16:9 幻灯片重排成 A4
+    // 竖版：绝对定位的文本框互相叠压、大图溢出成多页、页尾大面积留白。
+    if (from === 'pptx' && target === 'pdf') {
+        return pptxToPdf(bytes, { fonts: options.fonts, autoFont: options.autoFont });
+    }
+
     let blocks: DocxBlock[] = [];
     let metadata: DocxDocument['metadata'];
     let assets: DocAsset[] | undefined;

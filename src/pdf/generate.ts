@@ -1076,8 +1076,14 @@ export async function generatePdf(
                     cursorY = Number.POSITIVE_INFINITY;
                     break;
                 }
-                const used = await drawElement({ ...ctx, originY: margin.top + cursorY }, element);
-                cursorY += used;
+                // 带显式 y 的元素按「距页顶」的绝对坐标绘制（PPTX 幻灯片版式直排
+                // 依赖此语义），不参与流式光标推进；未带 y 的元素保持流式排版。
+                const absolute = (element as { y?: number }).y !== undefined;
+                const used = await drawElement(
+                    { ...ctx, originY: absolute ? margin.top : margin.top + cursorY },
+                    element
+                );
+                if (!absolute) cursorY += used;
             }
         };
 
