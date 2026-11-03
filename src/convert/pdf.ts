@@ -82,6 +82,8 @@ interface Line {
     size: number;
     items: PdfTextItem[];
     text: string;
+    /** 该行主字体名（pdfjs 对内嵌子集字体会改成 g_d0_f2 之类，命中率低，仅作辅助信号） */
+    font?: string;
 }
 
 /** 行首列表符号/编号 */
@@ -246,6 +248,7 @@ function groupLines(items: PdfTextItem[], bodySize: number): Line[] {
         }
         line.items.push(item);
         line.size = Math.max(line.size, item.fontSize);
+        line.font = line.font ?? item.fontName;
     }
     // 行内按 x 排序并拼出文本（依据 x 间隔判断是否需要空格）
     for (const line of lines) {
@@ -318,7 +321,35 @@ function joinWrapped(prev: string, next: string): string {
     return `${prev} ${next}`;
 }
 
-/** 把行序列转成块（标题/列表/段落，并按 y 插入图片块） */
+/** 一行是否「看起来像代码」（只看本行自身，不含括号上下文） */
+function lineLooksCode(line: Line): boolean {
+    const t = line.text;
+    if (!t.trim()) return false;
+    // 1) 等宽字体（最可靠；内嵌子集字体名常被 pdfjs 改成 g_d0_f2，命中率低，仅作加分）
+    if (line.font && /(mono|courier|consol|menlo|monospace|sfmono|liberation\s*mono)/i.test(line.font)) return true;
+    // 2) 行内明显代码符号组合（强信号，避免 "{ ret, data, msg }" 这类中文夹符号被误判）
+    if (/(=>|function\s|const\s|let\s|var\s|import\s|export\s|\basync\b|\bawait\b|\bclass\b|\breturn\b|\bpublic\b|\bprivate\b|module\.exports|\brequire\(|\bconsole\.|\bdef\s|\bSELECT\b|\bFROM\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b)/i.test(t)) return true;
+    // 3) 以常见代码关键字开头
+    if (/^\s*(import|export|const|let|var|function|class|def|public|private|void|async|await|#include|#define|#import|SELECT|FROM|INSERT|UPDATE|DELETE)\b/i.test(t)) return true;
+    // 4) 行尾是结构开括号，或多行块的首/收括号
+    if (/[{([]\s*$/.test(t.trim()) || /^\s*[})\]]/.test(t)) return true;
+    return false;
+}
+
+/** 代码块续行是否仍像代码（弱信号）：用于括号深度向前扩展时，避免把散文/表格行吞进代码块 */
+function looksLikeCodeContinuation(line: Line): boolean {
+    const t = line.text.trim();
+    if (!t) return true; // 空行：保留在代码块内
+    if (/^\s*[})\]]/.test(t)) return true; // 收尾括号
+    if (/[{([]\s*$/.test(t)) return true; // 开头括号（块首行续）
+    if (/\/\/|\/\*/.test(t)) return true; // 注释
+    if (/["'`]/.test(t)) return true; // 字符串
+    if (/[,;]\s*$/.test(t)) return true; // 行尾逗号/分号（对象/数组项）
+    if (/\b[a-zA-Z_$][\w$]*\s*[:=]/.test(t)) return true; // key: / var =
+    return false;
+}
+
+/** 把行序列转成块（标题/列表/段落/代码块，并按 y 插入图片块） */
 function linesToBlocks(lines: Line[], bodySize: number, images: PlacedImage[] = []): DocxBlock[] {
     const blocks: DocxBlock[] = [];
     let paraBuffer: string[] = [];
@@ -363,8 +394,66 @@ function linesToBlocks(lines: Line[], bodySize: number, images: PlacedImage[] = 
         }
     };
 
-    for (const line of lines) {
+    // 代码块识别：先判每行是否像代码，再用括号深度向前扩展（如 `module.exports = {`
+    // 之后的 `printWidth: 100,` 没有关键字，靠未闭合的 { 判断仍属同一代码块）。
+    // 仅当首行是强信号时才展开，避免正文中孤立的 { 误带出后续行。
+    const codeFlag: boolean[] = new Array(lines.length).fill(false);
+    {
+        let depth = 0;
+        let inCodeBlock = false;
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (lineLooksCode(line)) {
+                codeFlag[i] = true;
+                inCodeBlock = true;
+            } else if (inCodeBlock && depth > 0 && looksLikeCodeContinuation(line)) {
+                codeFlag[i] = true;
+            } else {
+                // 任何非代码续行立即结束代码上下文，防止括号深度跨页泄漏吞掉后续散文/表格
+                inCodeBlock = false;
+            }
+            if (codeFlag[i]) {
+                const open = (line.text.match(/[{([]/g) || []).length;
+                const close = (line.text.match(/[})\]]/g) || []).length;
+                depth += open - close;
+            }
+            if (depth <= 0) {
+                depth = 0;
+                inCodeBlock = false;
+            }
+        }
+    }
+
+    let codeRunLines: Line[] = [];
+    const flushCode = () => {
+        if (codeRunLines.length >= 2) {
+            // 按等宽字宽（≈ 0.5 × 字号）还原块内相对缩进
+            const minX = Math.min(...codeRunLines.map((l) => l.x));
+            const text = codeRunLines
+                .map((l) => {
+                    const indent = Math.max(0, Math.round((l.x - minX) / (l.size * 0.5)));
+                    return `${' '.repeat(indent)}${l.text}`;
+                })
+                .join('\n');
+            blocks.push({ type: 'code', text });
+        }
+        codeRunLines = [];
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         flushImagesAbove(line.y);
+        if (codeFlag[i]) {
+            // 代码块内：空行若前后都是代码则保留，否则忽略（不拆块）
+            if (!line.text.trim() && codeRunLines.length && i + 1 < lines.length && codeFlag[i + 1]) {
+                codeRunLines.push({ ...line, text: '' });
+            } else if (line.text.trim()) {
+                codeRunLines.push(line);
+            }
+            continue;
+        }
+        flushCode();
+
         const isHeading = line.size > bodySize * 1.18 && line.text.length <= Math.max(60, bodySize * 6);
         const isList = LIST_LEAD.test(line.text);
 
@@ -394,6 +483,7 @@ function linesToBlocks(lines: Line[], bodySize: number, images: PlacedImage[] = 
     }
     // 行走完后剩下的是排在末尾的图（页脚上方 / 文末插图）
     flushImagesAbove(-Infinity);
+    flushCode();
     flushPara();
     flushList();
     return blocks;
