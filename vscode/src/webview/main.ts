@@ -1,6 +1,6 @@
 import { pptxToHtml, docxToHtml, xlsxToHtml, markdownToHtml, textToHtml, renderMarkdownExtras } from '@fefeding/jdoc';
 import { chartRenderer } from './chart-renderer';
-import { b64ToBytes, escapeHtml, resolvePdfWorkerSrc } from './util';
+import { b64ToBytes, escapeHtml, resolvePdfResourceOptions, resolvePdfWorkerSrc } from './util';
 import { baseCss } from './style';
 import { CHROME_CSS, createStatusBar } from './chrome';
 import { createZoom, createZoomCluster } from './zoom';
@@ -261,7 +261,8 @@ async function rasterize(bytes: Uint8Array, scale: number): Promise<void> {
         // 同源 Blob worker：避免 VS Code 官方 webview 下跨源触发 pdfjs 的 CDN 包装导致极慢
         await resolvePdfWorkerSrc(pdfjs);
         // pdfjs 会把 data 转移给 worker，必须传副本，否则原始字节被 detach
-        const doc = await pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
+        const res = await resolvePdfResourceOptions();
+        const doc = await pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false, ...res.options }).promise;
         for (let i = 1; i <= doc.numPages; i++) {
             const page = await doc.getPage(i);
             const viewport = page.getViewport({ scale });

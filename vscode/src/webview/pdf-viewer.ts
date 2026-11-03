@@ -9,7 +9,7 @@
 // - 旋转：viewport.rotation 变化后页面尺寸会换（width/height 对调），必须重算占位与
 //   缩略图，所以旋转不是 CSS transform，而是把渲染重走一遍。
 import { createZoomCluster, type ZoomController } from './zoom';
-import { escapeHtml, resolvePdfWorkerSrc } from './util';
+import { escapeHtml, resolvePdfResourceOptions, resolvePdfWorkerSrc } from './util';
 
 /** 缩略图渲染宽度（CSS px，与 .pdf-thumb .frame 宽度一致） */
 const THUMB_WIDTH = 132;
@@ -753,6 +753,20 @@ export function createPdfViewer(
     });
 
     // ---------- 打开 / 关闭 ----------
+    /** 资源自检提示条：cMap 加载失败是静默的，不能只留一片空白让用户猜。
+     *  挂到 body 并 fixed，避免 open() 里 content.replaceChildren 把它冲掉。 */
+    let resWarnEl: HTMLElement | null = null;
+    function showResourceWarning(msg: string): void {
+        console.warn('[pdf] ' + msg);
+        resWarnEl?.remove();
+        const div = el('div', 'pdf-res-warn', msg);
+        div.style.cssText =
+            'position:fixed;top:8px;left:8px;right:8px;z-index:9999;padding:8px 12px;border-radius:6px;' +
+            'background:#5a1e1e;color:#fff;font-size:12px;line-height:1.5;pointer-events:none;';
+        document.body.appendChild(div);
+        resWarnEl = div;
+    }
+
     /** 加载遮罩：覆盖正文，给出大文档解析/首渲期间的明确反馈 */
     let loadingEl: HTMLElement | null = null;
     function showLoading(msg: string): void {
@@ -793,6 +807,8 @@ export function createPdfViewer(
     function close(): void {
         disposed = true;
         hideLoading();
+        resWarnEl?.remove();
+        resWarnEl = null;
         io?.disconnect();
         io = null;
         thumbIo?.disconnect();
@@ -846,12 +862,28 @@ export function createPdfViewer(
         // asWebviewUri 给出的 worker 不同源而触发 pdfjs 的 CDN 包装（跨源 import，
         // 极慢/失败回退主线程），详见 util.ts 的 resolvePdfWorkerSrc。
         await resolvePdfWorkerSrc(pdfjs);
+        // 资源自检：pdfjs 里 cMap 加载失败只打 console warning，页面表现为「一片白」。
+        // 这里逐个候选目录实测一次，把静默失败变成可见提示。
+        const res = await resolvePdfResourceOptions();
+        if (!res.reachable) {
+            showResourceWarning(
+                res.cMapUrl
+                    ? `cMap 资源不可达：${res.cMapUrl}（中文等 CID 字体将无法显示）`
+                    : '未找到 pdfjs 资源目录（media/pdfjs/cmaps），中文等 CID 字体文字将无法显示。'
+            );
+        }
         let doc: any;
         try {
             // pdfjs 会把 data 转移给 worker（原 ArrayBuffer 会被 detach），必须传副本。
             // disableAutoFetch：默认会预取所有页面数据，大文档首屏会被拖慢；关掉后
             // 只取当前请求的页，配合「第一页优先」让首页尽快出来。
-            doc = await pdfjs.getDocument({ data: bytes.slice(), disableAutoFetch: true, isEvalSupported: false }).promise;
+            doc = await pdfjs.getDocument({
+                data: bytes.slice(),
+                disableAutoFetch: true,
+                isEvalSupported: false,
+                // cMap/标准字体/wasm：中文 CID 字体没有 cMap 时文字整体不渲染
+                ...res.options
+            }).promise;
         } catch (err: any) {
             console.error('[pdf] pdfjs 解析失败:', err);
             hideLoading();

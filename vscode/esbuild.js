@@ -101,6 +101,100 @@ function copyPdfWorker() {
   console.warn('[esbuild] 警告：未找到 pdf.worker.mjs，PDF 转换在宿主侧将不可用');
 }
 
+/**
+ * 把 pdfjs 的 cMaps / 标准字体 / wasm 资源复制到 media/pdfjs/。
+ *
+ * 中文等 CID 字体的 PDF 必须有 cMaps 才能把 CID 解码成字形，缺了的表现是
+ * 「线条、色块、项目符号都渲染出来，唯独文字全部消失」；standard_fonts 是
+ * 未内嵌字体（Helvetica 等 14 种标准字体）的替代字形；wasm 用于 JPEG2000
+ * 等图像解码。webview 端 getDocument 需显式传 cMapUrl / standardFontDataUrl /
+ * wasmUrl（由 extension.ts 注入全局量，util.ts 组装）。
+ */
+function copyPdfAssets() {
+  let base;
+  try {
+    const req = require('module').createRequire(path.join(__dirname, 'package.json'));
+    base = path.dirname(req.resolve('pdfjs-dist/package.json'));
+  } catch {
+    base = path.join(__dirname, '..', 'node_modules', 'pdfjs-dist');
+  }
+  const outDir = path.join(__dirname, 'media', 'pdfjs');
+  for (const sub of ['cmaps', 'standard_fonts', 'wasm']) {
+    const from = path.join(base, sub);
+    if (!fs.existsSync(from)) {
+      console.warn(`[esbuild] 警告：未找到 pdfjs-dist/${sub}，相关 PDF 资源将缺失`);
+      continue;
+    }
+    const to = path.join(outDir, sub);
+    fs.cpSync(from, to, { recursive: true });
+    console.log(`[esbuild] pdf ${sub} -> ${path.relative(__dirname, to)}`);
+  }
+}
+
+/** 内嵌 worker 文件的标记（webview 端据此判定资源已内嵌，无需再探 URL） */
+const EMBEDDED_WORKER_MARKER = '/* JDOC_PDF_EMBEDDED_ASSETS */';
+
+/**
+ * 把 cMap / 标准字体 / wasm 以 base64 直接嵌进 webview 用的 pdf worker。
+ *
+ * 为什么：pdfjs 在 worker 内部 fetch(cMapUrl + 文件名)。VS Code 官方 webview 的
+ * 页面 origin 与 asWebviewUri 资源 origin 不同，且 worker 又是 blob: URL —— 跨源
+ * fetch 会被 CORS/scheme 拦掉（CodeBuddy 同源所以能过）。表现就是「CodeBuddy 正常、
+ * VS Code 调试宿主白字」。这里把资源字节放进 worker 源码并覆盖其 fetch，让 worker
+ * 完全不发网络请求，任何宿主都一致。
+ */
+function embedPdfAssetsIntoWorker() {
+  const mediaDir = path.join(__dirname, 'media');
+  const workerPath = path.join(mediaDir, 'pdf.worker.min.mjs');
+  const assetsDir = path.join(mediaDir, 'pdfjs');
+  // 原始 worker 取自 node_modules 的 pdfjs-dist（与打包进 webview.js 的版本一致），
+  // 不能用 media 里那份——它可能已经是上一次构建的内嵌版本，否则会层层叠加。
+  const pristine = path.join(__dirname, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.min.mjs');
+  if (!fs.existsSync(pristine) || !fs.existsSync(assetsDir)) {
+    console.warn('[esbuild] 警告：缺少 pdfjs-dist worker 或 media/pdfjs，跳过资源内嵌');
+    return;
+  }
+  const dict = {};
+  let bytes = 0;
+  for (const sub of ['cmaps', 'standard_fonts', 'wasm']) {
+    const dir = path.join(assetsDir, sub);
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir)) {
+      const file = path.join(dir, name);
+      if (!fs.statSync(file).isFile()) continue;
+      const buf = fs.readFileSync(file);
+      dict[`${sub}/${name}`] = buf.toString('base64');
+      bytes += buf.length;
+    }
+  }
+  const interceptor = `(() => {
+  const assets = globalThis.__JDC_PDF_ASSETS__ || {};
+  const nativeFetch = globalThis.fetch ? globalThis.fetch.bind(globalThis) : null;
+  if (!nativeFetch) return;
+  globalThis.fetch = async function (input, init) {
+    try {
+      let url = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
+      const q = url.indexOf('?'); if (q >= 0) url = url.slice(0, q);
+      const h = url.indexOf('#'); if (h >= 0) url = url.slice(0, h);
+      for (const dir of ['cmaps/', 'standard_fonts/', 'wasm/']) {
+        const i = url.lastIndexOf('/' + dir);
+        if (i < 0) continue;
+        const b64 = assets[url.slice(i + 1)];
+        if (!b64) break;
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let k = 0; k < bin.length; k++) out[k] = bin.charCodeAt(k);
+        return new Response(out, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
+      }
+    } catch (_) { /* 交给原生 fetch */ }
+    return nativeFetch(input, init);
+  };
+})();`;
+  const prelude = `${EMBEDDED_WORKER_MARKER}\nglobalThis.__JDC_PDF_ASSETS__=${JSON.stringify(dict)};\n${interceptor}\n`;
+  fs.writeFileSync(workerPath, prelude + fs.readFileSync(pristine, 'utf8'));
+  console.log(`[esbuild] pdf worker 内嵌 ${Object.keys(dict).length} 个资源 (${(bytes / 1048576).toFixed(1)}MB) -> ${path.relative(__dirname, workerPath)}`);
+}
+
 async function buildWithContext() {
   const base = {
     bundle: true,
@@ -165,6 +259,11 @@ async function buildWithContext() {
   });
 
   if (watch) {
+    // watch 不 rebuild，但静态资源（含内嵌 cMap 的 worker）必须先生成一次，
+    // 否则 F5 "Run Extension (watch)" 会拿到旧 worker，VS Code 调试宿主仍白字。
+    copyPdfWorker();
+    copyPdfAssets();
+    embedPdfAssetsIntoWorker();
     await Promise.all([extCtx.watch(), webCtx.watch(), pptxCt.watch(), officeCt.watch()]);
     console.log('[esbuild] watching for changes… (press Ctrl+C to stop)');
     console.log('[esbuild] 调试：按 F5 选择 "Run Extension (watch)"；改代码后在扩展开发宿主窗口按 Ctrl/Cmd+R 刷新。');
@@ -173,6 +272,8 @@ async function buildWithContext() {
 
   await Promise.all([extCtx.rebuild(), webCtx.rebuild(), pptxCt.rebuild(), officeCt.rebuild()]);
   copyPdfWorker();
+  copyPdfAssets();
+  embedPdfAssetsIntoWorker();
   await extCtx.dispose();
   await webCtx.dispose();
   await pptxCt.dispose();

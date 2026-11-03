@@ -560,6 +560,11 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         const pdfWorkerUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pdf.worker.min.mjs')
         );
+        // pdfjs 资源目录：cMap（中文 CID 字体解码必需，缺了文字整体不渲染）、
+        // 标准字体（未内嵌的 Helvetica 等）、wasm（JPEG2000 图像解码）。
+        // 由构建脚本复制到 media/pdfjs/，webview 端 getDocument 显式传入。
+        const pdfAssetUri = (sub: string): string =>
+            webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pdfjs', sub)).toString();
         // KaTeX 样式（Markdown 公式渲染），CSS 内部以相对路径引用 media/fonts/*.woff2
         const katexCssUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'media', 'katex.min.css')
@@ -595,7 +600,10 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
 </head>
 <body>
 <div id="app"></div>
-<script nonce="${nonce}">window.__JDC_PDF_WORKER__ = "${pdfWorkerUri}";</script>
+<script nonce="${nonce}">window.__JDC_PDF_WORKER__ = "${pdfWorkerUri}";
+window.__JDC_PDF_CMAPS__ = "${pdfAssetUri('cmaps/')}";
+window.__JDC_PDF_FONTS__ = "${pdfAssetUri('standard_fonts/')}";
+window.__JDC_PDF_WASM__ = "${pdfAssetUri('wasm/')}";</script>
 <script nonce="${nonce}" src="${echartsUri}"></script>
 <script nonce="${nonce}" src="${echartsGlUri}"></script>
 <script nonce="${nonce}" src="${scriptUri}"></script>
