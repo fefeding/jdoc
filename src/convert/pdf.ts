@@ -48,6 +48,11 @@ export interface PdfToBlocksOptions {
      * 它内置的相对 worker 路径会失效，必须显式给出可加载的地址。
      */
     workerSrc?: string;
+    /** cMap / 标准字体 / wasm 资源目录与内嵌资源 worker（Node 端，透传给 parsePdf） */
+    cMapUrl?: string;
+    standardFontDataUrl?: string;
+    wasmUrl?: string;
+    embeddedWorkerPath?: string;
 }
 
 /** PDF -> blocks 结果 */
@@ -101,7 +106,11 @@ export async function pdfToBlocks(
         maxImagePixels: options.maxImagePixels,
         pages: options.pages,
         maxPages: options.maxPages,
-        workerSrc: options.workerSrc
+        workerSrc: options.workerSrc,
+        cMapUrl: options.cMapUrl,
+        standardFontDataUrl: options.standardFontDataUrl,
+        wasmUrl: options.wasmUrl,
+        embeddedWorkerPath: options.embeddedWorkerPath
     });
 
     const allBlocks: DocxBlock[] = [];
@@ -432,6 +441,13 @@ function extractTables(lines: Line[], vectors: PdfVector[], out: DocxBlock[]): v
         rows.reverse();
         // 纯空白字符的单元格归一为空串（pdfjs 可能拆出独立空格 item）
         const cleaned = rows.map((row) => row.map((cell) => cell.trim()));
+        // 装饰性网格守卫：封面/页面的装饰线会被聚合成「列数极多且大量空格」的假表格
+        // （实测 28 列几乎全空），当表格还原会把文字塞成一格一句、版面与页数双爆炸。
+        // 真实表格很少超过 12 列、空单元格占比也不会这么高；命中守卫就按普通文本行
+        // 处理（内容不丢，只是不还原成表格——注意直接 return，跳过下方删行逻辑）。
+        const cells = cleaned.flat();
+        const filled = cells.filter((c) => c).length / Math.max(1, cells.length);
+        if (cleaned[0].length > 12 && filled < 0.4) return;
         out.push({ type: 'table', header: true, rows: cleaned });
     }
     // 从行集合中移除已归入表格的文本，避免重复

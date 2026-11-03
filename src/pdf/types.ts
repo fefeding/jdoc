@@ -156,6 +156,19 @@ export interface PdfParseOptions {
     maxPages?: number;
     /** 中文字体资源目录 URL/路径；缺省自动探测 pdfjs-dist 内的标准字体 */
     standardFontDataUrl?: string;
+    /** cMap 资源目录（Node 端文件路径，须以 / 结尾）；缺省自动探测 pdfjs-dist */
+    cMapUrl?: string;
+    /** wasm 资源目录（JPEG2000 / JBIG2 图像解码）；缺省自动探测 pdfjs-dist */
+    wasmUrl?: string;
+    /**
+     * 内嵌资源的 pdf worker 文件路径（Node 端）。
+     *
+     * 构建脚本可把 cMap/标准字体/wasm 以 base64 内嵌进 pdf worker（如 VS Code
+     * 扩展的 media/pdf.worker.min.mjs）。打包后的扩展没有 node_modules，自动
+     * 探测必然失败；传入该文件后，解析前会把资源解包到系统临时目录（按内容
+     * 哈希缓存，只做一次），宿主侧的解析/转换才能渲染中文等 CID 字体。
+     */
+    embeddedWorkerPath?: string;
     /**
      * pdfjs worker 地址（Node 端）。
      *

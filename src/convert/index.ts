@@ -57,6 +57,11 @@ export interface ConvertOptions {
      * 需显式给出 worker 文件的地址。
      */
     workerSrc?: string;
+    /** cMap / 标准字体 / wasm 资源目录与内嵌资源 worker（Node 端，透传给 PDF 解析） */
+    cMapUrl?: string;
+    standardFontDataUrl?: string;
+    wasmUrl?: string;
+    embeddedWorkerPath?: string;
 }
 
 /** 把字节解码为 UTF-8 文本 */
@@ -171,7 +176,14 @@ export async function convert(
     } else if (from === 'html') {
         blocks = htmlToBlocks(decodeText(bytes));
     } else if (from === 'pdf') {
-        const result = await pdfToBlocks(bytes, { quality: options.quality, workerSrc: options.workerSrc });
+        const result = await pdfToBlocks(bytes, {
+            quality: options.quality,
+            workerSrc: options.workerSrc,
+            cMapUrl: options.cMapUrl,
+            standardFontDataUrl: options.standardFontDataUrl,
+            wasmUrl: options.wasmUrl,
+            embeddedWorkerPath: options.embeddedWorkerPath
+        });
         blocks = result.blocks;
         metadata = result.metadata as DocxDocument['metadata'];
         // 页面图像：图片块只存 assetId，字节在这张表里，缺了 md / html 会整篇丢图

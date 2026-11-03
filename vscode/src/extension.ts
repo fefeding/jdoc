@@ -17,6 +17,16 @@ import type { DocFormat, DocTabInfo, EditorMode, HostToWebview, WebviewToHost } 
 const PDF_WORKER_URL = pathToFileURL(path.join(__dirname, 'pdf.worker.mjs')).href;
 
 /**
+ * 内嵌了 cMap/标准字体/wasm 的 pdf worker（webview 与宿主侧转换共用同一份）。
+ *
+ * 宿主侧 PDF 解析（convert）需要磁盘上的 cMap 等资源才能渲染中文等 CID 字体；
+ * 打包后的扩展没有 node_modules，jdoc 的自动探测必然失败。传入该文件后，jdoc
+ * 会把资源解包到系统临时目录（按内容哈希缓存，只做一次），无需在包里再放一份
+ * 资源目录。
+ */
+const PDF_EMBEDDED_WORKER = path.join(__dirname, '..', 'media', 'pdf.worker.min.mjs');
+
+/**
  * 给可能挂起的异步操作加超时。
  *
  * pdfjs 在 worker 加载失败（文件缺失 / 路径失效 / 宿主 CSP）时不会 reject，
@@ -395,7 +405,7 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
                     const result = await withTimeout(
-                        convert(data, to, { from, workerSrc: PDF_WORKER_URL }),
+                        convert(data, to, { from, workerSrc: PDF_WORKER_URL, embeddedWorkerPath: PDF_EMBEDDED_WORKER }),
                         30000,
                         loc('extension.converting', 'Converting document…')
                     );
@@ -512,11 +522,18 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
             async () => {
                 try {
                     const data = await vscode.workspace.fs.readFile(target);
-                    const pdf = await withTimeout(
-                        convert(data, 'pdf', { from, workerSrc: PDF_WORKER_URL }),
-                        30000,
-                        loc('extension.converting', 'Converting document…')
-                    );
+                    // PDF 源直接栅格化原始文件：经「解析成 blocks 再重建 PDF」的链路是有损的
+                    // （封面装饰网格会被误判为表格、版面重排后页数膨胀），而 webview 里的
+                    // pdfjs 能完美渲染原始页面（页数、字体、布局与查看器所见一致）。
+                    // 非 PDF 源（docx/xlsx/pptx/md/html）仍需先转成 PDF。
+                    const pdf =
+                        from === 'pdf'
+                            ? data
+                            : ((await withTimeout(
+                                  convert(data, 'pdf', { from, workerSrc: PDF_WORKER_URL, embeddedWorkerPath: PDF_EMBEDDED_WORKER }),
+                                  30000,
+                                  loc('extension.converting', 'Converting document…')
+                              )) as Uint8Array);
                     const base = sourceName.replace(/\.[^.]+$/, '') || 'page';
                     // scale=2 约 144dpi，A4 输出约 1191x1684，清晰度足够印刷预览
                     const written = await this.rasterizePdf(pdf, 2, async (index, png) => {
@@ -560,9 +577,9 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         const pdfWorkerUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pdf.worker.min.mjs')
         );
-        // pdfjs 资源目录：cMap（中文 CID 字体解码必需，缺了文字整体不渲染）、
-        // 标准字体（未内嵌的 Helvetica 等）、wasm（JPEG2000 图像解码）。
-        // 由构建脚本复制到 media/pdfjs/，webview 端 getDocument 显式传入。
+        // pdfjs 资源目录占位：cMap/标准字体/wasm 已由构建脚本内嵌进 worker，
+        // webview 端识别到内嵌后跳过 URL 探测，这些地址只是让 pdfjs 能拼出
+        // 文件名的占位符（media/pdfjs 目录已不再随包分发）。
         const pdfAssetUri = (sub: string): string =>
             webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'pdfjs', sub)).toString();
         // KaTeX 样式（Markdown 公式渲染），CSS 内部以相对路径引用 media/fonts/*.woff2

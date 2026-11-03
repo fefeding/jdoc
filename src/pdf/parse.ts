@@ -12,6 +12,7 @@ import { JdocError, wrapError } from '../core/errors';
 import { toUint8Array, type DocInput } from '../core/input';
 import type { DocAsset } from '../core/asset';
 import { extractPdfAssets } from './assets';
+import { extractEmbeddedPdfAssets, FsBinaryDataFactory } from './embedded-assets';
 import { extractPageImages } from './images';
 import type { PdfDocument, PdfMetadata, PdfPage, PdfParseOptions, PdfTextItem } from './types';
 
@@ -478,8 +479,16 @@ export async function parsePdf(
                 if (workerUrl) pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
             }
         }
-        const standardFontDataUrl = options.standardFontDataUrl || (await resolveResourceUrl('standard_fonts'));
-        const cMapUrl = await resolveResourceUrl('cmaps');
+        // 资源解析顺序：显式传入 > 内嵌 worker 解包（打包场景没有 node_modules 可探测）
+        // > 自动探测 pdfjs-dist。三路都为空时 pdfjs 拿到 undefined，中文等 CID 字体退化。
+        const isNode = typeof process !== 'undefined' && !!process.versions?.node;
+        const embedded = options.embeddedWorkerPath
+            ? await extractEmbeddedPdfAssets(options.embeddedWorkerPath)
+            : undefined;
+        const standardFontDataUrl =
+            options.standardFontDataUrl || embedded?.standard_fonts || (await resolveResourceUrl('standard_fonts'));
+        const cMapUrl = options.cMapUrl || embedded?.cmaps || (await resolveResourceUrl('cmaps'));
+        const wasmUrl = options.wasmUrl || embedded?.wasm || (await resolveResourceUrl('wasm'));
 
         loadingTask = pdfjs.getDocument({
             // 必须传副本：pdfjs 会把 data 的 ArrayBuffer transfer 给 worker，
@@ -488,9 +497,15 @@ export async function parsePdf(
             data: bytes.slice(),
             standardFontDataUrl,
             cMapUrl,
+            wasmUrl,
             // Node 与受限浏览器环境下禁用字体探测与 JIT，减少兼容问题
             isEvalSupported: false,
-            useSystemFonts: false
+            useSystemFonts: false,
+            // Electron 扩展宿主下 pdfjs 的 isNodeJS 被误判为 false（process.versions.electron
+            // 存在），会选 DOMBinaryDataFactory 去读 document.baseURI（宿主无 document）而抛错。
+            // 传入用 fs 读资源的工厂强制走 Node 分支，cMap/字体/wasm 才能正常加载。
+            // 仅 Node 端生效；浏览器端由内嵌 worker 的 fetch 拦截处理，无需此工厂。
+            ...(isNode ? { BinaryDataFactory: FsBinaryDataFactory } : {})
         });
         pdf = await loadingTask.promise;
 
