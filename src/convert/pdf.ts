@@ -136,18 +136,32 @@ function stripRunPrefix(runs: DocxRun[], n: number): DocxRun[] {
 function documentBodySize(pages: PdfPage[]): number {
     const cjk = new Map<number, number>();
     const all = new Map<number, number>();
+    // 各字号覆盖的字符数：出现次数相同时用它决胜
+    const chars = new Map<number, number>();
     for (const page of pages) {
         for (const item of page.items || []) {
             if (!item.text?.trim()) continue;
             const key = Math.round(item.fontSize * 2) / 2;
             all.set(key, (all.get(key) || 0) + 1);
+            chars.set(key, (chars.get(key) || 0) + item.text.trim().length);
             if (/[一-鿿㐀-䶿豈-﫿]/.test(item.text)) cjk.set(key, (cjk.get(key) || 0) + 1);
         }
     }
     const pick = (hist: Map<number, number>): number => {
         let best = 0;
         let bestCount = 0;
-        for (const [size, count] of hist) if (count > bestCount) { best = size; bestCount = count; }
+        let bestChars = 0;
+        for (const [size, count] of hist) {
+            const ch = chars.get(size) || 0;
+            // 出现次数优先；次数相同时取覆盖字符更多的字号
+            //（否则「一条大标题 + 一段正文」这种文档会把标题字号当成正文：
+            //  标题行与正文行被并成同一行，标题层级彻底丢失）
+            if (count > bestCount || (count === bestCount && ch > bestChars)) {
+                best = size;
+                bestCount = count;
+                bestChars = ch;
+            }
+        }
         return best;
     };
     return pick(cjk.size ? cjk : all) || 12;

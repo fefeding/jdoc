@@ -10,7 +10,30 @@
  * @module pdf/generate
  */
 
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type RGB } from 'pdf-lib';
+import {
+    PDFDocument,
+    StandardFonts,
+    appendBezierCurve,
+    clip,
+    closePath,
+    concatTransformationMatrix,
+    endPath,
+    fill,
+    lineTo,
+    moveTo,
+    popGraphicsState,
+    pushGraphicsState,
+    rectangle,
+    rgb,
+    setFillingColor,
+    setGraphicsState,
+    setLineWidth,
+    setStrokingColor,
+    stroke,
+    type PDFFont,
+    type PDFImage,
+    type RGB
+} from 'pdf-lib';
 import { JdocError, wrapError } from '../core/errors';
 import {
     getAsset,
@@ -27,6 +50,7 @@ import type {
     PdfGenerateOptions,
     PdfImageElement,
     PdfPageSize,
+    PdfPathSegment,
     PdfRun,
     PdfRunsElement,
     PdfTableCell,
@@ -316,6 +340,38 @@ function topCursor(ctx: DrawContext, elementY = 0): number {
     return ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : ctx.originY + elementY;
 }
 
+/**
+ * 绘制一段文本（必要时合成粗体）
+ *
+ * 只内嵌了 regular 字形时没有真正的粗体（PDF 也没有描边加粗的能力），
+ * 这里按 1/24 em 把同一字形偏移重画一次，等价于浏览器对无粗体字形字体
+ * 的合成粗体（font-weight: 700），字重观感更接近原稿。
+ */
+function drawTextStyled(
+    ctx: DrawContext,
+    text: string,
+    options: { x: number; y: number; size: number; font: PDFFont; color: RGB; bold?: boolean }
+): void {
+    const page = currentPage(ctx);
+    if (options.bold && ctx.fonts.bold === ctx.fonts.normal) {
+        const dx = options.size * 0.042;
+        page.drawText(text, {
+            x: options.x + dx,
+            y: options.y,
+            size: options.size,
+            font: options.font,
+            color: options.color
+        });
+    }
+    page.drawText(text, {
+        x: options.x,
+        y: options.y,
+        size: options.size,
+        font: options.font,
+        color: options.color
+    });
+}
+
 /** 在页面上绘制文本（含换行与对齐），返回占用高度 */
 function drawTextElement(
     ctx: DrawContext,
@@ -364,12 +420,13 @@ function drawTextElement(
             localY = ctx.flow.marginTop + ctx.flow.cursorY;
         }
 
-        currentPage(ctx).drawText(line, {
+        drawTextStyled(ctx, line, {
             x,
             // 顶部原点 -> pdf-lib 左下原点
             y: ctx.pageHeight - localY - size,
             size,
             font,
+            bold,
             color: parseColor(element.color, ctx.defaultColor)
         });
         if (ctx.flow) ctx.flow.cursorY += lineHeight;
@@ -405,7 +462,6 @@ function measureRun(ctx: DrawContext, run: PdfRun, text: string, size: number): 
  */
 function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
     const size = element.size ?? ctx.defaultSize;
-    const lineHeight = (element.lineHeight ?? 1.35) * size;
     const indentLeft = element.indentLeft ?? 0;
     const indentRight = element.indentRight ?? 0;
     const firstIndent = element.indentFirstLine ?? 0;
@@ -463,20 +519,24 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
         flushWord();
     }
 
-    /** 一行：片段序列 + 是否首行（首行缩进收窄可用宽） */
+    /** 一行：片段序列 + 是否首行（首行缩进收窄可用宽）+ 该行字号 */
     interface Line {
         pieces: Piece[];
         first: boolean;
+        /** 该行的最大字号（run 自带字号优先），行高按它计算 */
+        size: number;
     }
     const lines: Line[] = [];
     let line: Piece[] = [];
     let lineWidth = 0;
     let lineFirst = true;
+    let lineSize = size;
     const pushLine = () => {
-        lines.push({ pieces: line, first: lineFirst });
+        lines.push({ pieces: line, first: lineFirst, size: lineSize });
         line = [];
         lineWidth = 0;
         lineFirst = false;
+        lineSize = size;
     };
     const tabStops = element.tabStops?.length
         ? [...element.tabStops].sort((a, b) => (a.pos ?? Infinity) - (b.pos ?? Infinity))
@@ -495,6 +555,7 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
         }
         line.push(piece);
         lineWidth += w;
+        lineSize = Math.max(lineSize, piece.run.size ?? size);
     }
     pushLine();
 
@@ -560,11 +621,12 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
                         color: bg
                     });
                 }
-                currentPage(ctx).drawText(p.text, {
+                drawTextStyled(ctx, p.text, {
                     x,
                     y: ctx.pageHeight - localY - rs,
                     size: rs,
                     font: fontForRun(ctx, p.run, rs),
+                    bold: p.run.bold,
                     color: p.run.link ? parseColor('#1565C0', ctx.defaultColor) : color
                 });
                 if (p.run.link) {
@@ -576,11 +638,12 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
                     });
                 }
             } else {
-                currentPage(ctx).drawText(p.text, {
+                drawTextStyled(ctx, p.text, {
                     x,
                     y: ctx.pageHeight - localY - rs,
                     size: rs,
                     font: fontForRun(ctx, p.run, rs),
+                    bold: p.run.bold,
                     color
                 });
             }
@@ -591,8 +654,33 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
     const startTop = topCursor(ctx, element.y ?? 0);
     let localY = startTop;
 
+    // 文本框整体旋转（PPTX 的文本框 rot）：绕框中心旋转，用变换矩阵实现。
+    // 框高未知时按首行位置退化处理（不旋转）。
+    const rotation = element.rotation ?? 0;
+    if (rotation && element.height) {
+        const rad = (rotation * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const cx = ctx.originX + (element.x ?? 0) + indentLeft + width / 2;
+        const cy = ctx.pageHeight - startTop - element.height / 2;
+        ctx.page.pushOperators(
+            pushGraphicsState(),
+            concatTransformationMatrix(
+                cos,
+                sin,
+                -sin,
+                cos,
+                cx - cx * cos + cy * sin,
+                cy - cx * sin - cy * cos
+            )
+        );
+    }
+
     for (let i = 0; i < lines.length; i++) {
         const l = lines[i];
+        // 行高按该行实际字号计算（run 自带字号时不能用元素默认字号，
+        // 否则大字号折行后的行距会过小、行与行叠在一起）
+        const lineHeight = (element.lineHeight ?? 1.35) * l.size;
         if (ctx.flow) {
             // widow/orphan：首行不独留页尾（orphan）、末行不独留页首（widow）
             if (i === 0 && lines.length > 1) ctx.flow.ensure(Math.min(2, lines.length) * lineHeight);
@@ -604,6 +692,7 @@ function drawRunsElement(ctx: DrawContext, element: PdfRunsElement): number {
         if (ctx.flow) ctx.flow.cursorY += lineHeight;
         localY += lineHeight;
     }
+    if (rotation && element.height) ctx.page.pushOperators(popGraphicsState());
 
     const used = (ctx.flow ? ctx.flow.marginTop + ctx.flow.cursorY : localY) - startTop;
     // 段后间距在 flow 模式下由自动分页循环统一进给，不占元素内容高
@@ -881,6 +970,110 @@ function spacingAfterOf(element: PdfElement): number {
     return el.spacingAfter ?? 0;
 }
 
+/**
+ * 圆角矩形 / 椭圆的路径（PDF 坐标系，y 向上）
+ *
+ * pdf-lib 没有圆角矩形与椭圆 API（drawSvgPath 在 1.17 里也不可用），
+ * 这里用三次贝塞尔曲线逼近圆弧：控制点系数 k = 4/3·(√2−1) ≈ 0.5523。
+ */
+const BEZIER_K = 0.5523;
+
+/** 圆角矩形路径段 */
+function roundedRectPath(x: number, y: number, w: number, h: number, r: number): PdfPathSegment[] {
+    const k = BEZIER_K * r;
+    return [
+        { op: 'm', args: [x + r, y] },
+        { op: 'l', args: [x + w - r, y] },
+        { op: 'c', args: [x + w - r + k, y, x + w, y + r - k, x + w, y + r] },
+        { op: 'l', args: [x + w, y + h - r] },
+        { op: 'c', args: [x + w, y + h - r + k, x + w - r + k, y + h, x + w - r, y + h] },
+        { op: 'l', args: [x + r, y + h] },
+        { op: 'c', args: [x + r - k, y + h, x, y + h - r + k, x, y + h - r] },
+        { op: 'l', args: [x, y + r] },
+        { op: 'c', args: [x, y + r - k, x + r - k, y, x + r, y] },
+        { op: 'h', args: [] }
+    ];
+}
+
+/** 椭圆路径段（顺时针四段四分之一圆弧） */
+function ellipsePath(x: number, y: number, w: number, h: number): PdfPathSegment[] {
+    const rx = w / 2;
+    const ry = h / 2;
+    const cx = x + rx;
+    const cy = y + ry;
+    const kx = BEZIER_K * rx;
+    const ky = BEZIER_K * ry;
+    return [
+        { op: 'm', args: [cx + rx, cy] },
+        { op: 'c', args: [cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry] },
+        { op: 'c', args: [cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy] },
+        { op: 'c', args: [cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry] },
+        { op: 'c', args: [cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy] },
+        { op: 'h', args: [] }
+    ];
+}
+
+/**
+ * 裁剪路径 -> PDF 操作符
+ *
+ * 路径坐标为元素坐标系（原点在内容区左上、y 向下），这里翻转到 PDF 的 y 向上坐标系。
+ */
+function clipPathOperators(ctx: DrawContext, segments: PdfPathSegment[]) {
+    const ops = [];
+    const px = (v: number) => ctx.originX + v;
+    const py = (v: number) => ctx.pageHeight - ctx.originY - v;
+    for (const seg of segments) {
+        if (seg.op === 'm') ops.push(moveTo(px(seg.args[0]), py(seg.args[1])));
+        else if (seg.op === 'l') ops.push(lineTo(px(seg.args[0]), py(seg.args[1])));
+        else if (seg.op === 'c')
+            ops.push(
+                appendBezierCurve(
+                    px(seg.args[0]),
+                    py(seg.args[1]),
+                    px(seg.args[2]),
+                    py(seg.args[3]),
+                    px(seg.args[4]),
+                    py(seg.args[5])
+                )
+            );
+        else ops.push(closePath());
+    }
+    return ops;
+}
+
+/** 用路径段绘制形状（填充 / 描边） */
+function drawBezierShape(
+    ctx: DrawContext,
+    options: { color?: RGB; borderColor?: RGB; borderWidth?: number; opacity?: number },
+    segments: PdfPathSegment[]
+): void {
+    const ops = [];
+    for (const seg of segments) {
+        if (seg.op === 'm') ops.push(moveTo(seg.args[0], seg.args[1]));
+        else if (seg.op === 'l') ops.push(lineTo(seg.args[0], seg.args[1]));
+        else if (seg.op === 'c') ops.push(appendBezierCurve(seg.args[0], seg.args[1], seg.args[2], seg.args[3], seg.args[4], seg.args[5]));
+        else ops.push(closePath());
+    }
+    const alpha = options.opacity !== undefined ? Math.max(0, Math.min(1, options.opacity)) : 1;
+    if (options.color) {
+        // 半透明填充：PDF 图形状态没有直接的透明度参数，用 ExtGState（/ca）
+        if (alpha < 1) {
+            const gs = ctx.doc.context.obj({ Type: 'ExtGState', ca: alpha, CA: alpha });
+            const key = ctx.page.node.newExtGState('GS', gs);
+            ops.push(pushGraphicsState(), setGraphicsState(key));
+        }
+        ops.push(setFillingColor(options.color));
+        ops.push(fill());
+        if (alpha < 1) ops.push(popGraphicsState());
+    }
+    if (options.borderColor) {
+        ops.push(setStrokingColor(options.borderColor));
+        ops.push(setLineWidth(options.borderWidth ?? 1));
+        ops.push(stroke());
+    }
+    ctx.page.pushOperators(...ops);
+}
+
 /** 绘制单个元素，返回占用高度 */
 async function drawElement(ctx: DrawContext, element: PdfElement): Promise<number> {
     switch (element.type) {
@@ -917,6 +1110,24 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
             return total;
         }
 
+        case 'group': {
+            // 裁剪路径 + 子元素：渐变条带限制在形状轮廓内（PDF 无原生渐变）
+            const clipPath = element.clip;
+            if (clipPath?.length) {
+                ctx.page.pushOperators(
+                    pushGraphicsState(),
+                    ...clipPathOperators(ctx, clipPath),
+                    clip(),
+                    endPath()
+                );
+            }
+            for (const child of element.children) {
+                await drawElement(ctx, child);
+            }
+            if (clipPath?.length) ctx.page.pushOperators(popGraphicsState());
+            return 0;
+        }
+
         case 'rect': {
             const y = ctx.originY + element.y;
             const options = {
@@ -926,33 +1137,46 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
                 height: element.height,
                 color: element.fill ? parseColor(element.fill) : undefined,
                 borderColor: element.stroke ? parseColor(element.stroke) : undefined,
-                borderWidth: element.stroke ? element.lineWidth ?? 1 : 0
+                borderWidth: element.stroke ? element.lineWidth ?? 1 : 0,
+                opacity: element.opacity !== undefined ? Math.max(0, Math.min(1, element.opacity)) : undefined
             };
-            if (element.radius && element.radius > 0) {
-                // pdf-lib 没有圆角矩形 API，用 SVG path 绘制
-                const { page, pageHeight, originX, originY } = ctx;
+            // 绕自身中心旋转：PDF 图形状态没有直接的旋转参数，用变换矩阵实现
+            const rotation = element.rotation ?? 0;
+            if (rotation) {
+                const rad = (rotation * Math.PI) / 180;
+                const cos = Math.cos(rad);
+                const sin = Math.sin(rad);
+                const cx = options.x + element.width / 2;
+                const cy = options.y + element.height / 2;
+                ctx.page.pushOperators(
+                    pushGraphicsState(),
+                    concatTransformationMatrix(
+                        cos,
+                        sin,
+                        -sin,
+                        cos,
+                        cx - cx * cos + cy * sin,
+                        cy - cx * sin - cy * cos
+                    )
+                );
+            }
+            if (element.ellipse) {
+                // 椭圆：pdf-lib 没有椭圆 API，用贝塞尔曲线拼四段圆弧
+                const { pageHeight, originX, originY } = ctx;
                 const px = originX + element.x;
-                const py = pageHeight - y - element.height;
+                const py = pageHeight - originY - element.y - element.height;
+                drawBezierShape(ctx, options, ellipsePath(px, py, element.width, element.height));
+            } else if (element.radius && element.radius > 0) {
+                // 圆角矩形：pdf-lib 没有圆角 API，同样用贝塞尔曲线拼四段圆角
+                const { pageHeight, originX, originY } = ctx;
+                const px = originX + element.x;
+                const py = pageHeight - originY - element.y - element.height;
                 const r = Math.min(element.radius, element.width / 2, element.height / 2);
-                const path = [
-                    `M ${px + r} ${py}`,
-                    `L ${px + element.width - r} ${py}`,
-                    `A ${r} ${r} 0 0 1 ${px + element.width} ${py + r}`,
-                    `L ${px + element.width} ${py + element.height - r}`,
-                    `A ${r} ${r} 0 0 1 ${px + element.width - r} ${py + element.height}`,
-                    `L ${px + r} ${py + element.height}`,
-                    `A ${r} ${r} 0 0 1 ${px} ${py + element.height - r}`,
-                    `L ${px} ${py + r}`,
-                    `A ${r} ${r} 0 0 1 ${px + r} ${py}`
-                ].join(' ');
-                page.drawSvgPath(path, {
-                    borderColor: options.borderColor,
-                    borderWidth: options.borderWidth,
-                    color: options.color
-                });
+                drawBezierShape(ctx, options, roundedRectPath(px, py, element.width, element.height, r));
             } else {
                 ctx.page.drawRectangle(options);
             }
+            if (rotation) ctx.page.pushOperators(popGraphicsState());
             return element.height;
         }
 
@@ -965,12 +1189,36 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
                 const width = element.width ?? image.width;
                 const height = element.height ?? image.height;
                 if (ctx.flow) ctx.flow.ensure(height);
+                // 裁剪（PPTX a:srcRect）：把源图按裁剪窗口放大绘制，再用裁剪路径
+                // 限制在原框内 —— 不用裁剪就只能看到源图全貌，边缘内容会多出来
+                const crop = element.crop;
+                const cl = Math.max(0, crop?.l ?? 0);
+                const cr = Math.max(0, crop?.r ?? 0);
+                const ct = Math.max(0, crop?.t ?? 0);
+                const cb = Math.max(0, crop?.b ?? 0);
+                const cropped = cl + cr < 0.99 && ct + cb < 0.99;
+                const drawW = cropped ? width / Math.max(0.01, 1 - cl - cr) : width;
+                const drawH = cropped ? height / Math.max(0.01, 1 - ct - cb) : height;
+                const drawX = (element.x ?? 0) - (cropped ? cl * drawW : 0);
+                const drawTop = topCursor(ctx, element.y ?? 0) - (cropped ? ct * drawH : 0);
+                if (cropped) {
+                    // 裁剪窗口 = 原框
+                    const clipX = ctx.originX + (element.x ?? 0);
+                    const clipY = ctx.pageHeight - topCursor(ctx, element.y ?? 0) - height;
+                    ctx.page.pushOperators(
+                        pushGraphicsState(),
+                        rectangle(clipX, clipY, width, height),
+                        clip(),
+                        endPath()
+                    );
+                }
                 currentPage(ctx).drawImage(image, {
-                    x: ctx.originX + (element.x ?? 0),
-                    y: ctx.pageHeight - topCursor(ctx, element.y ?? 0) - height,
-                    width,
-                    height
+                    x: ctx.originX + drawX,
+                    y: ctx.pageHeight - drawTop - drawH,
+                    width: drawW,
+                    height: drawH
                 });
+                if (cropped) ctx.page.pushOperators(popGraphicsState());
                 if (ctx.flow) ctx.flow.cursorY += height;
                 return height;
             } catch {

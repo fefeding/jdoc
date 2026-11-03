@@ -271,6 +271,8 @@ export interface PdfRunsElement {
     align?: PdfAlign;
     /** 文本框宽度（pt），缺省用内容区宽度 */
     width?: number;
+    /** 文本框高度（pt）：仅在需要按框中心旋转时使用 */
+    height?: number;
     /** 行高倍数，默认 1.35 */
     lineHeight?: number;
     /** 段后间距（pt），默认 4 */
@@ -285,6 +287,8 @@ export interface PdfRunsElement {
     indentFirstLine?: number;
     /** 制表位（pos 相对段落左边缘），用于目录「文本 …… 页码」排版 */
     tabStops?: PdfTabStop[];
+    /** 绕文本框中心旋转（度，逆时针为正） */
+    rotation?: number;
 }
 
 /** 标题元素 */
@@ -308,6 +312,13 @@ export interface PdfImageElement {
     y?: number;
     width?: number;
     height?: number;
+    /**
+     * 源图裁剪比例（0~1，表示从各边裁掉的比例）
+     *
+     * PPTX 的「图片裁剪」（a:srcRect）会让同一张图在幻灯片上只显示一部分。
+     * 生成端按裁剪窗口放大绘制并用裁剪路径限制在框内。
+     */
+    crop?: { l?: number; r?: number; t?: number; b?: number };
 }
 
 /** 线段元素 */
@@ -356,6 +367,39 @@ export interface PdfRectElement {
     lineWidth?: number;
     /** 圆角半径（pt） */
     radius?: number;
+    /** 绘制椭圆（而非矩形）；宽高不等时为真正的椭圆 */
+    ellipse?: boolean;
+    /** 绕自身中心旋转（度，顺时针）；PDF 生成端用变换矩阵实现 */
+    rotation?: number;
+    /** 填充不透明度（0~1，缺省 1）：用于渐变停点的透明度 */
+    opacity?: number;
+}
+
+/**
+ * 路径段（贝塞尔路径）
+ *
+ * 坐标为「元素坐标系」：原点在内容区左上角、y 轴向下（与 rect 元素的
+ * x/y/width/height 同一坐标系），生成端绘制时再翻转到 PDF 的 y 向上坐标系。
+ */
+export interface PdfPathSegment {
+    /** m=移动到 / l=直线 / c=三次贝塞尔（6 个参数）/ h=闭合 */
+    op: 'm' | 'l' | 'c' | 'h';
+    args: number[];
+}
+
+/**
+ * 组合元素：先按裁剪路径裁剪，再绘制子元素
+ *
+ * PPTX 的渐变填充在圆角 / 椭圆形状上需要「渐变 + 轮廓」同时表达：
+ * 渐变只能用纯色条带近似（PDF 无原生渐变），条带必须被裁剪在形状轮廓内，
+ * 否则会溢出成矩形。裁剪路径为元素坐标系下的贝塞尔路径。
+ */
+export interface PdfGroupElement {
+    type: 'group';
+    /** 裁剪路径（元素坐标系）；缺省则不裁剪 */
+    clip?: PdfPathSegment[];
+    /** 子元素（坐标为页面绝对坐标，与 rect 元素一致） */
+    children: PdfElement[];
 }
 
 /**
@@ -420,6 +464,7 @@ export type PdfElement =
     | PdfLineElement
     | PdfHrElement
     | PdfRectElement
+    | PdfGroupElement
     | PdfTableElement
     | PdfPageBreakElement;
 
