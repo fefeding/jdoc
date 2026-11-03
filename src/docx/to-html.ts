@@ -54,6 +54,8 @@ export function runToHtml(run: DocxRun): string {
     if (run.highlight) styles.push(`background-color:${run.highlight}`);
 
     let text = escapeWithBreaks(run.text);
+    // 行内代码：用 <code> 语义标签（PDF 里字号更小的片段会被标成 code）
+    if (run.code) text = `<code>${text}</code>`;
     if (run.bold) text = `<strong>${text}</strong>`;
     if (run.italic) text = `<em>${text}</em>`;
     if (run.underline) text = `<u>${text}</u>`;
@@ -400,6 +402,9 @@ export const DOCX_HTML_STYLE = `.docx-body{font-family:-apple-system,BlinkMacSys
 /* 列数多的宽表（Excel 尤其常见）不撑破纸张，自己在纸内横向滚动 */
 .docx-table-wrap{overflow-x:auto;max-width:100%}
 .docx-body pre{white-space:pre-wrap;word-break:break-word}
+/* 行内代码（PDF 里用更小字号排版的片段） */
+.docx-body code{font-family:Consolas,Menlo,"Courier New",monospace;background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:.92em}
+.docx-body pre code{background:none;padding:0;font-size:inherit}
 .docx-body img{max-width:100%}
 /* max-width + box-sizing：Word 文本框宽度按原样照搬，可能比纸张内容区还宽
    （A4 兜底纸张时尤其明显），不收敛就会把整页撑出横向滚动条 */

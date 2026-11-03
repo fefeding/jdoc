@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Document</title>
+<style>html,body{margin:0;padding:0;background:#eef0f3}
+body{padding:24px 12px}
+/* body > 提高优先级：片段自带样式表在其后输出，同名的 .docx-page 规则会赢 */
+body > .docx-page{margin:0 auto;max-width:100%}
+@media print{html,body{background:#fff;padding:0}body > .docx-page{margin:0;box-shadow:none;width:auto!important;min-height:auto;padding:0}}</style>
+</head>
+<body>
+<style>.docx-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;font-size:11pt;line-height:1.6;color:#1f2328;overflow-wrap:break-word}
+/* max-width 兜底：容器比纸窄时先自适应，缩放脚本（独立文档里才有）会按纸宽整页缩放 */
+.docx-page{background:#fff;margin:24px auto;box-shadow:0 1px 6px rgba(0,0,0,.2);box-sizing:border-box;max-width:100%}
+.docx-body h1,.docx-body h2,.docx-body h3,.docx-body h4,.docx-body h5,.docx-body h6{font-weight:700;line-height:1.35;color:#1f2328;break-after:avoid}
+.docx-body h1{font-size:20pt;margin:22px 0 12px}
+.docx-body h2{font-size:16pt;margin:20px 0 10px}
+.docx-body h3{font-size:14pt;margin:18px 0 9px}
+.docx-body h4{font-size:12.5pt;margin:16px 0 8px}
+.docx-body h5,.docx-body h6{font-size:11.5pt;margin:14px 0 7px;font-weight:600}
+.docx-h-num{margin-right:.45em;white-space:nowrap}
+.docx-body p{margin:0}
+/* 顶层段落的兜底间距：PDF / Markdown 来源没有段前段后值，不给就是一整坨连排
+   （docx 段落带内联 margin，优先级更高，不受这条影响；单元格里的 p 非直接子元素） */
+.docx-body > p{margin:0 0 6pt}
+.docx-body blockquote{margin:8px 0;padding:4px 12px;border-left:3px solid #d0d7de;color:#57606a}
+.docx-body table{margin:10px 0;font-size:10.5pt}
+.docx-body th{background:#f6f8fa;font-weight:600}
+/* 图表：SVG 按纸宽自适应缩放（viewBox + 百分比宽度），高度按原始比例 */
+.docx-chart svg{width:100%;height:auto;max-width:100%}
+/* 列数多的宽表（Excel 尤其常见）不撑破纸张，自己在纸内横向滚动 */
+.docx-table-wrap{overflow-x:auto;max-width:100%}
+.docx-body pre{white-space:pre-wrap;word-break:break-word}
+/* 行内代码（PDF 里用更小字号排版的片段） */
+.docx-body code{font-family:Consolas,Menlo,"Courier New",monospace;background:#f3f4f6;padding:1px 4px;border-radius:3px;font-size:.92em}
+.docx-body pre code{background:none;padding:0;font-size:inherit}
+.docx-body img{max-width:100%}
+/* max-width + box-sizing：Word 文本框宽度按原样照搬，可能比纸张内容区还宽
+   （A4 兜底纸张时尤其明显），不收敛就会把整页撑出横向滚动条 */
+.docx-textbox{margin:8px 0;font-size:10pt;line-height:1.45;max-width:100%;box-sizing:border-box}
+.docx-textbox p{margin:0}
+.docx-toc{margin:6px 0 14px}
+.docx-toc-row{display:flex;align-items:baseline;gap:.3em;padding:2px 0;line-height:1.5}
+.docx-toc-row[data-level="1"]{font-weight:600;margin-top:4px}
+.docx-toc-row[data-level="2"]{padding-left:1.6em}
+.docx-toc-row[data-level="3"]{padding-left:3.2em;font-size:.95em}
+.docx-toc-text{white-space:pre}
+.docx-toc-dots{flex:1 1 auto;border-bottom:1px dotted currentColor;opacity:.45;transform:translateY(-.28em);min-width:1.5em}
+.docx-toc-page{white-space:nowrap}
+</style><div class="docx-page" style="width:210mm;min-height:297mm;padding:20mm 18mm"><div class="docx-body"><h1>前端编码规范</h1>
+<p>本规范以「能用工具约束的，尽量用工具约束」为原则。本文在原有规范基础上，融合团队 <span style="font-family:Consolas"><code>prd-to-ui</code></span> 技能（H5 / Web 前端最佳实践）做了统一与现代化，并标出与后端规范存在冲突、需团队对齐的点。</p>
+<h2>0. 适用栈与参考</h2>
+<ul><li>框架：Vue 3（Composition API + <span style="font-family:Consolas"><code>&lt;script setup&gt; </code></span>）</li><li>语言：TypeScript（严格模式，禁止 <span style="font-family:Consolas"><code>any </code></span>）</li><li>构建：Vite；类型检查 <span style="font-family:Consolas"><code>vue-tsc</code></span></li><li>样式：SCSS + BEM（公共组件）/ kebab-case（页面 scoped）</li><li>关联技能：</li><li>H5 页面生成： <span style="font-family:Consolas"><code>prd-to-ui/h5/ </code></span>（固定骨架、组件配方、视觉系统）</li><li>Web 前端： <span style="font-family:Consolas"><code>prd-to-ui/web/coding-standards.md</code></span></li><li>总入口： <span style="font-family:Consolas"><code>prd-to-ui/SKILL.md</code></span></li></ul>
+<h2>1. 工具链</h2>
+<p>代码编辑器建议用 VSCode。用 Prettier 管格式、ESLint 管语法与逻辑。</p>
+<h4>1.1 依赖安装</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> # 基础依赖
+npm i -D prettier eslint eslint-config-prettier eslint-plugin-prettier
+# TypeScript
+npm i -D typescript @typescript-eslint/eslint-plugin @typescript-eslint/parser
+# Vue 3
+npm i -D eslint eslint-plugin-vue</code></pre>
+<p>旧规范里 <span style="font-family:Consolas"><code>npm install --save-dev xxx -D </code></span>写法冗余（ <span style="font-family:Consolas"><code>--save-dev </code></span>与 <span style="font-family:Consolas"><code>-D </code></span>二选一即可），已统一为 <span style="font-family:Consolas"><code>-D </code></span>。</p>
+<h4>1.2 推荐插件</h4>
+<ul><li>Prettier - Code formatter： <span style="font-family:Consolas"><code>esbenp.prettier-vscode</code></span></li><li>ESLint： <span style="font-family:Consolas"><code>dbaeumer.vscode-eslint</code></span></li></ul>
+<ul><li>Vue Language Tools（Volar）： <span style="font-family:Consolas"><code>Vue.volar </code></span>（⚠️ 替代已停更的 Vetur，Vue 3 项目必须用 Volar）</li></ul>
+<p>旧规范推荐的 Vetur 已不再维护，Vue 3 项目请勿安装 Vetur，避免与 Volar 冲突。</p>
+<h4>1.3 Prettier 配置</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> module.exports = {
+    editorconfig: true,
+    printWidth: 100, // 优化：由 80 调整为 100，减少 Vue/TS 长行无谓换行（可按团队习惯在 80~
+    tabWidth: 4,
+    useTabs: false,
+    singleQuote: true,
+    semi: true,
+    trailingComma: &quot;es5&quot;,
+    bracketSpacing: true,
+    arrowParens: &quot;avoid&quot;,
+};</code></pre>
+<p>项目根目录 <span style="font-family:Consolas"><code>.prettierrc.js </code></span>：</p>
+<h4>1.4 ESLint 配置</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>module.exports = {
+   root: true,
+   env: { node: true, browser: true },
+   parser: &quot;vue-eslint-parser&quot;,
+   parserOptions: {
+       parser: &quot;@typescript-eslint/parser&quot;,
+       ecmaVersion: 2020,
+       sourceType: &quot;module&quot;,
+       ecmaFeatures: { jsx: true },
+   },
+   extends: [
+       &quot;plugin:@typescript-eslint/recommended&quot;,
+       &quot;plugin:vue/recommended&quot;, // 已含 essential/strongly-recommended，无需重复列
+       &quot;prettier&quot;, // 关闭所有与 prettier 冲突的规则
+       &quot;prettier/@typescript-eslint&quot;,
+       &quot;prettier/vue&quot;,
+   ],
+   plugins: [&quot;prettier&quot;, &quot;@typescript-eslint&quot;],
+   rules: {
+       &quot;prettier/prettier&quot;: &quot;warn&quot;,
+       &quot;@typescript-eslint/no-explicit-any&quot;: &quot;warn&quot;, // 配合“禁止 any”规范</code></pre>
+<p>项目根目录 <span style="font-family:Consolas"><code>.eslintrc.js </code></span>：</p>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>        &quot;vue/multi-word-component-names&quot;: &quot;off&quot;, // 如项目需要单单词组件名可关闭
+    },
+    overrides: [
+        {
+            files: [&quot;**/__tests__/*.{j,t}s?(x)&quot;, &quot;**/tests/unit/**/*.spec.{j,t}s?(x)&quot;],
+            env: { jest: true },
+        },
+    ],
+};</code></pre>
+<p>说明：旧规范的 <span style="font-family:Consolas"><code>extends </code></span>同时列了 <span style="font-family:Consolas"><code>essential </code></span>/ <span style="font-family:Consolas"><code>strongly-recommended </code></span>/ <span style="font-family:Consolas"><code>recommended </code></span>（ <span style="font-family:Consolas"><code>recommended</code></span> 已包含前两者，属冗余）； <span style="font-family:Consolas"><code>prettier/standard </code></span>等 <span style="font-family:Consolas"><code>prettier/* </code></span>子配置在 eslint-config-prettier v8+ 已并入 <span style="font-family:Consolas"><code>prettier </code></span>，保留 <span style="font-family:Consolas"><code>@typescript-eslint </code></span>、 <span style="font-family:Consolas"><code>vue </code></span>子项即可。若后续升级 ESLint 9，请迁移到 flat config（ <span style="font-family:Consolas"><code>eslint.config.js </code></span>）。</p>
+<h4>1.5 VSCode 配置</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> {
+    &quot;files.eol&quot;: &quot;\n&quot;,
+    &quot;editor.tabSize&quot;: 4,
+    &quot;editor.formatOnSave&quot;: true,
+    &quot;editor.defaultFormatter&quot;: &quot;esbenp.prettier-vscode&quot;,
+    &quot;eslint.validate&quot;: [&quot;javascript&quot;, &quot;javascriptreact&quot;, &quot;vue&quot;, &quot;typescript&quot;, &quot;typescriptreact&quot;],
+    &quot;editor.codeActionsOnSave&quot;: {
+        &quot;source.fixAll.eslint&quot;: true
+    }
+}</code></pre>
+<p>全局或项目 <span style="font-family:Consolas"><code>.vscode/settings.json </code></span>： VSCode 配置已覆盖 <span style="font-family:Consolas"><code>.editorconfig </code></span>大部分能力；若团队中有非 VSCode 用户，建议额外加一个根目录 <span style="font-family:Consolas"><code>.editorconfig </code></span>（UTF-8 / LF / 4 空格 / 末尾换行），保证跨编辑器一致。</p>
+<h4>1.6 Git 提交门禁（Husky + lint-staged + commitlint）</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>{
+   &quot;scripts&quot;: {
+       &quot;lint&quot;: &quot;eslint . --ext .js,.ts,.vue&quot;,
+       &quot;lint:fix&quot;: &quot;eslint . --ext .js,.ts,.vue --fix&quot;,
+       &quot;type-check&quot;: &quot;vue-tsc --noEmit&quot;,
+       &quot;build&quot;: &quot;vue-tsc --noEmit &amp;&amp; vite build&quot;</code></pre>
+<p><span style="font-family:Consolas"><code>package.json </code></span>关键片段：</p>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>    },
+    &quot;lint-staged&quot;: {
+        &quot;*.{ts,tsx,vue}&quot;: [&quot;eslint --fix&quot;, &quot;prettier --write&quot;],
+        &quot;*.{ts,tsx,vue}&quot;: [&quot;vue-tsc --noEmit&quot;]
+    }
+}</code></pre>
+<p>⚠️ 质量门禁： <span style="font-family:Consolas"><code>npm run dev </code></span>不会报 TS 类型错误，交付前必须 <span style="font-family:Consolas"><code>npm run build </code></span>（含 <span style="font-family:Consolas"><code>vue-tsc</code></span> <span style="font-family:Consolas"><code>--noEmit </code></span>）零错误通过。</p>
+<h2>2. 命名规范</h2>
+<p>好命名应「一致 + 信息丰富」：同样含义在不同文件/路由/Prop 间保持一致；用词无二义性。</p>
+<h4>2.1 命名分类</h4>
+<ul><li><span style="font-family:Consolas"><code>camelCase </code></span>（小驼峰）： <span style="font-family:Consolas"><code>userInfo</code></span></li><li><span style="font-family:Consolas"><code>PascalCase </code></span>（大驼峰）： <span style="font-family:Consolas"><code>UserInfo</code></span></li><li><span style="font-family:Consolas"><code>kebab-case </code></span>（短横线）： <span style="font-family:Consolas"><code>user-info</code></span></li><li><span style="font-family:Consolas"><code>snake_case </code></span>（下划线）： <span style="font-family:Consolas"><code>user_info</code></span></li><li><span style="font-family:Consolas"><code>UPPER_SNAKE_CASE </code></span>（常量）： <span style="font-family:Consolas"><code>MAX_RETRY_COUNT</code></span></li></ul>
+<h4>2.2 场景</h4>
+<p>大驼峰（PascalCase）</p>
+<ul><li>Vue 组件文件名与其默认导出保持一致，如 <span style="font-family:Consolas"><code>CoolComponent.vue </code></span>。</li><li>template 中使用组件也用 PascalCase：</li></ul>
+<p><span style="font-family:Consolas"><code>&lt;CoolComponent /&gt;</code></span></p>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>    &lt;cool-component /&gt;
+&lt;/template&gt;
+&lt;script setup lang=&quot;ts&quot;&gt;
+import CoolComponent from &quot;./CoolComponent.vue&quot;;
+&lt;/script&gt;</code></pre>
+<p><span style="font-family:Consolas"><code>&lt;template&gt;</code></span> <span style="font-family:Consolas"><code>&lt;!-- ✓ GOOD --&gt;</code></span> <span style="font-family:Consolas"><code>&lt;!-- ✗ BAD --&gt;</code></span></p>
+<p>例外：eggjs 中 controller/service 虽为 Class，但使用时是实例化对象，用</p>
+<p><span style="font-family:Consolas"><code>ctx.service.dataMid.getData() </code></span>，对应文件名 <span style="font-family:Consolas"><code>dataMid.ts </code></span>。 小驼峰（camelCase）</p>
+<ul><li>变量、普通函数、TS 文件（ <span style="font-family:Consolas"><code>financial.ts </code></span>、 <span style="font-family:Consolas"><code>request.ts </code></span>）、类型文件（ <span style="font-family:Consolas"><code>fund.ts </code></span>）。</li></ul>
+<p>短横线（kebab-case）</p>
+<ol><li>页面目录、路由 path、路由 name：如 <span style="font-family:Consolas"><code>fund-detail/ </code></span>、 <span style="font-family:Consolas"><code>path: &#39;/fund-detail&#39; </code></span>、 <span style="font-family:Consolas"><code>name: &#39;fund-detail&#39; </code></span>。</li></ol>
+<p>2. 非 JS/TS 资源与类名：静态资源（字体/css/scss/html）、HTML 属性、CSS class 名。</p>
+<p>依据 SEO 实践：URL 中 <span style="font-family:Consolas"><code>- </code></span>被搜索引擎当作空格，利于分词检索； <span style="font-family:Consolas"><code>_ </code></span>（如 tars 协议）会被忽略。故路由与页面目录用短横线。</p>
+<ol><li>自定义事件名：</li></ol>
+<p><span style="font-family:Consolas"><code>&lt;button @click=&quot;$emit(&#39;my-event&#39;)&quot; /&gt;</code></span></p>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code>    &lt;button @click=&quot;$emit(&#39;myEvent&#39;)&quot; /&gt;
+&lt;/template&gt;</code></pre>
+<p><span style="font-family:Consolas"><code>&lt;template&gt;</code></span> <span style="font-family:Consolas"><code>&lt;!-- ✓ GOOD --&gt;</code></span> <span style="font-family:Consolas"><code>&lt;!-- ✗ BAD --&gt;</code></span> ⚠️ 与旧规范的衔接：旧规范「页面级组件、路由名都用短横线」指路由与目录，不是 <span style="font-family:Consolas"><code>.vue</code></span> 文件名。组件文件仍用 PascalCase，目录/路由用 kebab-case，二者不冲突。 下划线（snake_case） 仅用于「需与后端协议/数据库保持一致」处：如 tars 协议接口、DB 列名（ <span style="font-family:Consolas"><code>user_name </code></span>）。 常量 <span style="font-family:Consolas"><code>UPPER_SNAKE_CASE </code></span>： <span style="font-family:Consolas"><code>API_BASE_URL </code></span>、 <span style="font-family:Consolas"><code>MAX_AMOUNT </code></span>。</p>
+<h4>2.3 单复数【建议】</h4>
+<p>文件名用单数；目录下所有子元素平行且为同类时用复数目录名（如 <span style="font-family:Consolas"><code>components/ </code></span>、 <span style="font-family:Consolas"><code>pages/ </code></span>），否则用单数。</p>
+<h4>2.4 函数 / 方法命名</h4>
+<ul><li>普通函数： <span style="font-family:Consolas"><code>动词 + 名词 </code></span>，如 <span style="font-family:Consolas"><code>getList </code></span>、 <span style="font-family:Consolas"><code>formatAmount </code></span>、 <span style="font-family:Consolas"><code>fetchTradeInfo </code></span>。</li><li>事件处理函数：统一 <span style="font-family:Consolas"><code>handle </code></span>前缀（⚠️ 旧规范的 <span style="font-family:Consolas"><code>onXxx </code></span>为 Options API 遗留写法，新版统一用</li></ul>
+<p><span style="font-family:Consolas"><code>handle </code></span>）：</p>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> const handleSubmit = () =&gt; { /* ... */ };
+const handleTabChange = (tab: string) =&gt; { /* ... */ };</code></pre>
+<p>常用动词表（节选，保持旧规范）：等。 <span style="font-family:Consolas"><code>get/set </code></span>、 <span style="font-family:Consolas"><code>add/remove </code></span>、 <span style="font-family:Consolas"><code>create/destroy </code></span>、 <span style="font-family:Consolas"><code>load/save </code></span>、 <span style="font-family:Consolas"><code>open/close </code></span>、 <span style="font-family:Consolas"><code>find/search </code></span>、 <span style="font-family:Consolas"><code>update/re</code></span></p>
+<ul><li>页面跳转函数： <span style="font-family:Consolas"><code>goTo </code></span>前缀，如 <span style="font-family:Consolas"><code>goToDetail(id) </code></span>、 <span style="font-family:Consolas"><code>goToTrade() </code></span>。</li><li>布尔值： <span style="font-family:Consolas"><code>is </code></span>/ <span style="font-family:Consolas"><code>has </code></span>/ <span style="font-family:Consolas"><code>can </code></span>前缀，如 <span style="font-family:Consolas"><code>isLoading </code></span>、 <span style="font-family:Consolas"><code>hasPosition </code></span>、 <span style="font-family:Consolas"><code>canSubmit </code></span>。</li></ul>
+<h4>2.5 API 函数命名</h4>
+<div class="docx-table-wrap"><table style="border-collapse:collapse"><tr><th style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">操作</th><th style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">规范</th><th style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">示例</th></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">获取列表</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">get{Entity}List</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">getFundList</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">获取详情</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">get{Entity}Detail</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">getFundDetail</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">创建</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">create{Entity}</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">createOrder</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">更新</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">update{Entity}</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">updateFund</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">删除</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">delete{Entity}</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">deleteFund</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">业务操作</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{action}{Entity}</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">buyFund 、 sellFund</td></tr></table></div>
+<p><span style="font-family:Consolas"><code>更新 update{Entity} updateFund</code></span></p>
+<p><span style="font-family:Consolas"><code>获取详情 get{Entity}Detail getFundDetail</code></span> <span style="font-family:Consolas"><code>业务操作 {action}{Entity} buyFund 、 sellFund</code></span></p>
+<h4>3.1 统一响应结构（⚠️ 高频出错点）</h4>
+<div class="docx-table-wrap"><table style="border-collapse:collapse"><tr><th style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">❌ 错误</th><th style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">✅ 正确</th><th style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">说明</th></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ result: [...] }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ data: [...] }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">字段固定为 data</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ status: &#39;ok&#39; }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ ret: 0 }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">状态字段固定为 ret</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ code: 0 }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ ret: 0 }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">同上</td></tr><tr><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">裸数组 [...]</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">{ ret: 0, data: [...], msg: &#39;&#39; }</td><td style="border-top:1pt solid #cccccc;border-right:1pt solid #cccccc;border-bottom:1pt solid #cccccc;border-left:1pt solid #cccccc;padding:4px 6px">不能裸返回</td></tr></table></div>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> interface ApiResponse&lt;T&gt; {
+     data: T; // 业务数据（泛型）
+     msg: string; // 提示信息
+ }
+ { status: &#39;ok&#39; } { ret: 0 } 状态字段固定为 ret
+裸数组 [...] { ret: 0, data: [...], msg: &#39;&#39; } 不能裸返回</code></pre>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> { ret: 0, data: [...], msg: &#39;success&#39; } // 列表成功
+{ ret: 0, data: {...}, msg: &#39;success&#39; } // 详情成功
+{ ret: 0, data: null, msg: &#39;操作成功&#39; } // 写操作成功
+{ ret: 1, data: null, msg: &#39;数据不存在&#39; } // 失败</code></pre>
+<p>场景写法： ⚠️ 待团队对齐的冲突：后端 <span style="font-family:Consolas"><code>web/coding-standards.md </code></span>约定为 <span style="font-family:Consolas"><code>{ code, message, data } </code></span>，与前端 <span style="font-family:Consolas"><code>{ ret, data, msg }</code></span> 不一致。建议二选一（推荐前端 <span style="font-family:Consolas"><code>ret/data/msg </code></span>作为契约），或在 <span style="font-family:Consolas"><code>request</code></span> 封装层做一次字段适配，避免散落在业务代码里。</p>
+<h4>3.2 Service 入参</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> export async function getFundList(params: { keyword?: string; page?: number }): Promise&lt;Fund[]&gt; {
+    const res = await request&lt;Fund[]&gt;({ url: &#39;/api/fund/list&#39;, method: &#39;POST&#39;, data: params });
+    return res.data; // 注意从 res.data 取业务数据
+}</code></pre>
+<p>入参用对象，避免多散参：</p>
+<h4>3.3 Mock 数据</h4>
+<ul><li>Mock 直接写在 <span style="font-family:Consolas"><code>src/service/*.ts </code></span>顶部，每个实体 3~5 条真实格式数据。</li><li>用 <span style="font-family:Consolas"><code>delay(300) </code></span>模拟网络延迟，写操作 <span style="font-family:Consolas"><code>delay(500) </code></span>。</li><li>结构必须遵循 3.1 的 <span style="font-family:Consolas"><code>{ ret, data, msg } </code></span>。</li></ul>
+<h2>4. TypeScript 规范</h2>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> function formatAmount(amount: number, digits: number = 2): string {
+    return amount.toFixed(digits);
+}</code></pre>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> type TradeAction = &#39;buy&#39; | &#39;sell&#39;;
+const action = ref&lt;TradeAction&gt;(&#39;buy&#39;);</code></pre>
+<ul><li>禁止滥用 <span style="font-family:Consolas"><code>any </code></span>：能用具体类型就用，未知结构用 <span style="font-family:Consolas"><code>unknown </code></span>后收窄。</li><li>函数参数与返回值明确类型：</li><li>状态类型具体化：</li></ul>
+<ul><li>类型命名 PascalCase： <span style="font-family:Consolas"><code>interface FundOption </code></span>、 <span style="font-family:Consolas"><code>type RiskLevel </code></span>。</li><li><span style="font-family:Consolas"><code>interface </code></span>定义对象结构， <span style="font-family:Consolas"><code>type </code></span>定义联合/复杂类型。</li></ul>
+<h2>5. Vue 编码规范</h2>
+<h4>5.1 <span style="font-family:Consolas"><code>&lt;script setup&gt; </code></span>推荐结构顺序</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> &lt;script setup lang=&quot;ts&quot;&gt;
+// 1. 导入
+import { computed, onMounted, ref } from &#39;vue&#39;;
+import { CardSection, PageHeader } from &#39;@/components&#39;;
+// 2. 类型定义
+interface FundItem { id: string; name: string; }
+// 3. props / emits（类型化）
+const props = defineProps&lt;{ title: string }&gt;();
+const emit = defineEmits&lt;{ submit: [] }&gt;();
+// 4. 响应式状态
+const loading = ref(false);
+const list = ref&lt;FundItem[]&gt;([]);
+// 5. 计算属性
+const total = computed(() =&gt; list.value.length);
+// 6. 方法
+const handleSubmit = () =&gt; emit(&#39;submit&#39;);
+// 7. 生命周期
+onMounted(() =&gt; { /* init */ });
+&lt;/script&gt;</code></pre>
+<p>旧规范 <span style="font-family:Consolas"><code>defineProps({ title: String }) </code></span>写法仍可用，但推荐上面的类型化写法以获得完整类型推导。</p>
+<h4>5.2 Props / Emits 类型化</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> const props = defineProps&lt;{ title: string; count: number; disabled?: boolean }&gt;();
+const emit = defineEmits&lt;{ update: [value: number]; delete: [id: number] }&gt;();</code></pre>
+<h4>5.3 ref vs reactive</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> const user = reactive({ name: &#39;张三&#39;, age: 25 }); // ✓
+// const userName = ref(&#39;&#39;); const userAge = ref(0); // ✗ 过度使用 ref</code></pre>
+<ul><li>基础类型、单字段用 <span style="font-family:Consolas"><code>ref </code></span>。</li><li>多个相关字段的对象用 <span style="font-family:Consolas"><code>reactive </code></span>，避免一堆 <span style="font-family:Consolas"><code>ref </code></span>：</li></ul>
+<h4>5.4 组件复用（来自 prd-to-ui）</h4>
+<ul><li>优先用已有组件，禁止重复开发；统一从 <span style="font-family:Consolas"><code>@/components </code></span>导入。</li><li>不要发明不存在的组件名，缺组件先判断能否用现有组件组合解决。</li><li>H5 页面优先套「固定骨架 + 页面配方」（交易页 / 持仓页 / 详情页 / 列表页），详见</li></ul>
+<p><span style="font-family:Consolas"><code>prd-to-ui/h5/development-guidelines.md </code></span>。</p>
+<ul><li>确需新增组件：放 <span style="font-family:Consolas"><code>src/components/ </code></span>，TS 定义 Props，支持插槽，并在 <span style="font-family:Consolas"><code>index.ts </code></span>导出。</li></ul>
+<h4>5.5 异步与副作用</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> const fetchData = async () =&gt; {
+    try {
+        loading.value = true;
+        const res = await api.getData();
+        data.value = res.data;
+    } catch (error) {
+        console.error(error);
+    } finally {
+        loading.value = false;
+    }
+};
+ onMounted(() =&gt; {
+    const timer = setInterval(() =&gt; {}, 1000);
+    onUnmounted(() =&gt; clearInterval(timer)); // 清理副作用
+});</code></pre>
+<h2>6. 样式规范</h2>
+<h4>6.1 CSS 命名</h4>
+<ul><li>公共组件：用 BEM，且不加 <span style="font-family:Consolas"><code>scoped </code></span>（便于使用方覆盖样式），Block 加前缀避免冲突（如 <span style="font-family:Consolas"><code>el- </code></span>、 <span style="font-family:Consolas"><code>van- </code></span>）。</li></ul>
+<p><span style="font-family:Consolas"><code>Block__Element--Modifier → menu-fixed__cell--active</code></span></p>
+<ul><li>页面 scoped 样式：用 kebab-case，命名可简短。</li></ul>
+<h4>6.2 设计系统（引用 prd-to-ui）</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> $color-bg-primary: #f7f8fa; // 页面主背景（非纯白）
+$color-text-primary: #1a1a2e; // 主文字（非纯黑）
+$color-brand: #4f6ef7; // 品牌色（按项目自定义）
+$shadow-card: 0 1px 3px rgba(0,0,0,.04), 0 1px 2px rgba(0,0,0,.02);
+$radius-lg: 14px;
+// 间距以 8px 为基准：4/8/12/16/20/24/32/40/48</code></pre>
+<p>关键 tokens（移动端/H5 为主，Web 端可调整）：</p>
+<ul><li>页面背景用 <span style="font-family:Consolas"><code>#f7f8fa </code></span>，主文字用 <span style="font-family:Consolas"><code>#1a1a2e </code></span>（不要用纯黑纯白）。</li><li>卡片：轻边框 + 柔和阴影，圆角统一，卡片间距 20px 左右节奏。</li><li>渐变 Header 尾部保持足够深，保证白字可读（不要过渡到白色）。</li><li>同页面字号层级不超过 3 种。</li></ul>
+<p>完整色彩/排版/间距/按钮系统见 <span style="font-family:Consolas"><code>prd-to-ui/SKILL.md </code></span>的「视觉设计系统」章节。</p>
+<h4>6.3 750 设计稿 rem 转换</h4>
+<p><span style="font-family:Consolas"><code>.page-title { font-size: 36px; } // 自动转 → 375 屏约 18px</code></span></p>
+<p>按 750px 设计稿写原始 px， <span style="font-family:Consolas"><code>postcss-pxtorem </code></span>自动转 rem（1rem = 75px）：</p>
+<ul><li>水平相关（ <span style="font-family:Consolas"><code>width </code></span>/ <span style="font-family:Consolas"><code>font-size </code></span>/左右 <span style="font-family:Consolas"><code>padding </code></span>/ <span style="font-family:Consolas"><code>margin </code></span>/ <span style="font-family:Consolas"><code>border-radius </code></span>）写 px 自动转；</li><li>垂直相关（ <span style="font-family:Consolas"><code>height </code></span>/ <span style="font-family:Consolas"><code>line-height </code></span>/上下 <span style="font-family:Consolas"><code>margin </code></span>、 <span style="font-family:Consolas"><code>gap </code></span>）保持 px 固定。</li></ul>
+<h4>6.4 z-index 堆叠规范</h4>
+<p>按「内容层 → 结构层 → 互动层」分层，各层 z-index 控制在规范区间内，避免全局数值打架：</p>
+<ol><li>内容层 <span style="font-family:Consolas"><code>0 ~ 10</code></span></li><li>结构层：底部 <span style="font-family:Consolas"><code>30~40 </code></span>、中下部 <span style="font-family:Consolas"><code>40~50 </code></span>、顶部 <span style="font-family:Consolas"><code>50~60</code></span></li><li>互动层中部 <span style="font-family:Consolas"><code>70~80</code></span></li></ol>
+<h2>7. 编码建议</h2>
+<ol><li>单文件建议不超过 250 行（约 5 屏），超 500 行必须拆分模块。</li><li>try/catch/finally 按需使用：catch、finally 可选，但 try 至少配其一。</li><li>Service 入参用对象（见 3.2）。</li><li>复杂或非直观的变量需注释说明用途与来源；不必逐行注释。</li><li>新注册公共组件先评审是否纳入公共引用（现有公认公共组件：Toast、Dialog、Cell，其余按需引用）。</li></ol>
+<h2>8. Commit 消息规范</h2>
+<p>采用 Angular 规范（与 <span style="font-family:Consolas"><code>prd-to-ui </code></span>一致）： <span style="font-family:Consolas"><code>&lt;type&gt;(&lt;scope&gt;): &lt;subject&gt;</code></span> <span style="font-family:Consolas"><code>&lt;body&gt;</code></span> <span style="font-family:Consolas"><code>&lt;footer&gt;</code></span></p>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> git commit -m &quot;fix: 修复点击事件偶尔未触发的bug&quot;
+git commit -m &quot;docs(changelog): update changelog to beta.5&quot;</code></pre>
+<ul><li>type： <span style="font-family:Consolas"><code>feat </code></span>/ <span style="font-family:Consolas"><code>fix </code></span>/ <span style="font-family:Consolas"><code>docs </code></span>/ <span style="font-family:Consolas"><code>style </code></span>/ <span style="font-family:Consolas"><code>refactor </code></span>/ <span style="font-family:Consolas"><code>perf </code></span>/ <span style="font-family:Consolas"><code>test </code></span>/ <span style="font-family:Consolas"><code>chore </code></span>/ <span style="font-family:Consolas"><code>revert</code></span></li><li>scope（可选）：影响范围</li><li>subject：简短必填</li><li>footer： <span style="font-family:Consolas"><code>BREAKING CHANGE </code></span>或 <span style="font-family:Consolas"><code>Closes #25</code></span></li></ul>
+<p>撤销提交以 <span style="font-family:Consolas"><code>revert: </code></span>开头，body 固定写 <span style="font-family:Consolas"><code>This reverts commit {hash}. </code></span>。 配套工具： <span style="font-family:Consolas"><code>@commitlint/cli </code></span>+ <span style="font-family:Consolas"><code>@commitlint/config-conventional </code></span>+ <span style="font-family:Consolas"><code>husky </code></span>+ <span style="font-family:Consolas"><code>commitizen </code></span>（ <span style="font-family:Consolas"><code>cz-customizable </code></span>）+ <span style="font-family:Consolas"><code>standard-version </code></span>（自动 changelog / 升版 / 打 tag）。配置参见旧规范「工具」章节及 <span style="font-family:Consolas"><code>prd-to-ui </code></span>的提交规范。</p>
+<h2>9. 微信小程序规范</h2>
+<p>小程序（原生 / Taro / uni-app）与 Web/Vue 多数规范一致，本节只标出差异点与平台特有约束。若用 Taro/uni-app（Vue 语法写小程序），则第 2~8 节 Vue 规则基本直接适用。</p>
+<h4>9.1 项目结构</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> app.js / app.ts # 小程序逻辑入口（globalData、onLaunch）
+app.json # 全局配置：pages 注册、window、subpackages 分包
+app.wxss # 全局样式
+pages/
+    home/ # 页面目录（kebab-case，与 Web 路由目录一致）
+        home.ts # 页面逻辑
+        home.wxml # 模板（类 HTML，数据绑定 {{ }}）
+        home.wxss # 样式（类 CSS）
+        home.json # 页面配置（usingComponents 等）
+components/
+    my-card/ # 自定义组件（原生推荐 kebab-case）</code></pre>
+<h4>9.2 命名</h4>
+<ul><li>页面目录：kebab-case（与 Web 路由目录一致）。</li><li>自定义组件：</li><li>原生小程序：文件名推荐 kebab-case（WXML 标签对大小写不敏感， <span style="font-family:Consolas"><code>&lt;my-card&gt; </code></span>更稳），json 中</li></ul>
+<p><span style="font-family:Consolas"><code>usingComponents </code></span>注册后模板使用同名 kebab 标签。</p>
+<ul><li>Taro/uni-app（Vue 语法）：仍用 PascalCase（ <span style="font-family:Consolas"><code>MyCard.vue </code></span>），与本规范第 2.2 节一致。</li><li>事件处理函数：仍用 <span style="font-family:Consolas"><code>handle </code></span>前缀（如 <span style="font-family:Consolas"><code>handleTap </code></span>），通过 <span style="font-family:Consolas"><code>bindtap=&quot;handleTap&quot; </code></span>绑定。</li><li>生命周期用 <span style="font-family:Consolas"><code>on </code></span>前缀： <span style="font-family:Consolas"><code>onLoad </code></span>/ <span style="font-family:Consolas"><code>onShow </code></span>/ <span style="font-family:Consolas"><code>onReady </code></span>/ <span style="font-family:Consolas"><code>onHide </code></span>/ <span style="font-family:Consolas"><code>onUnload </code></span>——</li></ul>
+<p>这是小程序平台保留钩子，与「事件函数用 <span style="font-family:Consolas"><code>handle </code></span>前缀」不冲突（ <span style="font-family:Consolas"><code>on </code></span>表生命周期， <span style="font-family:Consolas"><code>handle</code></span> 表自定义事件）。</p>
+<h4>9.3 单位（rpx）</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> /* 小程序 wxss，按 750 设计稿写 */
+.page-card { width: 690rpx; padding: 24rpx 30rpx; border-radius: 20rpx; border: 1px solid #e5e7eb; }</code></pre>
+<ul><li>小程序用 rpx，规定 <span style="font-family:Consolas"><code>750rpx = 屏幕宽度 </code></span>，按 750 设计稿直接写 rpx（与 H5 的 750 设计稿基准一致，但 H5 写 px 由 postcss 转 rem，小程序直接写 rpx）。</li><li>1px 物理边框、阴影等仍用 <span style="font-family:Consolas"><code>px </code></span>，避免 rpx 在异形屏被缩放。</li></ul>
+<h4>9.4 数据更新（setData）</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> // ✅ 正确
+this.setData({ &#39;list[0].name&#39;: &#39;新名称&#39;, count: 1 });
+// ❌ 错误：直接赋值不更新视图
+this.data.count = 1;</code></pre>
+<ul><li>小程序不能直接给 data 赋值，必须用 <span style="font-family:Consolas"><code>setData </code></span>触发视图更新。</li><li>大对象/长列表用路径更新减少传输开销：</li></ul>
+<h4>9.5 组件</h4>
+<pre style="background:#f5f5f5;padding:8px;border-radius:4px;overflow:auto"><code> Component({
+    properties: { title: { type: String, value: &#39;&#39; } }, // 类似 Vue 的 props
+    data: { inner: 0 },
+    methods: { handleTap() { this.triggerEvent(&#39;tap&#39;, { id: 1 }); } }, // 类似 Vue 的 emit
+    observers: { &#39;title&#39;: (v) =&gt; {} }, // 类似 Vue 的 watch
+    lifetimes: { attached() {}, detached() {} }, // 类似 Vue 的 mounted/unmounted
+});</code></pre>
+<p>原生自定义组件用 <span style="font-family:Consolas"><code>Component() </code></span>构造器：</p>
+<h4>9.6 路由与分包</h4>
+<ul><li>页面需在 <span style="font-family:Consolas"><code>app.json </code></span>的 <span style="font-family:Consolas"><code>pages </code></span>中注册，路由由框架管理， <span style="font-family:Consolas"><code>wx.navigateTo </code></span>跳转。</li><li>页面栈上限 10 层：深链路用 <span style="font-family:Consolas"><code>wx.redirectTo </code></span>/ <span style="font-family:Consolas"><code>wx.reLaunch </code></span>替换栈，避免 <span style="font-family:Consolas"><code>navigateTo </code></span>叠加超限。</li><li>分包加载：主包 ≤ 2MB、总包 ≤ 20MB；非首屏模块放 <span style="font-family:Consolas"><code>subpackages </code></span>，按需加载。</li></ul>
+<h4>9.7 接口与 TS</h4>
+<ul><li>接口响应同样统一 <span style="font-family:Consolas"><code>{ ret, data, msg } </code></span>（见第 3.1 节），业务数据从 <span style="font-family:Consolas"><code>res.data </code></span>取。</li><li>用 <span style="font-family:Consolas"><code>miniprogram-api-typings </code></span>获得 API 类型；业务类型定义复用 <span style="font-family:Consolas"><code>src/types </code></span>，与 Web 共享。</li><li><span style="font-family:Consolas"><code>wx.request </code></span>统一封装为 <span style="font-family:Consolas"><code>request&lt;T&gt; </code></span>，避免散落回调。</li></ul>
+<h2>10. 代码审查清单</h2>
+<p>Web / H5 / Vue：</p>
+<ul><li>[ ] <span style="font-family:Consolas"><code>npm run build </code></span>（含 <span style="font-family:Consolas"><code>vue-tsc </code></span>）零 TS 错误通过</li><li>[ ] 组件文件 PascalCase、页面目录/路由 kebab-case、CSS/事件名 kebab-case</li><li>[ ] 事件函数 <span style="font-family:Consolas"><code>handle </code></span>前缀、跳转 <span style="font-family:Consolas"><code>goTo </code></span>前缀、布尔 <span style="font-family:Consolas"><code>is/has/can </code></span>前缀</li><li>[ ] 接口响应统一 <span style="font-family:Consolas"><code>{ ret, data, msg } </code></span>，业务数据从 <span style="font-family:Consolas"><code>res.data </code></span>取</li><li>[ ] 无 <span style="font-family:Consolas"><code>any </code></span>，props/emits 类型化</li><li>[ ] 优先复用已有组件，未发明不存在的组件名</li><li>[ ] 页面状态完整（加载 <span style="font-family:Consolas"><code>Skeleton </code></span>/ 空态 <span style="font-family:Consolas"><code>EmptyPanel </code></span>/ 结果 <span style="font-family:Consolas"><code>ResultPanel </code></span>）</li><li>[ ] 样式遵循设计系统（背景 <span style="font-family:Consolas"><code>#f7f8fa </code></span>、文字 <span style="font-family:Consolas"><code>#1a1a2e </code></span>、8px 间距、柔和阴影）</li><li>[ ] 单文件 ≤ 250 行，超 500 行已拆分</li><li>[ ] Commit 符合 Angular 规范，husky/commitlint 通过</li></ul>
+<p>微信小程序：</p>
+<ul><li>[ ] 页面目录 kebab-case；原生组件 kebab-case / Taro·uni 组件 PascalCase</li><li>[ ] 事件函数 <span style="font-family:Consolas"><code>handle </code></span>前缀，平台生命周期用 <span style="font-family:Consolas"><code>on </code></span>前缀（二者不混淆）</li><li>[ ] 样式按 750 设计稿写 rpx，1px 边框/阴影用 px</li><li>[ ] 数据更新全部走 <span style="font-family:Consolas"><code>setData </code></span>，长列表用路径更新</li><li>[ ] 自定义组件用 <span style="font-family:Consolas"><code>Component() </code></span>，属性/事件/监听/生命周期规范</li><li>[ ] 路由跳转注意页面栈 ≤ 10 层；非首屏模块已分包</li><li>[ ] 接口响应统一 <span style="font-family:Consolas"><code>{ ret, data, msg } </code></span>， <span style="font-family:Consolas"><code>wx.request </code></span>已封装</li><li>[ ] 业务类型复用 <span style="font-family:Consolas"><code>src/types </code></span>，已装 <span style="font-family:Consolas"><code>miniprogram-api-typings</code></span></li></ul>
+<h2>11. 待团队对齐事项（Review 结论）</h2>
+<ol><li>接口响应字段：前端 <span style="font-family:Consolas"><code>{ ret, data, msg } </code></span>vs 后端 <span style="font-family:Consolas"><code>{ code, message, data } </code></span>——</li></ol>
+<p>需统一契约或加适配层（Web、H5、小程序三端统一）。</p>
+<ol><li>事件函数命名：旧 <span style="font-family:Consolas"><code>onXxx </code></span>已统一为 <span style="font-family:Consolas"><code>handleXxx </code></span>，存量代码可渐进迁移（小程序平台生命周期例外保留）。</li><li>组件文件命名：明确「Vue 文件 PascalCase / 小程序原生组件 kebab-case / 目录路由</li></ol>
+<p>kebab-case」，消除旧表述歧义。</p>
+<ol><li>ESLint 版本：当前仍为 eslintrc 格式，升级 ESLint 9 时迁移 flat config。</li><li>小程序单位：H5 用 px→rem、小程序用 rpx，二者均基于 750</li></ol>
+<p>设计稿，跨端复用设计稿时需注意单位换算。</p>
+<h2>12. 前端常用名词</h2>
+<p>团队前端开发高频术语速查。命名风格类名词请同时参阅本文第 2 节。</p>
+<h4>基础概念</h4>
+<ul><li>report 上报：将前端埋点、异常、性能等数据发送到服务端统计系统的行为。</li><li>SPA（Single Page Application）：单页应用，整站由一个 HTML 承载，路由切换靠 JS</li></ul>
+<p>局部刷新，不整页刷新。</p>
+<ul><li>SSR（Server Side Rendering）：服务端渲染，首屏由服务端生成 HTML，利于 SEO 与首屏速度。</li><li>CSR（Client Side Rendering）：客户端渲染，首屏由浏览器 JS 渲染。</li><li>PWA（Progressive Web App）：渐进式 Web 应用，具备离线、可安装、消息推送等类原生能力。</li><li>HMR（Hot Module Replacement）：模块热替换，改动代码后局部刷新，不丢失页面状态。</li><li>VDOM（Virtual DOM）：虚拟 DOM，用 JS 对象描述真实 DOM，diff 后最小化更新。</li><li>hydration（注水/激活）：SSR 把静态 HTML 交给客户端后，Vue/React 接管事件绑定的过程。</li></ul>
+<p> <span style="font-family:Consolas"><code>onXxx</code></span></p>
+<h4>框架与 Vue 生态</h4>
+<ul><li>SFC（Single File Component）：单文件组件，即 <span style="font-family:Consolas"><code>.vue </code></span>文件（template + script + style 一体）。</li><li>Composition API：Vue 3 组合式 API，以 <span style="font-family:Consolas"><code>setup </code></span>/ <span style="font-family:Consolas"><code>&lt;script setup&gt; </code></span>组织逻辑。</li><li>Options API：Vue 2 风格，按 <span style="font-family:Consolas"><code>data </code></span>/ <span style="font-family:Consolas"><code>methods </code></span>/ <span style="font-family:Consolas"><code>computed </code></span>等选项组织。</li><li>ref：组合式 API 中包裹基础类型/对象的响应式引用，取值用 <span style="font-family:Consolas"><code>.value </code></span>。</li><li>reactive：将对象变成深响应式代理。</li><li>computed：依赖变化自动重算的派生状态（带缓存）。</li><li>watch / watchEffect：侦听响应式数据变化执行副作用。</li><li>Prop：父组件向子组件传递的数据，子组件只读。</li><li>Emit：子组件向父组件回传事件。</li><li>Slot（插槽）：组件预留的内容分发占位，支持默认/具名/作用域插槽。</li><li>Teleport：把内容渲染到 DOM 其他位置（如弹窗挂到 body）。</li><li>Pinia / Vuex：Vue 状态管理库（Vue 3 推荐 Pinia）。</li><li>Router / Route： <span style="font-family:Consolas"><code>Router </code></span>是路由实例， <span style="font-family:Consolas"><code>Route </code></span>是当前路由信息。</li><li>Meta：路由元信息，如 <span style="font-family:Consolas"><code>{ title, showTab } </code></span>，用于控制页面级行为。</li><li>Volar（Vue Language Tools）：Vue 3 官方语言服务插件（替代已停更的 Vetur）。</li></ul>
+<h4>工程化与构建</h4>
+<ul><li>Vite：基于原生 ESM 的新一代构建/开发工具，启动快、HMR 快。</li><li>Webpack / Rollup：打包工具，负责模块打包与产物优化。</li><li>Bundle / Chunk： <span style="font-family:Consolas"><code>Bundle </code></span>是最终产物文件， <span style="font-family:Consolas"><code>Chunk </code></span>是打包过程中的代码块（如路由懒加载拆出的分包）。</li><li>Tree Shaking：剔除未使用代码，减小体积。</li><li>Code Splitting（代码分割）：按路由/组件把代码拆成多个 chunk，按需加载。</li><li>Lazy Loading（懒加载）：组件/图片等用到时才加载。</li><li>Polyfill：为旧浏览器补齐缺失的新 API。</li><li>ESLint：JS/TS 静态检查工具，管语法与逻辑规范。</li><li>Prettier：代码格式化工具，管代码样式（与 ESLint 配合时以 <span style="font-family:Consolas"><code>prettier </code></span>配置关闭冲突规则）。</li><li>TypeScript（TS）：带类型的 JS 超集，编译期发现错误。</li><li>tsc / vue-tsc：TS 类型检查器； <span style="font-family:Consolas"><code>vue-tsc --noEmit </code></span>用于 Vue 项目的类型检查（交付门禁）。</li><li>EditorConfig：跨编辑器统一基础格式（缩进、换行、编码）。</li></ul>
+<h4>TypeScript 类型</h4>
+<ul><li>Interface（接口）：定义对象结构，可被类实现、可合并声明。</li><li>Type Alias（类型别名）：用 <span style="font-family:Consolas"><code>type </code></span>定义联合/交叉/复杂类型。</li><li>Generic（泛型）：如 <span style="font-family:Consolas"><code>ApiResponse&lt;T&gt; </code></span>，让类型参数化复用。</li><li>Enum（枚举）：一组具名常量。</li><li>Union Type（联合类型）： <span style="font-family:Consolas"><code>&#39;a&#39; | &#39;b&#39; </code></span>，限定取值集合。</li></ul>
+<p>• Async/Await：基于 Promise 的异步语法糖。</p>
+<ul><li>Nullable： <span style="font-family:Consolas"><code>T | null | undefined </code></span>，可能为空的类型。</li><li>Optional（可选）： <span style="font-family:Consolas"><code>prop? </code></span>表示可选属性。</li><li>Decorator（装饰器）：以 <span style="font-family:Consolas"><code>@ </code></span>注解类/方法（后端 Midway 常用，前端较少）。</li></ul>
+<h4>样式与视觉</h4>
+<ul><li>BEM：Block__Element--Modifier 命名法，用于公共组件避免样式冲突。</li><li>Scoped CSS：组件样式仅作用于当前组件（页面级样式常用）。</li><li>rem / em / vw / vh / px：长度单位；本项目按 750 设计稿 写 px，由 <span style="font-family:Consolas"><code>postcss-pxtorem </code></span>自动转 rem。</li><li>Flex / Grid：弹性盒 / 网格布局。</li><li>Design Token：设计变量（颜色/间距/圆角/阴影），如 <span style="font-family:Consolas"><code>#f7f8fa </code></span>、 <span style="font-family:Consolas"><code>8px </code></span>间距系统。</li><li>z-index：层级堆叠顺序，按内容层/结构层/互动层分段取值（见本文第 6.4 节）。</li><li>Sticky（吸顶/吸底）： <span style="font-family:Consolas"><code>position: sticky </code></span>，如提交按钮 <span style="font-family:Consolas"><code>StickyFooter </code></span>。</li><li>TabBar：底部导航栏，由 <span style="font-family:Consolas"><code>route.meta.showTab </code></span>控制显隐。</li></ul>
+<h4>组件与状态（来自 prd-to-ui 组件库）</h4>
+<ul><li>PageHeader：页面头部/首屏摘要，支持 <span style="font-family:Consolas"><code>compact/default/hero </code></span>变体。</li><li>CardSection：卡片区块容器。</li><li>StatsCard：统计指标卡。</li><li>InfoGrid：多列信息网格。</li><li>StockRow / DataTable：列表行 / 数据表格。</li><li>BaseChart：图表组件。</li><li>Skeleton（骨架屏）：加载态占位。</li><li>EmptyPanel（空状态）：无数据时的友好提示。</li><li>ResultPanel（结果反馈）：提交/操作后的结果态。</li><li>Toast / Dialog / Modal：轻提示 / 对话框 / 模态框。</li><li>Badge：角标。</li></ul>
+<h4>网络与数据</h4>
+<p>• REST / RESTful：基于资源与 HTTP 动词（GET/POST/PUT/DELETE）的接口风格。</p>
+<p>• CRUD：增删改查（Create/Read/Update/Delete）。</p>
+<ul><li>API（Application Programming Interface）：前后端约定的接口。</li><li>GraphQL：一种查询语言，前端按需取字段。</li><li>DTO（Data Transfer Object）：接口入参/出参的数据结构。</li><li>VO（View Object）/ PO（Persistent Object）/ Entity：视图对象 / 持久化对象 / 实体模型。</li><li>Request / Response：请求 / 响应。</li><li>Payload：请求体数据。</li></ul>
+<ul><li>Pagination（分页）： <span style="font-family:Consolas"><code>page </code></span>/ <span style="font-family:Consolas"><code>pageSize </code></span>/ <span style="font-family:Consolas"><code>total </code></span>列表分页。</li><li>Cursor（游标）：基于上一页末条的位置分页（常用于无限滚动）。</li><li>Mock：前端模拟接口数据（H5 项目直接写在 <span style="font-family:Consolas"><code>src/service/*.ts </code></span>）。</li><li>Axios / request：HTTP 客户端封装，本项目统一封装为 <span style="font-family:Consolas"><code>request&lt;T&gt; </code></span>。</li><li>Interceptor（拦截器）：统一处理请求头、登录态、响应错误。</li><li>响应三字段：本项目统一 <span style="font-family:Consolas"><code>{ ret, data, msg } </code></span>（ <span style="font-family:Consolas"><code>ret </code></span>=状态码， <span style="font-family:Consolas"><code>data </code></span>=业务数据， <span style="font-family:Consolas"><code>msg </code></span>=提示）。⚠️ 注意与后端 <span style="font-family:Consolas"><code>{ code, message, data } </code></span>的字段差异。</li></ul>
+<h4>微信小程序</h4>
+<ul><li>小程序（微信小程序）：运行在微信内的轻应用，无需安装、用完即走。</li><li>WXML：微信模板语言（类 HTML），数据绑定用 <span style="font-family:Consolas"><code>{{ }} </code></span>。</li><li>WXSS：微信样式语言（类 CSS），支持 rpx 单位。</li><li>rpx（响应式像素）： <span style="font-family:Consolas"><code>750rpx = 屏幕宽度 </code></span>，按 750 设计稿直接书写（与 H5 的 750 设计稿基准一致，但 H5 写 px 由 postcss 转 rem，小程序直接写 rpx）。</li><li>setData：小程序更新视图的唯一方式，不能直接给 <span style="font-family:Consolas"><code>data </code></span>赋值。</li><li>页面栈：小程序路由栈，最多 10 层（ <span style="font-family:Consolas"><code>navigateTo </code></span>叠加， <span style="font-family:Consolas"><code>redirectTo </code></span>/ <span style="font-family:Consolas"><code>reLaunch </code></span>替换）。</li><li>分包（subpackages）：主包 ≤2MB、总包 ≤20MB，分包按需加载以控制体积。</li><li>AppID：小程序唯一标识，区分开发/体验/生产环境。</li><li>openid / unionid：用户在小程序 / 微信开放平台的唯一标识（unionid 跨应用一致）。</li><li>wx.login：获取登录凭证 code，换取 openid / session。</li><li>wx.requestPayment：调起微信支付。</li><li>Component：小程序自定义组件构造器（ <span style="font-family:Consolas"><code>properties </code></span>/ <span style="font-family:Consolas"><code>data </code></span>/ <span style="font-family:Consolas"><code>methods </code></span>/ <span style="font-family:Consolas"><code>observers </code></span>/ <span style="font-family:Consolas"><code>lifetimes </code></span>）。</li><li>usingComponents：在 <span style="font-family:Consolas"><code>.json </code></span>中注册页面/组件要使用的自定义组件。</li><li>Behavior：小程序代码复用混合（类似 mixin）。</li><li>getApp / globalData：获取小程序实例与全局数据。</li><li>页面生命周期： <span style="font-family:Consolas"><code>onLoad </code></span>/ <span style="font-family:Consolas"><code>onShow </code></span>/ <span style="font-family:Consolas"><code>onReady </code></span>/ <span style="font-family:Consolas"><code>onHide </code></span>/ <span style="font-family:Consolas"><code>onUnload </code></span>（ <span style="font-family:Consolas"><code>on</code></span></li></ul>
+<p>前缀为平台保留钩子，与事件处理函数 <span style="font-family:Consolas"><code>handle </code></span>前缀不冲突）。</p>
+<ul><li>Taro / uni-app：用 Vue / React 语法编写、可编译到小程序的跨端框架（用此类框架时，本规范的 Vue</li></ul>
+<p>规则基本直接适用）。</p>
+<ul><li>原生组件命名：原生小程序推荐 kebab-case（如 <span style="font-family:Consolas"><code>&lt;my-card&gt; </code></span>），与 Vue PascalCase 不同；Taro/uni 仍用</li></ul>
+<p>PascalCase。</p>
+<h4>质量与协作</h4>
+<ul><li>Lint：代码检查（ <span style="font-family:Consolas"><code>npm run lint </code></span>）。</li><li>Husky：Git 钩子工具，提交/推送前触发检查。</li><li>lint-staged：只对暂存文件做 lint/格式化，提速。</li><li>commitlint：校验 commit 信息格式。</li><li>Conventional Commits（约定式提交）：Angular 风格的 <span style="font-family:Consolas"><code>&lt;type&gt;(&lt;scope&gt;): &lt;subject&gt; </code></span>。</li></ul>
+<ul><li>standard-version / Changelog：自动生成变更日志、升版本、打 tag。</li><li>SemVer（语义化版本）： <span style="font-family:Consolas"><code>主.次.修订 </code></span>版本号规则。</li><li>Code Review（代码评审）：合并前的人工/工具审查，参照本文第 10 节审查清单。</li><li>Unit Test / E2E：单元测试 / 端到端测试；Coverage 为测试覆盖率。</li><li>Snapshot（快照测试）：对渲染结果做基线比对。</li></ul></div></div>
+</body>
+</html>
