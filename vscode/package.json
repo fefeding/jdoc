@@ -65,10 +65,6 @@
         "title": "%command.exportCopy%"
       },
       {
-        "command": "jdoc.preview",
-        "title": "%command.preview%"
-      },
-      {
         "command": "jdoc.viewMode",
         "title": "%command.viewMode%",
         "category": "jdoc",
@@ -145,26 +141,10 @@
           "command": "jdoc.convert",
           "when": "resourceExtname =~ /\\.(docx|xlsx|pptx|pdf|md|markdown|html|htm|txt)$/",
           "group": "navigation@1"
-        },
-        {
-          "command": "jdoc.preview",
-          "when": "activeCustomEditor != 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-          "group": "navigation@2"
         }
       ],
-      "explorer/context": [
-        {
-          "command": "jdoc.preview",
-          "when": "resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-          "group": "navigation"
-        }
-      ],
+      "explorer/context": [],
       "editor/context": [
-        {
-          "command": "jdoc.preview",
-          "when": "activeCustomEditor != 'jdoc.documentEditor' && resourceExtname =~ /\\.(pptx|docx|xlsx|pdf|md|markdown|txt)$/",
-          "group": "navigation@1"
-        },
         {
           "command": "jdoc.convert",
           "when": "resourceExtname =~ /\\.(docx|xlsx|pptx|pdf|md|markdown|html|htm|txt)$/",
