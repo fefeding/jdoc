@@ -68,35 +68,126 @@ export interface PptxToPdfOptions {
 
 // ---- 颜色 ----
 
-/** 颜色归一：解析器的颜色可能不带 # 前缀 */
-function normalizeColor(value: string | undefined | null): string | undefined {
-    if (!value || value === 'none') return undefined;
-    return value.startsWith('#') ? value : `#${value}`;
+/**
+ * 主题色解析器（scheme:bg1 / scheme:accent1 等 -> 具体色值）
+ *
+ * 解析器输出里幻灯片背景等保留的是 `scheme:bg1` 这类主题色引用，
+ * 需要用 theme1.xml 的 clrScheme + 母版 clrMap 才能落到具体色值。
+ * bg1/tx1/bg2/tx2 是 clrMap 的别名槽（默认 bg1=lt1、tx1=dk1）。
+ *
+ * 下列纯函数同时被 PPTX→HTML 的版式还原链路复用（见 pptx-html.ts）。
+ */
+export interface SchemeResolver {
+    (value: string | undefined | null): string | undefined;
+}
+
+/** 解析 theme xml 的 clrScheme 色板与母版 clrMap，返回 scheme 颜色解析函数 */
+export function buildSchemeResolver(themeXml?: string, masterXml?: string): SchemeResolver {
+    const palette = new Map<string, string>();
+    const pick = (xml: string, tag: string): string | undefined => {
+        const m = xml.match(new RegExp(`<a:${tag}>[\\s\\S]*?</a:${tag}>`));
+        if (!m) return undefined;
+        const srgb = m[0].match(/srgbClr val="([0-9A-Fa-f]{6})"/);
+        if (srgb) return `#${srgb[1].toUpperCase()}`;
+        // sysClr（windowText/window 等）取 lastClr
+        const sys = m[0].match(/sysClr[^>]*lastClr="([0-9A-Fa-f]{6})"/);
+        if (sys) return `#${sys[1].toUpperCase()}`;
+        return undefined;
+    };
+    if (themeXml) {
+        const scheme = themeXml.match(/<a:clrScheme[\s\S]*?<\/a:clrScheme>/);
+        if (scheme) {
+            for (const slot of [
+                'dk1', 'lt1', 'dk2', 'lt2',
+                'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6',
+                'hlink', 'folHlink'
+            ]) {
+                const color = pick(scheme[0], slot);
+                if (color) palette.set(slot, color);
+            }
+        }
+    }
+    // 母版 clrMap：bg1/tx1/bg2/tx2 -> 实际色槽（OOXML 默认 bg1=lt1、tx1=dk1）
+    const colorMap: Record<string, string> = { bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2' };
+    if (masterXml) {
+        const map = masterXml.match(/<p:clrMap[^>]*\/>/);
+        if (map) {
+            for (const [k, v] of Object.entries(colorMap)) {
+                const m = map[0].match(new RegExp(`${k}="(\\w+)"`));
+                if (m) colorMap[k] = m[1];
+            }
+        }
+    }
+    return (value) => {
+        if (!value) return undefined;
+        const name = value.replace(/^scheme:/i, '').trim();
+        const slot = colorMap[name] ?? name;
+        return palette.get(slot);
+    };
+}
+
+/**
+ * 当前转换调用的 scheme 解析器。
+ *
+ * 形状 / 文本 / 渐变的取色函数众多且都是同步纯函数，逐层传参改动过大；
+ * 这里以模块级变量在一次 pptxToPdf 调用内设置 —— 取色过程同步执行、
+ * 期间没有 await，事件循环无法插队，因此并发转换不会串色。
+ */
+let resolveScheme: SchemeResolver = () => undefined;
+
+/**
+ * 在指定文档的主题色板下执行同步回调
+ *
+ * PPTX→HTML 的版式还原链路复用本模块的取色函数（normalizeColor 等），
+ * 通过该函数在同步作用域内切换主题色板；回调必须同步执行。
+ */
+export function withThemeColors<T>(doc: PptxDocument, fn: () => T): T {
+    const prev = resolveScheme;
+    resolveScheme = buildSchemeResolver(
+        doc.themeXmls?.[0] ?? doc.themeXml,
+        (doc.masters?.[0] as { __rawXml?: string } | undefined)?.__rawXml
+    );
+    try {
+        return fn();
+    } finally {
+        resolveScheme = prev;
+    }
+}
+
+/** 颜色归一：解析器的颜色可能不带 # 前缀；非法色值视为未指定 */
+export function normalizeColor(value: string | undefined | null): string | undefined {
+    if (!value || value === 'none' || typeof value !== 'string') return undefined;
+    if (/^scheme:/i.test(value)) value = resolveScheme(value) ?? undefined;
+    if (!value) return undefined;
+    if (!value.startsWith('#')) value = `#${value}`;
+    // 非法色值一律视为未指定（此前会生成 "#scheme:bg1" 这类垃圾值，
+    // 进而被 PDF 端兜底成黑色，出现整页黑底）
+    return /^#[0-9a-fA-F]{6}$/.test(value) ? value : undefined;
 }
 
 /** #RRGGBB -> [r, g, b]（非法输入返回 null） */
-function rgbOf(color: string | undefined): [number, number, number] | null {
+export function rgbOf(color: string | undefined): [number, number, number] | null {
     const hex = normalizeColor(color)?.slice(1);
     if (!hex || !/^[0-9a-fA-F]{6}$/.test(hex)) return null;
     return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
 }
 
 /** [r, g, b] -> #RRGGBB */
-function toHex(rgb: [number, number, number]): string {
+export function toHex(rgb: [number, number, number]): string {
     return `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
 }
 
 // ---- 渐变 ----
 
 /** 渐变停点 */
-interface GradientStop {
+export interface GradientStop {
     color: string;
     position: number;
     transparency?: number;
 }
 
 /** 取填充里的渐变停点（非渐变返回 null） */
-function gradientStopsOf(fill: PptxFill | undefined): { stops: GradientStop[]; direction: string; angle?: number } | null {
+export function gradientStopsOf(fill: PptxFill | undefined): { stops: GradientStop[]; direction: string; angle?: number } | null {
     if (!fill || typeof fill === 'string') return null;
     const f = fill as { type?: string; stops?: GradientStop[]; direction?: string; angle?: number };
     if (f.type !== 'gradient' || !f.stops?.length) return null;
@@ -109,7 +200,7 @@ function gradientStopsOf(fill: PptxFill | undefined): { stops: GradientStop[]; d
 }
 
 /** 渐变在 t（0~1）处的颜色与不透明度 */
-function gradientAt(stops: GradientStop[], t: number): { color: string; alpha: number } {
+export function gradientAt(stops: GradientStop[], t: number): { color: string; alpha: number } {
     const clamped = Math.max(0, Math.min(1, t));
     let lo = stops[0];
     let hi = stops[stops.length - 1];
@@ -138,7 +229,7 @@ function gradientAt(stops: GradientStop[], t: number): { color: string; alpha: n
  * 方向语义与 PPT 的 a:lin 一致：ang 以 60000 分之一度表示、自正东方向顺时针；
  * 解析器给的是度。渐变起点是沿反方向的那个角（stop 0），终点是沿方向的角。
  */
-function gradientAxis(
+export function gradientAxis(
     direction: string,
     angle: number | undefined,
     w: number,
@@ -204,7 +295,7 @@ const BEZIER_K = 0.5523;
  *   - round2SameRect：上方两角（adj1）
  *   - round2DiagRect：对角两角（adj1 / adj2）
  */
-function shapeCornerRadii(
+export function shapeCornerRadii(
     shapeType: string | undefined,
     adjust: Record<string, number> | undefined,
     width: number,
@@ -229,7 +320,7 @@ function shapeCornerRadii(
 }
 
 /** 形状填充 -> 颜色 + 不透明度（透明度过高视为不可见） */
-function solidFillOf(fill: PptxFill | undefined): { color: string; alpha: number } | undefined {
+export function solidFillOf(fill: PptxFill | undefined): { color: string; alpha: number } | undefined {
     if (!fill || fill === 'none') return undefined;
     if (typeof fill === 'string') {
         const color = normalizeColor(fill);
@@ -244,8 +335,268 @@ function solidFillOf(fill: PptxFill | undefined): { color: string; alpha: number
     return { color, alpha };
 }
 
+/**
+ * PPT 虚线类型 -> 虚线间隔（px）
+ *
+ * 与编辑器渲染端的 SVG_DASH_MAP 保持一致（dasharray 单位是 px）：
+ * solid 无、dash 5、dot 1,5、lgDash 10,5、sysDash 5,2 等。
+ */
+export const DASH_PATTERNS: Record<string, number[]> = {
+    dash: [5, 5],
+    dashDot: [5, 5, 1, 5],
+    dot: [1, 5],
+    lgDash: [10, 5],
+    lgDashDot: [10, 5, 1, 5],
+    lgDashDotDot: [10, 5, 1, 5, 1, 5],
+    sysDash: [5, 2],
+    sysDot: [2, 5],
+    sysDashDot: [5, 2, 1, 5],
+    sysDashDotDot: [5, 2, 1, 5, 1, 5]
+};
+
+/** 带箭头信息的线条样式（解析器类型未声明 arrow 字段，运行时存在） */
+interface ConnectorLine {
+    color?: string;
+    width?: number;
+    transparency?: number;
+    dashType?: string;
+    startArrow?: string;
+    endArrow?: string;
+}
+
+/** OOXML 的 flip 属性既可能是布尔也可能是 '1' / 'true' 字符串 */
+export function flipOn(value: unknown): boolean {
+    return value === true || value === '1' || value === 'true';
+}
+
+/**
+ * 折线点列 -> 路径段
+ *
+ * closed=false 时保持开放（连接线是开放路径，闭合会多出一段回首点的斜线）；
+ * closed=true 用于多边形（如块箭头）。
+ */
+function pathFromPoints(points: [number, number][], closed = false): PdfPathSegment[] {
+    const segs: PdfPathSegment[] = points.map(([x, y], i) => ({
+        op: i === 0 ? 'm' : 'l',
+        args: [x, y]
+    }));
+    if (closed) segs.push({ op: 'h', args: [] });
+    return segs;
+}
+
+/** 二次贝塞尔 -> 三次贝塞尔控制点（PDF 只支持三次） */
+function quadToCubic(
+    p0: [number, number],
+    c: [number, number],
+    p1: [number, number]
+): [number, number, number, number, number, number] {
+    return [
+        p0[0] + (2 / 3) * (c[0] - p0[0]),
+        p0[1] + (2 / 3) * (c[1] - p0[1]),
+        p1[0] + (2 / 3) * (c[0] - p1[0]),
+        p1[1] + (2 / 3) * (c[1] - p1[1]),
+        p1[0],
+        p1[1]
+    ];
+}
+
+/**
+ * 连接线 / 直线 -> PDF 元素
+ *
+ * 几何与编辑器渲染端（render.ts 的连接线分支）同源：
+ *   - straightConnector1：左上 -> 右下 的直线
+ *   - bentConnector*：M 0,0 L W/2,0 L W/2,H L W,H
+ *   - curvedConnector*：两段二次贝塞尔 M 0,0 Q W*r,0 W/2,H/2 Q W*(1-r),H W,H
+ *   - line：同 straightConnector1（编辑器同样画成对角线）
+ * flipH / flipV 以形状中心镜像（与编辑器的 scaleX(-1) 一致）。
+ */
+function connectorToElements(el: PptxShapeElement): PdfElement[] {
+    const line: ConnectorLine | undefined =
+        el.line && el.line !== 'none' ? (el.line as unknown as ConnectorLine) : undefined;
+    const color = normalizeColor(line?.color);
+    if (!color) return [];
+    const st = (el.shapeType || '').toLowerCase();
+    const { x, y, width: w, height: h } = el;
+    const flipH = flipOn(el.flipH);
+    const flipV = flipOn(el.flipV);
+    const dash = DASH_PATTERNS[line?.dashType || '']?.map((d) => d * PX_TO_PT);
+    // 线宽单位是 pt（解析器用 emuToPt 换算），编辑器端下限为 1px
+    const lineWidth = Math.max(0.75, line?.width ?? 2);
+    // 直线类形状（shapeType='line'）编辑器端不画箭头
+    const isPlainLine = st === 'line';
+    const startArrow = !isPlainLine && line?.startArrow && line.startArrow !== 'none' ? true : undefined;
+    const endArrow = !isPlainLine && line?.endArrow && line.endArrow !== 'none' ? true : undefined;
+
+    /** 局部坐标（0,0 ~ w,h）-> 页面绝对坐标（含镜像） */
+    const P = (lx: number, ly: number): [number, number] => [
+        (x + (flipH ? w - lx : lx)) * PX_TO_PT,
+        (y + (flipV ? h - ly : ly)) * PX_TO_PT
+    ];
+
+    if (st.startsWith('bentconnector')) {
+        // M 0,0 L W/2,0 L W/2,H L W,H
+        return [
+            {
+                type: 'path',
+                segments: pathFromPoints([P(0, 0), P(w / 2, 0), P(w / 2, h), P(w, h)]),
+                stroke: color,
+                lineWidth,
+                dash,
+                startArrow,
+                endArrow
+            }
+        ];
+    }
+
+    if (st.startsWith('curvedconnector')) {
+        // 两段二次贝塞尔（r = adj1/100000，默认 0.5）
+        const r = Math.min(Math.max((el.adjust?.adj1 ?? 50000) / 100000, 0), 1);
+        const p0 = P(0, 0);
+        const c1 = P(w * r, 0);
+        const mid = P(w / 2, h / 2);
+        const c2 = P(w * (1 - r), h);
+        const p1 = P(w, h);
+        return [
+            {
+                type: 'path',
+                segments: [
+                    { op: 'm', args: [p0[0], p0[1]] },
+                    { op: 'c', args: quadToCubic(p0, c1, mid) },
+                    { op: 'c', args: quadToCubic(mid, c2, p1) }
+                ],
+                stroke: color,
+                lineWidth,
+                dash,
+                startArrow,
+                endArrow
+            }
+        ];
+    }
+
+    // straightConnector1 / line：左上 -> 右下
+    const a = P(0, 0);
+    const b = P(w, h);
+    return [
+        {
+            type: 'line',
+            x1: a[0],
+            y1: a[1],
+            x2: b[0],
+            y2: b[1],
+            lineWidth,
+            color,
+            dash,
+            startArrow,
+            endArrow
+        }
+    ];
+}
+
+/** 块箭头（rightArrow / downArrow）-> 多边形路径（adj1 箭身厚度 / adj2 箭头长度，占短边） */
+function blockArrowToElements(el: PptxShapeElement): PdfElement[] {
+    const fill = solidFillOf(el.fill);
+    if (!fill) return [];
+    const { x, y, width: w, height: h } = el;
+    const ss = Math.min(w, h);
+    const adj = el.adjust || {};
+    const body = ss * ((adj.adj1 ?? 50000) / 100000);
+    const head = ss * ((adj.adj2 ?? 50000) / 100000);
+    let pts: [number, number][];
+    if ((el.shapeType || '').toLowerCase() === 'downarrow') {
+        const left = (w - body) / 2;
+        const right = (w + body) / 2;
+        pts = [
+            [left, 0],
+            [right, 0],
+            [right, h - head],
+            [w, h - head],
+            [w / 2, h],
+            [0, h - head],
+            [left, h - head]
+        ];
+    } else {
+        const top = (h - body) / 2;
+        const bot = (h + body) / 2;
+        pts = [
+            [0, top],
+            [w - head, top],
+            [w - head, 0],
+            [w, h / 2],
+            [w - head, h],
+            [w - head, bot],
+            [0, bot]
+        ];
+    }
+    const segments: PdfPathSegment[] = [];
+    pts.forEach(([px, py], i) => {
+        segments.push({
+            op: i === 0 ? 'm' : 'l',
+            args: [(x + px) * PX_TO_PT, (y + py) * PX_TO_PT]
+        });
+    });
+    segments.push({ op: 'h', args: [] });
+    const stroke = normalizeColor(
+        el.line && el.line !== 'none' ? (el.line as { color?: string }).color : undefined
+    );
+    return [
+        {
+            type: 'path',
+            segments,
+            fill: fill.color,
+            opacity: fill.alpha < 1 ? fill.alpha : undefined,
+            stroke,
+            lineWidth: stroke ? Math.max(0.5, (el.line as { width?: number }).width ?? 1) : undefined
+        }
+    ];
+}
+
+/** 圆柱（can / cylinder）-> 底椭圆 + 柱身 + 顶椭圆（adj 为椭圆高占比，默认 25000） */
+function canToElements(el: PptxShapeElement): PdfElement[] {
+    const fill = solidFillOf(el.fill);
+    if (!fill) return [];
+    const { x, y, width: w, height: h } = el;
+    const ss = Math.min(w, h);
+    const ry = (ss * ((el.adjust?.adj ?? 25000) / 100000)) / 2;
+    if (ry <= 0 || h <= 2 * ry) return [];
+    const opacity = fill.alpha < 1 ? fill.alpha : undefined;
+    return [
+        // 底（下半外露）
+        {
+            type: 'rect',
+            x: x * PX_TO_PT,
+            y: (y + h - 2 * ry) * PX_TO_PT,
+            width: w * PX_TO_PT,
+            height: 2 * ry * PX_TO_PT,
+            fill: fill.color,
+            opacity,
+            ellipse: true
+        },
+        // 柱身
+        {
+            type: 'rect',
+            x: x * PX_TO_PT,
+            y: (y + ry) * PX_TO_PT,
+            width: w * PX_TO_PT,
+            height: (h - 2 * ry) * PX_TO_PT,
+            fill: fill.color,
+            opacity
+        },
+        // 顶
+        {
+            type: 'rect',
+            x: x * PX_TO_PT,
+            y: y * PX_TO_PT,
+            width: w * PX_TO_PT,
+            height: 2 * ry * PX_TO_PT,
+            fill: fill.color,
+            opacity,
+            ellipse: true
+        }
+    ];
+}
+
 /** 圆角矩形路径（局部坐标：左上为原点、y 向下、宽高为 w/h） */
-function roundedRectPathLocal(w: number, h: number, radii: [number, number, number, number]): PdfPathSegment[] {
+export function roundedRectPathLocal(w: number, h: number, radii: [number, number, number, number]): PdfPathSegment[] {
     const [tl, tr, br, bl] = radii;
     const k = (v: number) => BEZIER_K * v;
     const segs: PdfPathSegment[] = [{ op: 'm', args: [tl, 0] }];
@@ -262,7 +613,7 @@ function roundedRectPathLocal(w: number, h: number, radii: [number, number, numb
 }
 
 /** 椭圆路径（局部坐标） */
-function ellipsePathLocal(w: number, h: number): PdfPathSegment[] {
+export function ellipsePathLocal(w: number, h: number): PdfPathSegment[] {
     const cx = w / 2;
     const cy = h / 2;
     const kx = BEZIER_K * (w / 2);
@@ -278,7 +629,7 @@ function ellipsePathLocal(w: number, h: number): PdfPathSegment[] {
 }
 
 /** 绕中心旋转一个点（屏幕坐标顺时针为正，与 PPTX 的 rot 一致） */
-function rotatePoint(p: [number, number], center: [number, number], deg: number): [number, number] {
+export function rotatePoint(p: [number, number], center: [number, number], deg: number): [number, number] {
     if (!deg) return p;
     const rad = (deg * Math.PI) / 180;
     const cos = Math.cos(rad);
@@ -330,6 +681,22 @@ function pathToPage(
  */
 function shapeToElements(el: PptxShapeElement): PdfElement[] {
     if (!el.width && !el.height) return [];
+
+    // 连接线：straightConnector / bentConnector / curvedConnector / line 都有各自的
+    // 几何（与编辑器渲染端同源），不能按矩形轮廓画。
+    const st = (el.shapeType || '').toLowerCase();
+    if (/^(straightconnector|bentconnector|curvedconnector)/.test(st) || st === 'line') {
+        return connectorToElements(el);
+    }
+
+    // 块箭头（rightArrow / downArrow）：多边形路径
+    if (st === 'rightarrow' || st === 'downarrow') return blockArrowToElements(el);
+
+    // 圆柱 / 数据库符号（can / cylinder / flowChartMagneticDisk）
+    if (st === 'can' || st === 'cylinder' || st === 'flowchartmagneticdisk') {
+        return canToElements(el);
+    }
+
     const x = el.x * PX_TO_PT;
     const y = el.y * PX_TO_PT;
     const w = el.width * PX_TO_PT;
@@ -466,21 +833,38 @@ function hasCjk(text: string): boolean {
 function textToElements(el: PptxTextElement): PdfElement[] {
     const out: PdfElement[] = [];
 
-    // 文本框自带的形状底（如「汇报人」的蓝色胶囊）
-    if (el.shapeType && el.fill && el.fill !== 'none') {
-        const box = {
-            type: 'shape' as const,
-            shapeType: el.shapeType,
-            x: el.x,
-            y: el.y,
-            width: el.width,
-            height: el.height,
-            fill: el.fill,
-            line: el.line,
-            adjust: el.adjust,
-            rotation: el.rotation
-        } as unknown as PptxShapeElement;
-        out.push(...shapeToElements(box));
+    // 文本框自带的形状底（如「汇报人」的蓝色胶囊、正文里的彩色底板）。
+    // 无形状类型的纯文本框填充按矩形绘制（PPT 的 TextBox 也常带底色）。
+    if (el.fill && el.fill !== 'none') {
+        if (el.shapeType) {
+            const box = {
+                type: 'shape' as const,
+                shapeType: el.shapeType,
+                x: el.x,
+                y: el.y,
+                width: el.width,
+                height: el.height,
+                fill: el.fill,
+                line: el.line,
+                adjust: el.adjust,
+                rotation: el.rotation
+            } as unknown as PptxShapeElement;
+            out.push(...shapeToElements(box));
+        } else {
+            const fill = solidFillOf(el.fill as PptxFill);
+            if (fill) {
+                out.push({
+                    type: 'rect',
+                    x: el.x * PX_TO_PT,
+                    y: el.y * PX_TO_PT,
+                    width: el.width * PX_TO_PT,
+                    height: el.height * PX_TO_PT,
+                    fill: fill.color,
+                    opacity: fill.alpha < 1 ? fill.alpha : undefined,
+                    rotation: el.rotation ? -el.rotation : undefined
+                });
+            }
+        }
     }
 
     // 「溢出则缩字」（normAutofit fontScale）：PPT/WPS 按此比例整体缩小字号
@@ -668,6 +1052,16 @@ function slideBackgroundColor(slide: PptxSlide): string {
     return '#ffffff';
 }
 
+/** 幻灯片背景图片（data URL），无图片背景返回 undefined */
+function slideBackgroundImage(slide: PptxSlide): string | undefined {
+    const bg = slide.background;
+    if (bg && typeof bg === 'object') {
+        const b = bg as { type?: string; data?: string; src?: string };
+        if (b.type === 'image') return b.data || b.src;
+    }
+    return undefined;
+}
+
 /** 幻灯片是否含中文（决定是否探测系统字体） */
 function slidesHaveCjk(slides: PptxSlide[]): boolean {
     let found = false;
@@ -711,15 +1105,32 @@ export async function pptxToPdf(input: DocInput, options: PptxToPdfOptions = {})
         }
     }
 
+    // 主题色：scheme:bg1 / scheme:accent1 等引用需要 clrScheme + clrMap 落到具体色值。
+    // 必须在所有 await 之后再设置：下面的取色过程是同步的，事件循环无法插队，
+    // 否则并发转换两个 PPTX 时会串用对方的主题色板。
+    resolveScheme = buildSchemeResolver(
+        doc.themeXmls?.[0] ?? doc.themeXml,
+        (doc.masters?.[0] as { __rawXml?: string } | undefined)?.__rawXml
+    );
+
     const pages: PdfPageSpec[] = [];
-    for (const slide of doc.slides) {
-        if (slide.hidden) continue;
-        const bg = slideBackgroundColor(slide);
-        const elements: PdfElement[] = [{ type: 'rect', x: 0, y: 0, width: pageW, height: pageH, fill: bg }];
-        collectElements(slide.elements || [], elements);
-        pages.push({ size: [pageW, pageH], margin: 0, elements });
+    try {
+        for (const slide of doc.slides) {
+            if (slide.hidden) continue;
+            const bg = slideBackgroundColor(slide);
+            const elements: PdfElement[] = [{ type: 'rect', x: 0, y: 0, width: pageW, height: pageH, fill: bg }];
+            // 背景图片（封面整图背景很常见）：铺满整页，画在底色之上、内容之下
+            const bgImage = slideBackgroundImage(slide);
+            if (bgImage) {
+                elements.push({ type: 'image', src: bgImage, x: 0, y: 0, width: pageW, height: pageH });
+            }
+            collectElements(slide.elements || [], elements);
+            pages.push({ size: [pageW, pageH], margin: 0, elements });
+        }
+        if (!pages.length) pages.push({ size: [pageW, pageH], margin: 0, elements: [] });
+    } finally {
+        resolveScheme = () => undefined;
     }
-    if (!pages.length) pages.push({ size: [pageW, pageH], margin: 0, elements: [] });
 
     return jsonToPdf({ pages, fonts, defaultSize: DEFAULT_FONT_SIZE }, {});
 }

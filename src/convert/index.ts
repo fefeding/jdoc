@@ -21,6 +21,7 @@ import { blocksToPdf } from './blocks-to-pdf';
 import { xlsxToBlocks } from './xlsx';
 import { pptxToBlocks } from './pptx';
 import { pptxToPdf } from './pptx-pdf';
+import { pptxToSlideHtml } from './pptx-html';
 import type { DocxBlock, DocxDocument } from '../docx/types';
 import type { DocAsset } from '../core/asset';
 import type { PdfFontSet } from '../pdf/types';
@@ -32,6 +33,7 @@ export { blocksToPdf } from './blocks-to-pdf';
 export { xlsxToBlocks } from './xlsx';
 export { pptxToBlocks } from './pptx';
 export { pptxToPdf } from './pptx-pdf';
+export { pptxToSlideHtml } from './pptx-html';
 export type { MarkdownToBlocksOptions, BlocksToMarkdownOptions } from './markdown';
 export type { PdfToBlocksOptions, PdfToBlocksResult } from './pdf';
 export type { BlocksToPdfOptions } from './blocks-to-pdf';
@@ -53,6 +55,8 @@ export interface ConvertOptions {
     quality?: 'fast' | 'layout';
     /** 资源表，用于还原图片 assetId */
     assets?: DocAsset[] | Record<string, DocAsset> | { assets?: DocAsset[] };
+    /** 输出标题（HTML 的 <title>、文档属性），缺省用源文档标题或文件名 */
+    title?: string;
     /**
      * pdfjs worker 地址（Node 端）。当 pdfjs 被打包器内联进 bundle（VS Code 扩展、
      * Electron 应用等）时，它内置的相对 worker 路径会失效，PDF 解析会直接失败，
@@ -152,11 +156,14 @@ export async function convert(
     }
 
     // ---- 源 -> blocks ----
-    // PPTX -> PDF 例外：幻灯片是「固定画布 + 绝对定位元素」，走幻灯片版式直排
+    // PPTX -> PDF / HTML 例外：幻灯片是「固定画布 + 绝对定位元素」，走幻灯片版式直排
     // （每页 = 一张幻灯片）。经 blocks 中转的流式排版会把 16:9 幻灯片重排成 A4
     // 竖版：绝对定位的文本框互相叠压、大图溢出成多页、页尾大面积留白。
     if (from === 'pptx' && target === 'pdf') {
         return pptxToPdf(bytes, { fonts: options.fonts, autoFont: options.autoFont });
+    }
+    if (from === 'pptx' && target === 'html') {
+        return pptxToSlideHtml(bytes, { title: options.title });
     }
 
     let blocks: DocxBlock[] = [];
@@ -176,7 +183,8 @@ export async function convert(
         metadata = result.metadata;
         assets = result.assets;
     } else if (from === 'pptx') {
-        const result = await pptxToBlocks(bytes);
+        // md 目标需要页分隔（Markdown 没有「页」的概念）；其余目标各有分页机制，不要插分隔线
+        const result = await pptxToBlocks(bytes, { slideSeparator: target === 'md' });
         blocks = result.blocks;
         metadata = result.metadata;
         assets = result.assets;
@@ -217,7 +225,9 @@ export async function convert(
         return blocksToPdf({ metadata, blocks }, { assets: pool, fonts: options.fonts, autoFont: options.autoFont });
     }
     if (target === 'md') {
-        return blocksToMarkdown({ blocks }, { assets: pool });
+        // PPTX 的图片宽高是幻灯片画布坐标，写进 md 的 title 只是噪音；
+        // 其它来源的宽高是显示尺寸，保留（md -> blocks -> md 往返要还原）
+        return blocksToMarkdown({ blocks }, { assets: pool, imageSizes: from !== 'pptx' });
     }
     if (target === 'html') {
         // assets 必须带上：图片块只存 assetId，缺资源表会解析不出 data URL 而整块丢弃

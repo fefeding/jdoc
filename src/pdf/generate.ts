@@ -19,12 +19,14 @@ import {
     concatTransformationMatrix,
     endPath,
     fill,
+    fillAndStroke,
     lineTo,
     moveTo,
     popGraphicsState,
     pushGraphicsState,
     rectangle,
     rgb,
+    setDashPattern,
     setFillingColor,
     setGraphicsState,
     setLineWidth,
@@ -1041,6 +1043,35 @@ function clipPathOperators(ctx: DrawContext, segments: PdfPathSegment[]) {
     return ops;
 }
 
+/**
+ * path 元素：内容区左上原点、y 向下、pt -> PDF 操作符
+ *
+ * 坐标约定与 group 的裁剪路径一致（都来自同一处路径构造），因此同样要
+ * 叠加 originX / originY。
+ */
+function pathSegmentOperators(ctx: DrawContext, segments: PdfPathSegment[]) {
+    const ops = [];
+    const px = (v: number) => ctx.originX + v;
+    const py = (v: number) => ctx.pageHeight - ctx.originY - v;
+    for (const seg of segments) {
+        if (seg.op === 'm') ops.push(moveTo(px(seg.args[0]), py(seg.args[1])));
+        else if (seg.op === 'l') ops.push(lineTo(px(seg.args[0]), py(seg.args[1])));
+        else if (seg.op === 'c')
+            ops.push(
+                appendBezierCurve(
+                    px(seg.args[0]),
+                    py(seg.args[1]),
+                    px(seg.args[2]),
+                    py(seg.args[3]),
+                    px(seg.args[4]),
+                    py(seg.args[5])
+                )
+            );
+        else ops.push(closePath());
+    }
+    return ops;
+}
+
 /** 用路径段绘制形状（填充 / 描边） */
 function drawBezierShape(
     ctx: DrawContext,
@@ -1055,23 +1086,70 @@ function drawBezierShape(
         else ops.push(closePath());
     }
     const alpha = options.opacity !== undefined ? Math.max(0, Math.min(1, options.opacity)) : 1;
-    if (options.color) {
-        // 半透明填充：PDF 图形状态没有直接的透明度参数，用 ExtGState（/ca）
-        if (alpha < 1) {
-            const gs = ctx.doc.context.obj({ Type: 'ExtGState', ca: alpha, CA: alpha });
-            const key = ctx.page.node.newExtGState('GS', gs);
-            ops.push(pushGraphicsState(), setGraphicsState(key));
-        }
-        ops.push(setFillingColor(options.color));
-        ops.push(fill());
-        if (alpha < 1) ops.push(popGraphicsState());
+    const hasFill = !!options.color;
+    const hasStroke = !!options.borderColor;
+    // 半透明填充：PDF 图形状态没有直接的透明度参数，用 ExtGState（/ca）
+    if (alpha < 1) {
+        const gs = ctx.doc.context.obj({ Type: 'ExtGState', ca: alpha, CA: alpha });
+        const key = ctx.page.node.newExtGState('GS', gs);
+        ops.push(pushGraphicsState(), setGraphicsState(key));
     }
-    if (options.borderColor) {
+    if (hasFill) ops.push(setFillingColor(options.color));
+    if (hasStroke) {
         ops.push(setStrokingColor(options.borderColor));
         ops.push(setLineWidth(options.borderWidth ?? 1));
-        ops.push(stroke());
     }
+    // 填充（f）会终结当前路径，之后再描边（S）将无路径可描 —— 边框会静默丢失，
+    // 所以「填充 + 描边」必须用 B 操作符一次完成。
+    if (hasFill && hasStroke) ops.push(fillAndStroke());
+    else if (hasFill) ops.push(fill());
+    else if (hasStroke) ops.push(stroke());
+    if (alpha < 1) ops.push(popGraphicsState());
     ctx.page.pushOperators(...ops);
+}
+
+/**
+ * 绘制箭头三角（PPT 连接线的 startArrow / endArrow）
+ *
+ * 尺寸与编辑器渲染端的 SVG marker 对齐：markerWidth=5 + markerUnits=strokeWidth，
+ * viewBox 为 0 0 10 10 的三角形 -> 实际长度 5×线宽、半高 2.5×线宽。
+ *
+ * @param tipX 箭头尖端 x（PDF 坐标）
+ * @param tipY 箭头尖端 y（PDF 坐标）
+ * @param refX 参考点 x（箭头方向的来源）
+ * @param refY 参考点 y
+ */
+function drawArrowHead(
+    ctx: DrawContext,
+    tipX: number,
+    tipY: number,
+    refX: number,
+    refY: number,
+    thickness: number,
+    color: RGB
+): void {
+    const dx = tipX - refX;
+    const dy = tipY - refY;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.01) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const px = -uy;
+    const py = ux;
+    const l = thickness * 5;
+    const halfH = thickness * 2.5;
+    const baseX = tipX - ux * l;
+    const baseY = tipY - uy * l;
+    ctx.page.pushOperators(
+        pushGraphicsState(),
+        setFillingColor(color),
+        moveTo(tipX, tipY),
+        lineTo(baseX + px * halfH, baseY + py * halfH),
+        lineTo(baseX - px * halfH, baseY - py * halfH),
+        closePath(),
+        fill(),
+        popGraphicsState()
+    );
 }
 
 /** 绘制单个元素，返回占用高度 */
@@ -1082,14 +1160,72 @@ async function drawElement(ctx: DrawContext, element: PdfElement): Promise<numbe
             return drawTextElement(ctx, element as never);
 
         case 'line': {
+            const thickness = element.lineWidth ?? 1;
+            const sx = ctx.originX + element.x1;
+            const sy = ctx.pageHeight - element.y1;
+            const ex = ctx.originX + element.x2;
+            const ey = ctx.pageHeight - element.y2;
+            const color = parseColor(element.color, rgb(0.6, 0.6, 0.6));
             ctx.page.drawLine({
-                start: { x: ctx.originX + element.x1, y: ctx.pageHeight - element.y1 },
-                end: { x: ctx.originX + element.x2, y: ctx.pageHeight - element.y2 },
-                thickness: element.lineWidth ?? 1,
-                color: parseColor(element.color, rgb(0.6, 0.6, 0.6)),
+                start: { x: sx, y: sy },
+                end: { x: ex, y: ey },
+                thickness,
+                color,
                 dashArray: element.dash
             });
-            return element.lineWidth ?? 1;
+            // 箭头（PPT 连接线的 endArrow / startArrow）
+            if (element.endArrow) drawArrowHead(ctx, ex, ey, sx, sy, thickness, color);
+            if (element.startArrow) drawArrowHead(ctx, sx, sy, ex, ey, thickness, color);
+            return thickness;
+        }
+
+        case 'path': {
+            // 任意路径（PPTX 的块箭头 / 圆柱等预设形状）
+            const ops = pathSegmentOperators(ctx, element.segments);
+            const alpha =
+                element.opacity !== undefined ? Math.max(0, Math.min(1, element.opacity)) : 1;
+            const hasFill = !!element.fill;
+            const hasStroke = !!element.stroke;
+            if (alpha < 1) {
+                const gs = ctx.doc.context.obj({ Type: 'ExtGState', ca: alpha, CA: alpha });
+                const gsRef = ctx.page.node.newExtGState('GSa', gs);
+                ctx.page.pushOperators(pushGraphicsState(), setGraphicsState(gsRef), ...ops);
+            } else {
+                ctx.page.pushOperators(pushGraphicsState(), ...ops);
+            }
+            if (hasFill) ctx.page.pushOperators(setFillingColor(parseColor(element.fill)));
+            if (hasStroke) {
+                ctx.page.pushOperators(setStrokingColor(parseColor(element.stroke)));
+                ctx.page.pushOperators(setLineWidth(element.lineWidth ?? 1));
+                if (element.dash?.length) ctx.page.pushOperators(setDashPattern(element.dash, 0));
+            }
+            // 同 drawBezierShape：f 会终结路径，填充+描边需用 B 一次完成
+            if (hasFill && hasStroke) ctx.page.pushOperators(fillAndStroke());
+            else if (hasFill) ctx.page.pushOperators(fill());
+            else if (hasStroke) ctx.page.pushOperators(stroke());
+            ctx.page.pushOperators(popGraphicsState());
+
+            // 箭头：起点取路径第一段的方向，终点取最后一段的方向
+            if (element.stroke && (element.startArrow || element.endArrow)) {
+                const thickness = element.lineWidth ?? 1;
+                const color = parseColor(element.stroke);
+                const pts = element.segments
+                    .filter((s) => s.op === 'm' || s.op === 'l')
+                    .map((s) => ({ x: ctx.originX + s.args[0], y: ctx.pageHeight - ctx.originY - s.args[1] }));
+                if (pts.length >= 2) {
+                    if (element.endArrow) {
+                        const tip = pts[pts.length - 1];
+                        const ref = pts[pts.length - 2];
+                        drawArrowHead(ctx, tip.x, tip.y, ref.x, ref.y, thickness, color);
+                    }
+                    if (element.startArrow) {
+                        const tip = pts[0];
+                        const ref = pts[1];
+                        drawArrowHead(ctx, tip.x, tip.y, ref.x, ref.y, thickness, color);
+                    }
+                }
+            }
+            return element.lineWidth ?? 0;
         }
 
         case 'hr': {

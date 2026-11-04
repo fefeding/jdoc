@@ -51,6 +51,21 @@ export interface PptxToBlocksOptions {
     notes?: boolean;
     /** 图片资源处理方式，默认 'both'（元素上保留 data URL，同时抽出资源表） */
     assets?: DocAssetMode;
+    /**
+     * 是否在幻灯片之间插入分隔块（`hr`），默认 false。
+     *
+     * Markdown 没有「页」的概念，多页 PPT 转成 md 后各页内容会连成一片，
+     * 打开分隔线才知道哪里换页了；docx / html 等目标则不需要（各有分页/分节机制）。
+     */
+    slideSeparator?: boolean;
+    /**
+     * 是否把页内「小标题」文本框升级为二级标题，默认 true。
+     *
+     * 判定条件很保守：单段、无项目符号、整段加粗、没有形状底（排除图示里的标签）、
+     * 字号大于本页正文字号、文字不长 —— 命中的是「最近主要工作经历」这类小节标题，
+     * 不会把图里的方框文字误判成标题。
+     */
+    subHeadings?: boolean;
 }
 
 /** pptxToBlocks 结果 */
@@ -67,8 +82,11 @@ interface ParaItem {
     align?: string;
 }
 
-/** PPTX 解析出的元素 -> 段落项 / 独立块 */
+/** 正文流里的一项：段落项 / 独立块 / 小标题 */
 type ElementItem = { kind: 'para'; item: ParaItem } | { kind: 'block'; block: DocxBlock };
+
+/** 正文流（段落 + 小标题，保持页面上的先后顺序） */
+type FlowItem = { kind: 'para'; item: ParaItem } | { kind: 'heading'; level: DocxHeading['level']; text: string };
 
 // ---- runs 构造 ----
 
@@ -88,9 +106,38 @@ function runToRun(run: PptxTextRun): DocxRun {
 
 /** PPTX 段落 -> runs（富文本优先，否则取纯文本） */
 function paragraphToRuns(p: PptxParagraph): DocxRun[] {
-    if (p.runs?.length) return p.runs.map(runToRun);
-    if (p.text != null) return [{ text: p.text }];
-    return [];
+    const runs = p.runs?.length ? p.runs.map(runToRun) : p.text != null ? [{ text: p.text }] : [];
+    return mergeRuns(runs);
+}
+
+/**
+ * 合并样式完全相同的相邻 run（PPTX 解析器常把同一段富文本拆成多个 run，
+ * 如「申报目标：」「技术」各自 bold，直接输出会在 markdown / docx 里产生
+ * `****` 这类相邻加粗标记，合并后渲染更干净）。
+ */
+function mergeRuns(runs: DocxRun[]): DocxRun[] {
+    const out: DocxRun[] = [];
+    for (const r of runs) {
+        const prev = out[out.length - 1];
+        if (
+            prev &&
+            (prev.bold ?? false) === (r.bold ?? false) &&
+            (prev.italic ?? false) === (r.italic ?? false) &&
+            (prev.underline ?? false) === (r.underline ?? false) &&
+            (prev.strike ?? false) === (r.strike ?? false) &&
+            (prev.subscript ?? false) === (r.subscript ?? false) &&
+            (prev.superscript ?? false) === (r.superscript ?? false) &&
+            (prev.color ?? undefined) === (r.color ?? undefined) &&
+            (prev.font ?? undefined) === (r.font ?? undefined) &&
+            (prev.size ?? undefined) === (r.size ?? undefined) &&
+            (prev.link ?? undefined) === (r.link ?? undefined)
+        ) {
+            prev.text += r.text;
+        } else {
+            out.push({ ...r });
+        }
+    }
+    return out;
 }
 
 /** 段落是否为项目符号 / 编号 */
@@ -217,7 +264,7 @@ function textElementToItems(el: PptxTextElement): ParaItem[] {
     }
     if (!items.length) {
         if (el.runs?.length) {
-            const runs = el.runs.map(runToRun);
+            const runs = mergeRuns(el.runs.map(runToRun));
             if (runs.some((r) => r.text)) items.push({ runs, bullet: false });
         } else if (el.text) {
             items.push({ runs: [{ text: el.text }], bullet: false });
@@ -301,11 +348,81 @@ function groupItems(items: ParaItem[]): DocxBlock[] {
     return blocks;
 }
 
+/**
+ * 正文流 -> 块序列（段落项聚合成列表，小标题原样保留为标题）
+ *
+ * 与 groupItems 的区别：小标题（heading）穿插在段落之间，必须保持页面上的先后顺序，
+ * 不能像图片 / 表格那样统一挪到末尾。
+ */
+function flowToBlocks(flow: FlowItem[]): DocxBlock[] {
+    const blocks: DocxBlock[] = [];
+    let pending: ParaItem[] = [];
+    const flush = () => {
+        if (pending.length) blocks.push(...groupItems(pending));
+        pending = [];
+    };
+    for (const item of flow) {
+        if (item.kind === 'heading') {
+            flush();
+            blocks.push({ type: 'heading', level: item.level, text: item.text });
+            continue;
+        }
+        pending.push(item.item);
+    }
+    flush();
+    return blocks;
+}
+
+/** 本页正文的基准字号（各文本框字号的众数） */
+function dominantFontSize(elements: PptxElement[]): number {
+    const counter = new Map<number, number>();
+    for (const el of elements) {
+        if (el.type !== 'text') continue;
+        const size = maxFontSizeOf(el as PptxTextElement);
+        if (!size) continue;
+        counter.set(size, (counter.get(size) ?? 0) + 1);
+    }
+    let best = 0;
+    let bestCount = 0;
+    for (const [size, count] of counter) {
+        // 众数；数量相同时取更小的字号（正文通常是页内最小的那一档，
+        // 取小的才能让「比正文大一号」的元素被判成小标题）
+        if (count > bestCount || (count === bestCount && size < best)) {
+            best = size;
+            bestCount = count;
+        }
+    }
+    return best;
+}
+
+/**
+ * 文本框是否像「页内小标题」
+ *
+ * 判定条件（保守，避免把图示里的方框文字误判成标题）：
+ *   单段 + 无项目符号 + 整段加粗 + 没有形状底（纯文本框）+ 字号大于正文字号 + 文字不长
+ */
+function isSubHeading(el: PptxTextElement, bodySize: number): boolean {
+    if (!bodySize) return false;
+    // 有形状底 / 形状类型的是图示里的标签（色块、圆角框），不是标题
+    if (el.shapeType) return false;
+    if (el.fill && el.fill !== 'none') return false;
+    const paragraphs = el.paragraphs ?? [];
+    if (paragraphs.length !== 1) return false;
+    const p = paragraphs[0];
+    if (p.bullet) return false;
+    const runs = p.runs?.length ? p.runs : p.text != null ? [{ text: p.text } as PptxTextRun] : [];
+    if (!runs.length) return false;
+    if (!runs.every((r) => r.bold)) return false;
+    const text = runs.map((r) => r.text ?? '').join('').trim();
+    if (!text || text.length > 30) return false;
+    return maxFontSizeOf(el) > bodySize;
+}
+
 /** 单张幻灯片 -> 块 */
 function slideToBlocks(
     slide: PptxSlide,
     index: number,
-    options: { slideHeading: boolean; headingLevel: number; notes: boolean }
+    options: { slideHeading: boolean; headingLevel: number; notes: boolean; subHeadings: boolean }
 ): DocxBlock[] {
     const blocks: DocxBlock[] = [];
     const elements = slide.elements ?? [];
@@ -335,18 +452,27 @@ function slideToBlocks(
     const bodyEls = elements.filter((e) => e !== titleEl);
     bodyEls.sort((a, b) => (a.y ?? 0) - (b.y ?? 0) || (a.x ?? 0) - (b.x ?? 0));
 
-    const items: ParaItem[] = [];
+    const flow: FlowItem[] = [];
     const direct: DocxBlock[] = [];
+    // 正文字号基准：页内各文本框字号的众数（用来判定「小标题」字号更大）
+    const bodySize = options.subHeadings ? dominantFontSize(bodyEls) : 0;
     for (const el of bodyEls) {
+        if (bodySize && el.type === 'text' && isSubHeading(el as PptxTextElement, bodySize)) {
+            flow.push({
+                kind: 'heading',
+                level: (options.headingLevel + 1) as DocxHeading['level'],
+                text: firstTextOf(el as PptxTextElement)
+            });
+            continue;
+        }
         const elementItems = elementToItems(el);
         for (const ei of elementItems) {
-            if (ei.kind === 'para') items.push(ei.item);
+            if (ei.kind === 'para') flow.push(ei);
             else direct.push(ei.block);
         }
     }
-    blocks.push(...groupItems(items));
+    blocks.push(...flowToBlocks(flow));
     blocks.push(...direct);
-
     // 3) 演讲者备注（可选）
     if (options.notes && slide.notes?.trim()) {
         blocks.push({ type: 'quote', runs: [{ text: slide.notes.trim() }] });
@@ -381,10 +507,11 @@ export function pptxDocumentToBlocks(
     doc: PptxDocument,
     options: PptxToBlocksOptions = {}
 ): PptxToBlocksResult {
-    const { slideHeading = true, headingLevel = 1, notes = false } = options;
+    const { slideHeading = true, headingLevel = 1, notes = false, slideSeparator = false, subHeadings = true } = options;
     const blocks: DocxBlock[] = [];
     for (let i = 0; i < doc.slides.length; i++) {
-        blocks.push(...slideToBlocks(doc.slides[i], i, { slideHeading, headingLevel, notes }));
+        if (slideSeparator && i > 0) blocks.push({ type: 'hr' });
+        blocks.push(...slideToBlocks(doc.slides[i], i, { slideHeading, headingLevel, notes, subHeadings }));
     }
     return {
         blocks,

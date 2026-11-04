@@ -41,6 +41,14 @@ export interface BlocksToMarkdownOptions {
     assets?: DocAsset[] | Record<string, DocAsset> | { assets?: DocAsset[] };
     /** 是否把行内代码包成反引号，默认 true */
     inlineCode?: boolean;
+    /**
+     * 是否把图片显示尺寸写进 title（`"w=..,h=.."`），默认 true。
+     *
+     * Markdown 没有图片尺寸语法，尺寸只能借 title 承载 —— 这是 md -> blocks -> md
+     * 往返保尺寸的约定。但对 PPTX 这类「版式来源」没意义（宽高是幻灯片画布坐标），
+     * 转出的 md 里是噪音，可关掉。
+     */
+    imageSizes?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -432,10 +440,23 @@ function fencedCode(text: string): string {
     return `${fence}\n${text.replace(/\n$/, '')}\n${fence}`;
 }
 
+/** Markdown 能表达的样式键（font/size/color 在 md 里无对应语法，忽略） */
+function mdStyleKey(r: DocxRun): string {
+    return [r.bold ? 'B' : '', r.italic ? 'I' : '', r.strike ? 'S' : '', r.code ? 'C' : '', r.link ?? ''].join('|');
+}
+
 /** 行内 run 序列 -> Markdown 文本 */
 function runsToMarkdown(runs: DocxRun[], inlineCode: boolean): string {
-    let out = '';
+    // 先合并仅在 font/size/color 上不同的相邻 run（md 无法表达这些，否则会
+    // 产生 **a****b** 这类相邻加粗标记，渲染虽正确但源文件很脏）
+    const merged: DocxRun[] = [];
     for (const r of runs) {
+        const last = merged[merged.length - 1];
+        if (last && mdStyleKey(last) === mdStyleKey(r)) last.text += r.text;
+        else merged.push({ ...r });
+    }
+    let out = '';
+    for (const r of merged) {
         if (!r.text) continue;
         let text = r.text;
         if (r.code && inlineCode) {
@@ -475,7 +496,7 @@ function cellToText(cell: DocxCell | undefined, inlineCode: boolean): string {
 }
 
 /** 单个块转成单行 Markdown（不含结尾换行，供表格/引用等复用） */
-function blockToMarkdownLine(block: DocxBlock, inlineCode: boolean): string {
+function blockToMarkdownLine(block: DocxBlock, inlineCode: boolean, imageSizes = true): string {
     switch (block.type) {
         case 'heading':
             return `${'#'.repeat(block.level)} ${block.runs ? runsToMarkdown(block.runs, inlineCode) : block.text ?? ''}`;
@@ -490,13 +511,16 @@ function blockToMarkdownLine(block: DocxBlock, inlineCode: boolean): string {
         case 'code':
             return '```' + (block.language || '') + '\n' + block.text + '\n```';
         case 'image': {
-            // 尺寸写进 title（Markdown 没有图片尺寸语法），往返时还原成显示大小
-            const size = [
-                block.width ? `w=${block.width}` : '',
-                block.height ? `h=${block.height}` : ''
-            ]
-                .filter(Boolean)
-                .join(',');
+            // 尺寸写进 title（Markdown 没有图片尺寸语法），往返时还原成显示大小；
+            // imageSizes=false 时不写（PPTX 等版式来源的宽高是画布坐标，写进 md 只是噪音）
+            const size = imageSizes
+                ? [
+                      block.width ? `w=${block.width}` : '',
+                      block.height ? `h=${block.height}` : ''
+                  ]
+                      .filter(Boolean)
+                      .join(',')
+                : '';
             return `![${block.alt ?? ''}](${imageSrc(block)}${size ? ` "${size}"` : ''})`;
         }
         case 'hr':
@@ -678,13 +702,14 @@ export function blocksToMarkdown(
 ): string {
     const blocks = Array.isArray(input) ? input : input.blocks || [];
     const inlineCode = options.inlineCode !== false;
+    const imageSizes = options.imageSizes !== false;
     const assetTable = normalizeAssets(options.assets);
     assetLookup = assetTable;
     try {
         const parts: string[] = [];
 
         for (const block of blocks) {
-            const text = blockToMarkdownLine(block, inlineCode);
+            const text = blockToMarkdownLine(block, inlineCode, imageSizes);
             // 相邻块之间一律空行：列表后的段落缺空行会被 CommonMark 当作
             // 列表项的 lazy continuation，相邻列表会合并、相邻段落会软换行合并，
             // 统一空行才能保证块边界在往返后不丢。

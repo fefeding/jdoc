@@ -45,13 +45,18 @@ function escapeWithBreaks(value: string): string {
     return escapeHtml(value).replace(/\n/g, '<br/>').replace(/\t/g, '&emsp;');
 }
 
+/** 颜色归一为合法 CSS 值（解析器输出的十六进制可能不带 # 前缀） */
+function cssColor(value: string): string {
+    return value.startsWith('#') ? value : `#${value}`;
+}
+
 /** run -> 内联 span / a */
 export function runToHtml(run: DocxRun): string {
     const styles: string[] = [];
-    if (run.color) styles.push(`color:${run.color}`);
+    if (run.color) styles.push(`color:${cssColor(run.color)}`);
     if (run.size !== undefined) styles.push(`font-size:${run.size}pt`);
     if (run.font) styles.push(`font-family:${escapeHtml(run.font)}`);
-    if (run.highlight) styles.push(`background-color:${run.highlight}`);
+    if (run.highlight) styles.push(`background-color:${cssColor(run.highlight)}`);
 
     let text = escapeWithBreaks(run.text);
     // 行内代码：用 <code> 语义标签（PDF 里字号更小的片段会被标成 code）

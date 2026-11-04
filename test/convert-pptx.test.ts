@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { jsonToPptx } from '../src/pptx/index';
 import { pptxDocumentToBlocks, pptxToBlocks } from '../src/convert/pptx';
 import { convert } from '../src/convert/index';
+import { markdownToBlocks } from '../src/convert/markdown';
 import type { PptxDocument } from '../src/pptx/index';
 import type { DocxBlock } from '../src/docx/types';
 
@@ -29,10 +30,21 @@ function buildDeck(): PptxDocument {
                         y: 100,
                         width: 960,
                         height: 300,
+                        fontSize: 14,
                         paragraphs: [
                             { text: '完成目标', bullet: true, runs: [{ text: '完成目标' }] },
                             { text: '存在问题', bullet: true, runs: [{ text: '存在问题' }] }
                         ]
+                    },
+                    {
+                        type: 'shape',
+                        shapeType: 'rect',
+                        x: 600,
+                        y: 100,
+                        width: 200,
+                        height: 120,
+                        fill: '4472C4',
+                        line: { color: '2F5597', width: 1 }
                     },
                     {
                         type: 'image',
@@ -162,5 +174,83 @@ describe('convert: pptx 统一门面', () => {
         const { metadata } = await pptxToBlocks(bytes);
         expect(metadata?.title).toBe('示例');
         expect(metadata?.author).toBe('测试');
+    });
+});
+
+describe('convert: pptx -> html 版式还原', () => {
+    it('每页一个画布 section，元素绝对定位', async () => {
+        const bytes = await jsonToPptx(buildDeck());
+        const html = (await convert(bytes, 'html', { from: 'pptx' })) as string;
+        // 每页一个 section，画布尺寸 = 幻灯片尺寸
+        expect((html.match(/class="jt-slide"/g) || []).length).toBe(2);
+        expect(html).toContain('width:960px');
+        expect(html).toContain('height:540px');
+        // 文本用绝对定位的 div 承载
+        expect(html).toContain('class="jt-text"');
+        expect(html).toMatch(/class="jt-text" style="left:0px;top:0px;width:960px/);
+    });
+
+    it('图片内嵌为 data URL，形状走 SVG', async () => {
+        const bytes = await jsonToPptx(buildDeck());
+        const html = (await convert(bytes, 'html', { from: 'pptx' })) as string;
+        expect(html).toContain('<svg');
+        expect(html).toMatch(/<img class="jt-img" src='data:image\/png;base64,/);
+    });
+
+    it('文本保留原始内容与换行结构', async () => {
+        const bytes = await jsonToPptx(buildDeck());
+        const html = (await convert(bytes, 'html', { from: 'pptx' })) as string;
+        expect(html).toContain('季度汇报');
+        expect(html).toContain('完成目标');
+    });
+});
+
+describe('convert: pptx -> md 分页与标题层级', () => {
+    it('页与页之间用 --- 分隔', async () => {
+        const bytes = await jsonToPptx(buildDeck());
+        const md = (await convert(bytes, 'md', { from: 'pptx' })) as string;
+        expect(md).toContain('# 季度汇报');
+        expect(md).toContain('# 数据');
+        expect(md).toMatch(/---/);
+    });
+
+    it('图片 title 不再写宽高（PPTX 的宽高是画布坐标）', async () => {
+        const bytes = await jsonToPptx(buildDeck());
+        const md = (await convert(bytes, 'md', { from: 'pptx' })) as string;
+        expect(md).not.toContain('w=120');
+        expect(md).not.toContain('h=90');
+        expect(md).toMatch(/!\[[^\]]*\]\(data:image\/png;base64,[^)]+\)/);
+    });
+
+    it('其它来源的 md 仍保留图片尺寸（往返要还原显示大小）', async () => {
+        const md = [
+            '# 标题',
+            '',
+            '![图](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg== "w=120,h=90")'
+        ].join('\n');
+        const blocks = markdownToBlocks(md);
+        const image = blocks.find((b) => b.type === 'image') as Extract<DocxBlock, { type: 'image' }>;
+        expect(image.width).toBe(120);
+        expect(image.height).toBe(90);
+    });
+
+    it('页内小标题升级为二级标题', async () => {
+        const deck = buildDeck();
+        // 加一个「加粗 + 字号大于正文 + 无形状底」的纯文本框
+        deck.slides[0].elements.push({
+            type: 'text',
+            x: 0,
+            y: 380,
+            width: 400,
+            height: 30,
+            fontSize: 18,
+            paragraphs: [{ text: '小节标题', runs: [{ text: '小节标题', bold: true, fontSize: 18 }] }]
+        });
+        const { blocks } = pptxDocumentToBlocks(deck);
+        const h2 = blocks.find(
+            (b) => b.type === 'heading' && (b as Extract<DocxBlock, { type: 'heading' }>).level === 2
+        ) as Extract<DocxBlock, { type: 'heading' }>;
+        expect(h2).toBeTruthy();
+        expect(h2.text).toBe('小节标题');
     });
 });

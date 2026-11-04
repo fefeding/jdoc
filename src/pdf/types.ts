@@ -333,6 +333,10 @@ export interface PdfLineElement {
     color?: string;
     /** 虚线间隔，如 [3, 2] */
     dash?: number[];
+    /** 起点箭头（PPT 连接线的 startArrow） */
+    startArrow?: boolean;
+    /** 终点箭头（PPT 连接线的 endArrow） */
+    endArrow?: boolean;
 }
 
 /**
@@ -403,6 +407,30 @@ export interface PdfGroupElement {
 }
 
 /**
+ * 任意路径元素（多边形 / 圆柱等预设形状）
+ *
+ * 坐标为内容区左上原点、y 向下、pt（与 rect / group 的裁剪路径一致），
+ * 生成端绘制时翻转到 PDF 的 y 向上坐标系。用于 PPTX 的块箭头
+ * （rightArrow / downArrow）等无法用 rect / line 表达的预设形状。
+ */
+export interface PdfPathElement {
+    type: 'path';
+    segments: PdfPathSegment[];
+    fill?: string;
+    stroke?: string;
+    /** 线宽（pt） */
+    lineWidth?: number;
+    /** 填充 / 描边不透明度（0~1） */
+    opacity?: number;
+    /** 虚线间隔（pt），如 [3, 2] */
+    dash?: number[];
+    /** 起点箭头（沿路径起点方向） */
+    startArrow?: boolean;
+    /** 终点箭头（沿路径终点方向） */
+    endArrow?: boolean;
+}
+
+/**
  * 带合并信息的表格单元格
  *
  * Word 的合并单元格（w:gridSpan 横跨列、w:vMerge 纵跨行）与列宽只有在这一层
@@ -464,6 +492,7 @@ export type PdfElement =
     | PdfLineElement
     | PdfHrElement
     | PdfRectElement
+    | PdfPathElement
     | PdfGroupElement
     | PdfTableElement
     | PdfPageBreakElement;

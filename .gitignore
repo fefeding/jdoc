@@ -26,3 +26,6 @@ examples/过载保护优化方案.html
 examples/过载保护优化方案2.html
 examples/销售分析表 副本.html
 examples/企业微信应用介绍.pptx
+# 生成的大体积示例（base64 内嵌图，HTML ~10MB / MD ~9.4MB，仅工作区留档不入库）
+examples/fefeding金腾科技前端开发通道答辨.html
+examples/fefeding金腾科技前端开发通道答辨.md
