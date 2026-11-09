@@ -1,10 +1,26 @@
 # jdoc Document Viewer
 
+[![Version](https://img.shields.io/visual-studio-marketplace/v/fefeding.jdoc-viewer)](https://marketplace.visualstudio.com/items?itemName=fefeding.jdoc-viewer)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/fefeding.jdoc-viewer)](https://marketplace.visualstudio.com/items?itemName=fefeding.jdoc-viewer)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fefeding/jdoc/blob/main/LICENSE)
+
+一款免费、一体化的 VS Code **Office 文档查看与编辑**扩展：直接在编辑器内打开、查看并编辑 **Word**、**Excel**、**PowerPoint** 与 **PDF**，预览 **Markdown**，并在文档格式间互相转换——无需安装 Microsoft Office。
+
+## 安装
+
+在扩展面板（`Ctrl/Cmd+Shift+X`）中搜索 **jdoc Document Viewer**，或在命令面板运行：
+
+```
+ext install fefeding.jdoc-viewer
+```
+
+打开任意 `.docx` / `.xlsx` / `.pptx` / `.pdf` 文件即可自动用 jdoc 打开。
+
 ## 示例截图
 
 **DOCX** — 按纸张分页、带目录侧栏的视图（`examples/商业计划书.docx`）：
 
-![DOCX 预览](https://github.com/fefeding/jdoc/blob/main/examples/docx.png)
+![DOCX 预览](https://github.com/fefeding/jdoc/raw/main/examples/docx.png)
 
 **XLSX** — 带工作表标签、公式栏、实时公式与图表的 Excel 式网格（`examples/销售分析表 副本.xlsx`）：
 
@@ -12,9 +28,9 @@
 
 VS Code 扩展，基于 [`@fefeding/jdoc`](https://github.com/fefeding/jdoc) 在编辑器内**查看并编辑**办公文档：
 
-- **PPTX** — 幻灯片渲染（含图表），可编辑
-- **DOCX** — 文档渲染（按纸张分页），可编辑
-- **XLSX** — 以 Excel 式网格渲染（列标行、真实列宽行高、边框/填充/字体/数字格式、合并单元格、冻结窗格），带**工作表标签**、**公式栏**、状态栏**求和/计数/平均值**，以及锚定在单元格上的**图表**（柱/条/饼/环/折线/面积/散点/雷达）——改单元格图表实时联动，保存后图表不丢。图表绘制与 PPTX 编辑器共用库里的 `chart/svg` 模块，两种格式的图表类型、图例、数据标签、数字格式规则完全一致
+- **PPTX (PowerPoint)** — 幻灯片渲染（含图表），可编辑
+- **DOCX (Word)** — 文档渲染（按纸张分页），可编辑
+- **XLSX (Excel)** — 以 Excel 式网格渲染（列标行、真实列宽行高、边框/填充/字体/数字格式、合并单元格、冻结窗格），带**工作表标签**、**公式栏**、状态栏**求和/计数/平均值**，以及锚定在单元格上的**图表**（柱/条/饼/环/折线/面积/散点/雷达）——改单元格图表实时联动，保存后图表不丢。图表绘制与 PPTX 编辑器共用库里的 `chart/svg` 模块，两种格式的图表类型、图例、数据标签、数字格式规则完全一致
 - **PDF** — 页面栅格化渲染（支持扫描件），可叠加编辑：签名 / 图片 / 文本 / 矩形 / 手绘；大文档打开时先显示加载提示并优先渲染首页，其余页与缩略图后台增量补齐
 - **Markdown**（`.md` / `.markdown`）— 排版预览（只读，围栏代码块语法高亮，支持 Mermaid 图表与 KaTeX 公式）
 - **纯文本**（`.txt`）— 等宽预览（只读）
@@ -102,3 +118,7 @@ npm run dev        # 持续构建 extension.js + webview.js
 
 - `VSCE_PAT` — Marketplace 发布令牌
 - `OVSX_TOKEN` — Open VSX 访问令牌
+
+## 反馈与评分
+
+如果这个扩展帮到你，请在 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=fefeding.jdoc-viewer) 上 **留下评分 ★★★★★**。评分与评论是其他开发者发现本扩展的最重要因素。有 Bug 或新功能想法？欢迎到 [GitHub Issues](https://github.com/fefeding/jdoc/issues) 提出。

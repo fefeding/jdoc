@@ -1,5 +1,21 @@
 # jdoc Document Viewer
 
+[![Version](https://img.shields.io/visual-studio-marketplace/v/fefeding.jdoc-viewer)](https://marketplace.visualstudio.com/items?itemName=fefeding.jdoc-viewer)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/fefeding.jdoc-viewer)](https://marketplace.visualstudio.com/items?itemName=fefeding.jdoc-viewer)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/fefeding/jdoc/blob/main/LICENSE)
+
+A free, all-in-one **Office document viewer & editor** for VS Code. Open, view and edit **Word**, **Excel**, **PowerPoint** and **PDF** files directly inside the editor, preview **Markdown**, and convert between document formats — no Microsoft Office install required.
+
+## Install
+
+Search for **jdoc Document Viewer** in the Extensions view (`Ctrl/Cmd+Shift+X`), or run from the command palette:
+
+```
+ext install fefeding.jdoc-viewer
+```
+
+Then open any `.docx` / `.xlsx` / `.pptx` / `.pdf` file — it opens automatically with jdoc.
+
 ## Screenshots
 
 **DOCX** — paginated paper view with a table-of-contents sidebar (`examples/商业计划书.docx`):
@@ -12,9 +28,9 @@
 
 A VS Code extension that lets you **view and edit** office documents right inside the editor, built on [`@fefeding/jdoc`](https://github.com/fefeding/jdoc):
 
-- **PPTX** — slide rendering (including charts), editable
-- **DOCX** — document rendering (paginated by paper size), editable
-- **XLSX** — spreadsheet rendering in an Excel-like grid (column/row headers, real column widths and row heights, cell borders / fills / fonts / number formats, merged cells, frozen panes), with **sheet tabs**, an in-cell **formula bar**, a status bar showing Sum / Count / Average for the selection, and **charts** (column / bar / pie / doughnut / line / area / scatter / radar) anchored to cells and refreshed live from the referenced cells; formulas (including cross-sheet references and Chinese sheet names) are evaluated incrementally when a cell is edited. Charts survive saving, and cells are editable. Chart drawing is shared with the PPTX editor through the library's `chart/svg` module, so both formats render the same chart types with the same legend / data-label / number-format rules.
+- **PPTX (PowerPoint)** — slide rendering (including charts), editable
+- **DOCX (Word)** — document rendering (paginated by paper size), editable
+- **XLSX (Excel)** — spreadsheet rendering in an Excel-like grid (column/row headers, real column widths and row heights, cell borders / fills / fonts / number formats, merged cells, frozen panes), with **sheet tabs**, an in-cell **formula bar**, a status bar showing Sum / Count / Average for the selection, and **charts** (column / bar / pie / doughnut / line / area / scatter / radar) anchored to cells and refreshed live from the referenced cells; formulas (including cross-sheet references and Chinese sheet names) are evaluated incrementally when a cell is edited. Charts survive saving, and cells are editable. Chart drawing is shared with the PPTX editor through the library's `chart/svg` module, so both formats render the same chart types with the same legend / data-label / number-format rules.
 - **PDF** — rasterized page rendering (scanned documents supported), with overlay editing: signature / image / text / rectangle / freehand; large documents show a loading indicator first and prioritize the first page, while the rest of the pages and the thumbnails are filled in incrementally in the background
 - **Markdown** (`.md` / `.markdown`) — typeset preview (read-only, fenced code blocks with syntax highlighting, Mermaid diagrams and KaTeX formulas supported)
 - **Plain text** (`.txt`) — monospace preview (read-only)
@@ -94,3 +110,7 @@ Pushing a `v*` tag or manually triggering the `Publish Extension` workflow build
 
 - `VSCE_PAT` — Marketplace publish token
 - `OVSX_TOKEN` — Open VSX access token
+
+## Feedback & Rating
+
+If jdoc helps you, please **leave a rating ★★★★★** on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=fefeding.jdoc-viewer). Ratings and reviews are the single biggest factor in how other developers discover the extension. Found a bug or have a feature idea? Open a [GitHub Issue](https://github.com/fefeding/jdoc/issues).

@@ -2,31 +2,50 @@
   "name": "jdoc-viewer",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "keywords": [
     "docx",
     "xlsx",
     "pdf",
     "pptx",
     "markdown",
+    "word",
+    "excel",
+    "powerpoint",
+    "office",
     "document",
     "viewer",
     "editor",
+    "converter",
+    "convert",
+    "markdown-preview",
+    "pdf-viewer",
+    "spreadsheet",
+    "presentation",
     "skills",
     "ai-agent"
   ],
   "publisher": "fefeding",
   "license": "MIT",
+  "homepage": "https://github.com/fefeding/jdoc#readme",
   "repository": {
     "type": "git",
     "url": "https://github.com/fefeding/jdoc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fefeding/jdoc/issues"
+  },
+  "qna": "https://github.com/fefeding/jdoc/issues",
+  "galleryBanner": {
+    "color": "#1f6feb",
+    "theme": "dark"
   },
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
-    "Visualization",
-    "Other"
+    "Editing",
+    "Visualization"
   ],
   "main": "./dist/extension.js",
   "icon": "icon.png",

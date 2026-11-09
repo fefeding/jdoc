@@ -1,6 +1,6 @@
 {
-  "displayName": "jdoc 文档查看器",
-  "description": "在 VS Code 中查看并编辑 PPTX / DOCX / XLSX / PDF 文档，并预览 Markdown / 纯文本（由 @fefeding/jdoc 驱动）",
+  "displayName": "jdoc Office 查看与编辑",
+  "description": "在 VS Code 中打开、查看并编辑 Word(DOCX)、Excel(XLSX)、PowerPoint(PPTX) 与 PDF，并预览 Markdown、转换文档格式（由 @fefeding/jdoc 驱动）",
   "customEditor.documentEditor": "jdoc 文档编辑器",
   "command.revert": "还原",
   "command.exportCopy": "导出副本",

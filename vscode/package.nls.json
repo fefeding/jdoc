@@ -1,6 +1,6 @@
 {
-  "displayName": "jdoc Document Viewer",
-  "description": "View and edit PPTX / DOCX / XLSX / PDF documents in VS Code, and preview Markdown / plain text — powered by @fefeding/jdoc",
+  "displayName": "jdoc Office Viewer & Editor",
+  "description": "Open, view and edit Word (DOCX), Excel (XLSX), PowerPoint (PPTX) and PDF in VS Code — plus Markdown preview & document conversion. Powered by @fefeding/jdoc",
   "customEditor.documentEditor": "jdoc Document Editor",
   "command.revert": "Revert",
   "command.exportCopy": "Export Copy",
