@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.25
+## 0.1.26
 
-- **SEO / Marketplace 优化**：显示名改为 `jdoc Office Viewer & Editor`（保留 `Office` 与 `Editor` 关键词）；简短描述与 `README` 补入 Word / Excel / PowerPoint / Office 自然语言词；`keywords` 扩充至 20 个（新增 `office` / `word` / `excel` / `powerpoint` / `converter` 等）；类目由 `Visualization, Other` 调整为 `Editing, Visualization`；新增 `galleryBanner` / `homepage` / `qna` / `bugs`；`README` 增加 badges、安装指引与评分引导，并修复中文 README 的截图 `/blob/` 链接。
+- **SEO / Marketplace 优化**：显示名改为 `jdoc Office Viewer & Editor`（保留 `Office` 与 `Editor` 关键词）；简短描述与 `README` 补入 Word / Excel / PowerPoint / Office 自然语言词；`keywords` 扩充至 20 个（新增 `office` / `word` / `excel` / `powerpoint` / `converter` 等）；类目为 `Visualization, Other`；新增 `galleryBanner` / `homepage` / `qna` / `bugs`；`README` 增加 badges、安装指引与评分引导，并修复中文 README 的截图 `/blob/` 链接。
 
 ## 0.1.24
 
