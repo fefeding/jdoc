@@ -20,6 +20,16 @@ export type WebviewToHost =
   | { type: 'save' }
   | { type: 'saveAs'; bytes: string | null }
   | { type: 'revert' }
+  /** Save is about to happen: serialize any pending edit immediately (beats the 350ms debounce). */
+  | { type: 'flush' }
+  /** Reply to `flush` when there is nothing to serialize (e.g. preview mode). */
+  | { type: 'flushDone' }
+  /** Save one rendered slide (PNG, base64) — the host owns file dialogs and the filesystem. */
+  | { type: 'exportImage'; bytes: string; suggestedName: string }
+  /** Save every rendered slide into a picked folder. */
+  | { type: 'exportImages'; images: { name: string; bytes: string }[] }
+  /** Host assembles the rendered slide PNGs into a single PDF (pdf-lib lives host-side only). */
+  | { type: 'exportPdf'; images: { bytes: string }[]; widthPx: number; heightPx: number; suggestedName: string }
   /** 请求宿主对当前文档执行 jdoc.convert（内容区右键「转换格式」）。 */
   | { type: 'convert'; uri?: string }
   /** Surface a webview-side problem (parse/serialize failure) in the host UI. */
@@ -50,6 +60,7 @@ export type HostToWebview =
   | { type: 'bytes'; bytes: string; dirty: boolean }
   | { type: 'saved' }
   | { type: 'reverted' }
+  | { type: 'flush' }
   | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' }
   /** 宿主已收到转换请求、选择框即将弹出（让 webview 给出明确反馈）。 */
   | { type: 'convertAck' };

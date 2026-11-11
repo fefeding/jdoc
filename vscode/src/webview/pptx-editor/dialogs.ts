@@ -375,6 +375,35 @@ export function shapeMenuItems(api: { addShape: (type: string, opt?: any) => voi
   return items;
 }
 
+/**
+ * SmartArt 文字编辑对话框。
+ * 图示的文字存在两处部件里（数据部件 + 缓存绘图部件），保存时由 parser 的
+ * updateDiagramTexts 同步改写，这里只负责收集用户输入。
+ */
+export function openDiagramTextDialog(
+  texts: string[],
+  api: { save: (texts: string[]) => void }
+): void {
+  openDialog(t('dlg.diagram.text'), (close) => {
+    const inputs: HTMLInputElement[] = texts.map((v) => input('text', v, 'dlg-cell'));
+    const list = h('div', { class: 'dlg-col' });
+    inputs.forEach((inp, i) => {
+      list.append(h('div', { class: 'dlg-line' }, [h('span', {}, [t('dlg.diagram.node', String(i + 1))]), inp]));
+    });
+    return [
+      h('p', { class: 'dlg-msg' }, [t('dlg.diagram.hint')]),
+      list,
+      row([
+        btn(t('common.cancel'), close),
+        btn(t('common.save'), () => {
+          api.save(inputs.map((x) => x.value));
+          close();
+        }, 'btn primary')
+      ], 'dlg-actions')
+    ];
+  });
+}
+
 // ---------- media ----------
 export function openMediaDialog(api: { addMedia: (type: 'video' | 'audio', data: string, ext: string) => void }): void {
   openDialog(t('dlg.media.insert'), (close) => {

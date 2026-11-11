@@ -19,6 +19,8 @@ import { buildTabs, RibbonTab } from './ribbon-tabs';
 
 export type RibbonState = {
   mode: EditorMode;
+  /** 文档有未保存改动（驱动快速访问栏保存按钮的高亮/小圆点） */
+  dirty: boolean;
   canUndo: boolean;
   canRedo: boolean;
   zoom: number;
@@ -32,6 +34,10 @@ export type RibbonState = {
   sizeKey: string;
   transition: { type: string; duration: number; advanceOnClick: boolean };
   animations: { index: number; text: string }[];
+  /** 动画窗格当前选中的条目（参数控件编辑它）；-1 表示未选中 */
+  animIndex: number;
+  /** 当前选中动画的参数，用于把功能区下拉同步到真实模型值 */
+  animPick: { cls: string; type: string; trigger: string; direction: string; duration: string };
   /** Named capability flags consumed by `needs` (see `ribbonCaps` in main.ts). */
   caps: Record<string, boolean | string>;
 };
@@ -313,12 +319,17 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
           return;
         }
         for (const a of s.animations) {
+          // 点选一条后，右侧参数控件（类型/方向/触发/时长）会直接修改它
           el.append(
-            h('div', { class: 'rb-anim-row' }, [
+            h('div', {
+              class: 'rb-anim-row' + (a.index === s.animIndex ? ' on' : ''),
+              style: 'cursor:pointer',
+              onclick: () => api.cmd('animSelect', a.index)
+            }, [
               h('span', { class: 'rb-anim-text', title: a.text }, [a.text]),
-              h('button', { class: 'rb-btn rb-btn-mini', title: t('insp.animMoveUp'), onclick: () => api.cmd('animMove', a.index, -1) }, [icon('up', 12)]),
-              h('button', { class: 'rb-btn rb-btn-mini', title: t('insp.animMoveDown'), onclick: () => api.cmd('animMove', a.index, 1) }, [icon('down', 12)]),
-              h('button', { class: 'rb-btn rb-btn-mini', title: t('insp.animRemove'), onclick: () => api.cmd('animRemove', a.index) }, [icon('close', 12)])
+              h('button', { class: 'rb-btn rb-btn-mini', title: t('insp.animMoveUp'), onclick: (e: any) => { e.stopPropagation(); api.cmd('animMove', a.index, -1); } }, [icon('up', 12)]),
+              h('button', { class: 'rb-btn rb-btn-mini', title: t('insp.animMoveDown'), onclick: (e: any) => { e.stopPropagation(); api.cmd('animMove', a.index, 1); } }, [icon('down', 12)]),
+              h('button', { class: 'rb-btn rb-btn-mini', title: t('insp.animRemove'), onclick: (e: any) => { e.stopPropagation(); api.cmd('animRemove', a.index); } }, [icon('close', 12)])
             ])
           );
         }
@@ -345,6 +356,9 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
       { type: 'sep' },
       { type: 'item', label: t('cmd.fit'), icon: 'fit', onClick: () => api.cmd('zoom', 'fit') },
       { type: 'item', label: t('cmd.zoomActual'), icon: 'slideSize', onClick: () => api.cmd('zoom', 'actual') },
+      { type: 'sep' },
+      { type: 'item', label: t('cmd.exportImage'), icon: 'picture', onClick: () => api.cmd('exportImage') },
+      { type: 'item', label: t('cmd.exportPdf'), icon: 'save', onClick: () => api.cmd('exportPdf') },
       { type: 'sep' },
       { type: 'item', label: t('cmd.shortcuts'), icon: 'help', onClick: () => api.cmd('shortcuts') }
     ];
@@ -393,12 +407,23 @@ export function createRibbon(api: RibbonApi): { root: HTMLElement; sync(s: Ribbo
     writeStore(COLLAPSE_KEY, '0');
   }
 
+  // 手动保存：VS Code 的 Ctrl+S 会拦截，但 webview 里需要一个可见入口。未保存时高亮 +
+  // 右上角小圆点；按钮始终可点，和 Office 的保存按钮一致。
+  const saveBtn = miniButton({
+    ico: 'save',
+    title: withAccel(t('cmd.save'), 'mod+s'),
+    active: (s) => s.dirty,
+    onClick: () => api.cmd('save')
+  });
+  saveBtn.el.classList.add('rb-save');
+
   const rightQat = h('div', { class: 'rb-qat' }, [
     miniButton({ ico: 'help', title: withAccel(t('cmd.shortcuts'), '?'), onClick: () => api.cmd('shortcuts') }).el
   ]);
 
   const titlebar = h('div', { class: 'rb-titlebar' }, [
     h('div', { class: 'rb-qat' }, [
+      saveBtn.el,
       miniButton({ ico: 'undo', title: withAccel(t('cmd.undo'), 'mod+z'), needs: 'canUndo', onClick: () => api.cmd('undo') }).el,
       miniButton({ ico: 'redo', title: withAccel(t('cmd.redo'), 'mod+y'), needs: 'canRedo', onClick: () => api.cmd('redo') }).el,
       miniButton({ ico: 'present', title: withAccel(t('tbar.present'), 'f5'), onClick: () => api.cmd('present') }).el

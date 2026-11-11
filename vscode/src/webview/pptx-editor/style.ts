@@ -91,6 +91,12 @@ button { font-family: inherit; }
 .rb-btn.disabled { opacity: .38; cursor: default; }
 .rb-btn.on { background: var(--accent-bg); border-color: var(--accent-2); }
 .rb-btn-mini { min-width: 24px; height: 24px; padding: 2px 4px; }
+/* 保存按钮：有未保存改动时高亮（.on）并在右上角显示小圆点 */
+.rb-save { position: relative; }
+.rb-save.on::after {
+  content: ''; position: absolute; right: 0; top: 0;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
 .rb-btn-big { flex-direction: column; gap: 2px; height: 58px; min-width: 52px; padding: 4px 6px; font-size: 11px; }
 .rb-btn-big .rb-glyph { font-size: 14px; }
 .rb-glyph { font-size: 13px; line-height: 1; }
@@ -141,7 +147,9 @@ button { font-family: inherit; }
 .rb-theme-name { font-size: 10px; white-space: nowrap; }
 
 .rb-anim-list { width: 190px; max-height: 74px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.rb-anim-row { display: flex; align-items: center; gap: 2px; }
+.rb-anim-row { display: flex; align-items: center; gap: 2px; padding: 1px 2px; border-radius: 3px; }
+.rb-anim-row:hover { background: var(--panel-2); }
+.rb-anim-row.on { outline: 1px solid var(--accent-2); background: var(--panel-2); }
 .rb-anim-text { flex: 1 1 auto; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-anim-list .empty { padding: 4px; }
 
@@ -444,6 +452,9 @@ button { font-family: inherit; }
 .field textarea { resize: vertical; min-height: 60px; }
 .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .row .btn { flex: 1 1 auto; justify-content: center; }
+.anim-row { padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; align-items: center; }
+.anim-row:hover { background: var(--panel-2); }
+.anim-row.on { border-color: var(--accent-2); background: var(--panel-2); }
 .chk { display: flex; align-items: center; gap: 6px; }
 .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
 

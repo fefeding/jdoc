@@ -555,5 +555,18 @@ export const zhCN: Record<keyof typeof en, string> = {
   'data.shape.flowchart.flowChartMagneticDisk': '磁盘',
   'data.shape.flowchart.flowChartMultidocument': '多文档',
   'data.shape.flowchart.ellipseRibbon': '汇总',
-  'data.shape.flowchart.wedgeRectCallout': '标注'
+  'data.shape.flowchart.wedgeRectCallout': '标注',
+  'cmd.exportImage': '当前页为图片',
+  'cmd.exportImages': '全部页为图片',
+  'cmd.exportPdf': '导出 PDF',
+  'cmd.convertFormat': '转换文档格式',
+  'grp.export': '导出',
+  'toast.exporting': '正在导出…',
+  'toast.exportFailed': '导出失败：{0}',
+  'insp.editDiagramText': '编辑 SmartArt 文字…',
+  'insp.diagramHint': '双击 SmartArt 可编辑其文字。',
+  'dlg.diagram.text': 'SmartArt 文字',
+  'dlg.diagram.node': '节点 {0}',
+  'dlg.diagram.hint': '逐个节点编辑文字，保存后会写回原始 SmartArt。',
+  'menu.previewMode': '预览'
 };

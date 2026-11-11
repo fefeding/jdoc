@@ -119,7 +119,8 @@ export function buildTabs(b: RibbonBuilders, api: RibbonApi): RibbonTab[] {
   const sizeKeyOptions = ['16:9', '16:10', '4:3'].map((k) => ({ value: k, label: data('size', k, k) }));
 
   // Animation draft: the Animations tab is a form, not a live view of the store.
-  const anim = { cls: 'entr', type: 'fadeIn', trigger: 'onClick', direction: 'l', duration: 500 };
+  // 默认 afterPrev（自动播放），与属性面板一致：点效果后 F5 就能立刻看到，不必先点一下。
+  const anim = { cls: 'entr', type: 'fadeIn', trigger: 'afterPrev', direction: 'l', duration: 500 };
   const addAnim = (over: Partial<typeof anim>) => {
     Object.assign(anim, over);
     api.cmd('addAnim', { ...anim });
@@ -340,8 +341,11 @@ export function buildTabs(b: RibbonBuilders, api: RibbonApi): RibbonTab[] {
     options: typeOptionsFor(anim.cls),
     width: 114,
     needs: ['edit', 'single'],
-    onChange: (v) => (anim.type = v)
+    onSync: (s) => s.animPick.type,
+    // 同时写回当前已选中的动画：只改草稿的话，播放效果永远停留在最初添加的那一条
+    onChange: (v) => { anim.type = v; api.cmd('animPatch', { type: v }); }
   });
+  let lastAnimCls = '';
   add('animations', t('tab.animations'), [
     b.group(
       t('grp.animation'),
@@ -365,23 +369,40 @@ export function buildTabs(b: RibbonBuilders, api: RibbonApi): RibbonTab[] {
             options: classOptions,
             width: 96,
             needs: ['edit', 'single'],
+            onSync: (s) => {
+              if (s.animPick.cls !== lastAnimCls) {
+                lastAnimCls = s.animPick.cls;
+                animTypeBox.setOptions(typeOptionsFor(s.animPick.cls));
+              }
+              return s.animPick.cls;
+            },
             onChange: (v) => {
               anim.cls = v;
               const opts = typeOptionsFor(v);
               anim.type = opts[0]?.value || anim.type;
               animTypeBox.setOptions(opts);
               (animTypeBox.el.querySelector('select') as HTMLSelectElement).value = anim.type;
+              api.cmd('animPatch', { presetClass: v, type: anim.type });
             }
           }),
           animTypeBox,
-          b.selectBox({ label: t('insp.animTrigger'), options: triggerOptions, width: 108, needs: ['edit', 'single'], onChange: (v) => (anim.trigger = v) }),
-          b.selectBox({ label: t('insp.animDirection'), options: directionOptions, width: 104, needs: ['edit', 'single'], onChange: (v) => (anim.direction = v) }),
+          b.selectBox({
+            label: t('insp.animTrigger'), options: triggerOptions, width: 108, needs: ['edit', 'single'],
+            onSync: (s) => s.animPick.trigger,
+            onChange: (v) => { anim.trigger = v; api.cmd('animPatch', { trigger: v }); }
+          }),
+          b.selectBox({
+            label: t('insp.animDirection'), options: directionOptions, width: 104, needs: ['edit', 'single'],
+            onSync: (s) => s.animPick.direction,
+            onChange: (v) => { anim.direction = v; api.cmd('animPatch', { direction: v }); }
+          }),
           b.selectBox({
             label: t('insp.animDuration'),
             options: ANIM_DURATIONS.map((n) => ({ value: String(n), label: String(n) })),
             width: 66,
             needs: ['edit', 'single'],
-            onChange: (v) => (anim.duration = Number(v))
+            onSync: (s) => s.animPick.duration,
+            onChange: (v) => { anim.duration = Number(v); api.cmd('animPatch', { duration: Number(v) }); }
           })
         ]
       ],
@@ -417,6 +438,14 @@ export function buildTabs(b: RibbonBuilders, api: RibbonApi): RibbonTab[] {
       [b.miniButton({ ico: 'grid', title: t('cmd.grid'), needs: 'edit', active: (s) => s.grid, onClick: () => api.cmd('grid') })],
       [b.miniButton({ ico: 'snap', title: t('cmd.snap'), needs: 'edit', active: (s) => s.snap, onClick: () => api.cmd('snap') })],
       [b.miniButton({ ico: 'notes', title: t('grp.window'), needs: 'edit', onClick: () => api.cmd('toggleInspector') })]
+    ]),
+    b.group(t('grp.export'), [
+      [
+        b.bigButton({ ico: 'picture', label: t('cmd.exportImage'), onClick: () => api.cmd('exportImage') }),
+        b.bigButton({ ico: 'download', label: t('cmd.exportImages'), onClick: () => api.cmd('exportImages') }),
+        b.bigButton({ ico: 'save', label: t('cmd.exportPdf'), onClick: () => api.cmd('exportPdf') }),
+        b.bigButton({ ico: 'swap', label: t('cmd.convertFormat'), onClick: () => api.cmd('convertFormat') })
+      ]
     ])
   ]);
 

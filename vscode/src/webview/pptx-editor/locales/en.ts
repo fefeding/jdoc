@@ -560,5 +560,18 @@ export const en = {
   'data.shape.flowchart.flowChartMagneticDisk': 'Magnetic Disk',
   'data.shape.flowchart.flowChartMultidocument': 'Multidocument',
   'data.shape.flowchart.ellipseRibbon': 'Collate',
-  'data.shape.flowchart.wedgeRectCallout': 'Callout'
+  'data.shape.flowchart.wedgeRectCallout': 'Callout',
+  'cmd.exportImage': 'Slide as PNG',
+  'cmd.exportImages': 'All Slides as PNG',
+  'cmd.exportPdf': 'Export as PDF',
+  'cmd.convertFormat': 'Convert Document',
+  'grp.export': 'Export',
+  'toast.exporting': 'Exporting…',
+  'toast.exportFailed': 'Export failed: {0}',
+  'insp.editDiagramText': 'Edit SmartArt Text…',
+  'insp.diagramHint': 'Double-click the SmartArt to edit its text.',
+  'dlg.diagram.text': 'SmartArt Text',
+  'dlg.diagram.node': 'Node {0}',
+  'dlg.diagram.hint': 'Edit the text of each node. Changes are written back into the original SmartArt.',
+  'menu.previewMode': 'Preview'
 } as const;

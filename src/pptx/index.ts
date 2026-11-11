@@ -25,7 +25,7 @@ import { extractPptxAssets } from './assets';
 import { resolvePptxAssetRefs } from './asset-refs';
 
 export type { PptxDocument } from '@fefeding/ppt-parser';
-export { PPTXShapeUtils, presetShapePath, createStore, createActions, renderChartSVG } from '@fefeding/ppt-parser';
+export { PPTXShapeUtils, presetShapePath, createStore, createActions, renderChartSVG, updateDiagramTexts } from '@fefeding/ppt-parser';
 export { normalizeDoc, normalizeElement } from '@fefeding/ppt-parser';
 // 编辑核心与编辑器 UI 常量：供 VS Code 插件（及任何需要直接编辑 PPTX 的消费者）
 // 复用 ppt-parser 的编辑器能力。docFromPptx/docToPptx 是编辑器文档模型的序列化入口，

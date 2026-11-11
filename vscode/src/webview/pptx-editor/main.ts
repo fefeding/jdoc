@@ -33,6 +33,8 @@ import {
   ANIM_DIRECTIONS,
   CHART_TYPES
 } from '@fefeding/jdoc';
+// SmartArt 文字改写直接来自 ppt-parser（jdoc 的浏览器构建对它是 external，esbuild 会解析到同一份实例）
+import { updateDiagramTexts } from '@fefeding/ppt-parser';
 
 // 几何 API：基础矩形类（elementRect/effectMargin）可由具名导出稳定获得，但线段/连接线相关函数
 // （isLineElement/lineEndpoints/geomPoints/connectionPoints/findGlueTarget/resyncGlue/setLineEndpoints）
@@ -56,6 +58,8 @@ import {
   disposeDetachedCharts,
   disposeAllCharts
 } from './render';
+import { exportSlidesToPng, base64Of } from './exporter';
+import type { ExportedSlide } from './exporter';
 import {
   hasOpenModal,
   closeModal,
@@ -66,6 +70,7 @@ import {
   openMediaDialog,
   openShortcuts,
   openConfirm,
+  openDiagramTextDialog,
   shapeMenuItems
 } from './dialogs';
 // Same ECharts renderer the preview side uses (option building incl. 3D matches examples/index.html)
@@ -458,8 +463,69 @@ function ribbonCaps(): Record<string, boolean | string> {
   };
 }
 
+/** trigger 在编辑器模型里是字符串，从 PPTX 解析回来可能是 { type } 对象 */
+function normTrigger(t: any): 'onClick' | 'withPrev' | 'afterPrev' {
+  const v = typeof t === 'string' ? t : t?.type;
+  return v === 'onClick' || v === 'withPrev' ? v : 'afterPrev';
+}
+
+/** 当前正在编辑的动画（slide.animations 下标）；-1 表示跟随最后一条 */
+let animEditIndex = -1;
+
+/** 参数控件应编辑哪条动画：显式选中优先，否则取选中元素的最后一条（通常就是刚添加的） */
+function currentAnimIndex(): number {
+  // preview 模式下 store.doc 为 null，而 store.slide 的 getter 会直接读 doc.slides
+  if (state.mode !== 'edit' || !store.doc) return -1;
+  const anims: any[] = Array.isArray(store.slide?.animations) ? store.slide.animations : [];
+  if (animEditIndex >= 0 && animEditIndex < anims.length) return animEditIndex;
+  const sel: string[] = store.sel || [];
+  if (!sel.length) return anims.length - 1;
+  for (let i = anims.length - 1; i >= 0; i--) {
+    if (sel.includes(anims[i].target)) return i;
+  }
+  // 选中的元素没有动画时不要退回别元素的最后一条，否则参数区会误显示/误改它
+  return -1;
+}
+
+/** 把类型/方向/触发/时长立即写回当前动画，而不是只改「下一次添加」的草稿 */
+function patchCurrentAnim(patch: any): void {
+  if (state.mode !== 'edit') return;
+  const anims: any[] = Array.isArray(store.slide?.animations) ? store.slide.animations : [];
+  const idx = currentAnimIndex();
+  if (idx < 0 || idx >= anims.length) return;
+  animEditIndex = idx;
+  const next: any = { ...patch };
+  // 类型/类别/方向变了，旧的 OOXML presetID/presetSubtype 必须失效：导出端会优先用它们，
+  // 与 preset 不一致时 PowerPoint 会忽略该动画或仍播旧效果（一直「从左侧飞入」）。
+  if ('type' in next || 'presetClass' in next) next.presetId = undefined;
+  if ('direction' in next) next.presetSubtype = undefined;
+  runAction(() => actions.updateAnimation(idx, next));
+}
+
 function animLabel(a: any): string {
-  return [data('animClass', a.presetClass || 'entr', a.presetClass), data('animType', a.type || '', a.type), data('trigger', a.trigger || 'onClick', a.trigger)].join(' / ');
+  const trig = normTrigger(a.trigger);
+  return [data('animClass', a.presetClass || 'entr', a.presetClass), data('animType', a.type || '', a.type), data('trigger', trig, trig)].join(' / ');
+}
+
+/**
+ * 预览模式没有编辑器模型，动画随 pptxToHtml 的 data-timing 下发。
+ * 重新打开文件默认是预览模式，若动画窗格空白，用户会以为「保存后动画没了」。
+ */
+function previewAnimations(): any[] {
+  const html = state.preview?.slides?.[state.current] || '';
+  const m = html.match(/data-timing='([^']*)'/);
+  if (!m) return [];
+  try {
+    const payload = JSON.parse(m[1]);
+    if (!Array.isArray(payload.animations)) return [];
+    return payload.animations.map((a: any) => ({
+      type: a.type,
+      presetClass: a.presetClass || 'entr',
+      trigger: a.trigger || 'onClick',
+      direction: a.direction,
+      duration: a.duration
+    }));
+  } catch { return []; }
 }
 
 function ribbonState(): RibbonState {
@@ -468,10 +534,13 @@ function ribbonState(): RibbonState {
   // throws on a null doc, so gate every store lookup on `store.doc` existing, not just on the mode.
   const editing = state.mode === 'edit' && !!store.doc;
   const trans: any = (editing && store.slide?.transition) || {};
-  const anims: any[] = editing && Array.isArray(store.slide?.animations) ? store.slide.animations : [];
+  const anims: any[] = editing
+    ? (Array.isArray(store.slide?.animations) ? store.slide.animations : [])
+    : previewAnimations();
   const themeId = editing ? (typeof store.doc?.theme === 'string' ? store.doc.theme : 'blue') : '';
   return {
     mode: state.mode,
+    dirty: state.dirty,
     canUndo: editing && store.canUndo(),
     canRedo: editing && store.canRedo(),
     zoom: state.zoom,
@@ -485,6 +554,18 @@ function ribbonState(): RibbonState {
     sizeKey: editing ? store.doc?.sizeKey || '16:9' : '',
     transition: { type: trans.type || 'none', duration: trans.duration ?? 800, advanceOnClick: trans.advanceOnClick !== false },
     animations: anims.map((a, index) => ({ index, text: animLabel(a) })),
+    animIndex: editing ? currentAnimIndex() : -1,
+    animPick: (() => {
+      if (!editing) return { cls: 'entr', type: 'fadeIn', trigger: 'afterPrev', direction: 'l', duration: '500' };
+      const cur: any = anims[currentAnimIndex()] || null;
+      return {
+        cls: cur?.presetClass || 'entr',
+        type: cur?.type || 'fadeIn',
+        trigger: cur ? normTrigger(cur.trigger) : 'afterPrev',
+        direction: cur?.direction || 'l',
+        duration: String(cur?.duration ?? 500)
+      };
+    })(),
     caps: ribbonCaps()
   };
 }
@@ -502,6 +583,8 @@ function ribbonCommands(name: string, ...args: any[]): any {
   };
   switch (name) {
     // --- file / app ---
+    // 走宿主的标准保存流程（含保存前的 flush 握手），不要在这里直接写盘
+    case 'save': return post({ type: 'save' });
     case 'undo': return runAction(() => store.undo());
     case 'redo': return runAction(() => store.redo());
     case 'setMode': return setMode(args[0]);
@@ -584,6 +667,11 @@ function ribbonCommands(name: string, ...args: any[]): any {
     case 'table': return insertTable();
     case 'chart': return insertChart();
     case 'media': return openMediaDialog({ addMedia });
+    case 'exportImage': return exportCurrentImage();
+    case 'exportImages': return exportAllImages();
+    case 'exportPdf': return exportPdf();
+    // 格式转换在宿主执行（需要系统字体 / Node API）。jdoc 侧由 host 命令负责。
+    case 'convertFormat': post({ type: 'convert', uri: currentDocUri }); return;
 
     // --- slides ---
     case 'newSlide': return runAction(() => actions.addSlide(args[0]));
@@ -621,6 +709,12 @@ function ribbonCommands(name: string, ...args: any[]): any {
 
     // --- animations ---
     case 'addAnim': return addAnimationFromRibbon(args[0]);
+    case 'animSelect':
+      animEditIndex = Number(args[0]);
+      renderInspector(true);
+      ribbon.sync(ribbonState());
+      return;
+    case 'animPatch': return patchCurrentAnim(args[0]);
     case 'animMove': return runAction(() => actions.moveAnimation(args[0], args[1]));
     case 'animRemove': return runAction(() => actions.removeAnimation(args[0]));
 
@@ -698,6 +792,8 @@ function addAnimationFromRibbon(pick: any) {
     toast(t('toast.needSelection'), 'warn');
     return;
   }
+  // 新添加的动画成为参数控件的编辑目标
+  animEditIndex = -1;
   runAction(() =>
     actions.addAnimation({
       target: el.id,
@@ -708,6 +804,73 @@ function addAnimationFromRibbon(pick: any) {
       trigger: pick.trigger
     })
   );
+}
+
+// ---------- Export (PNG / PDF, rasterized offscreen from the editor model) ----------
+
+/** Editor document for export: the live model when loaded, otherwise a throwaway parse. */
+async function ensureExportDoc(): Promise<any> {
+  if (store.doc?.slides?.length) return store.doc;
+  const bytes = state.latest || state.original;
+  if (!bytes) return null;
+  const standard = await pptxToStandard(bytes, PARSE_OPTS);
+  return docFromPptx(standard, { fileName: state.title });
+}
+
+function baseName(title: string): string {
+  return String(title || 'slides').replace(/\.pptx$/i, '');
+}
+
+async function exportSlides(indices: number[], pixelRatio = 2): Promise<ExportedSlide[] | null> {
+  const doc = await ensureExportDoc();
+  if (!doc || !doc.slides?.length) return null;
+  const safe = indices.filter((i) => i >= 0 && i < doc.slides.length);
+  if (!safe.length) return null;
+  toast(t('toast.exporting'));
+  try {
+    return await exportSlidesToPng({ doc, indices: safe, pixelRatio });
+  } catch (e: any) {
+    toast(t('toast.exportFailed', e?.message || String(e)), 'error');
+    return null;
+  }
+}
+
+async function exportCurrentImage(): Promise<void> {
+  const out = await exportSlides([state.current]);
+  if (!out?.length) return;
+  post({
+    type: 'exportImage',
+    bytes: base64Of(out[0].png),
+    suggestedName: `${baseName(state.title)}-${state.current + 1}.png`
+  });
+}
+
+async function exportAllImages(): Promise<void> {
+  const doc = await ensureExportDoc();
+  if (!doc) return;
+  const out = await exportSlides(doc.slides.map((_: any, i: number) => i));
+  if (!out?.length) return;
+  post({
+    type: 'exportImages',
+    images: out.map((s) => ({
+      name: `${baseName(state.title)}-${String(s.index + 1).padStart(2, '0')}.png`,
+      bytes: base64Of(s.png)
+    }))
+  });
+}
+
+async function exportPdf(): Promise<void> {
+  const doc = await ensureExportDoc();
+  if (!doc) return;
+  const out = await exportSlides(doc.slides.map((_: any, i: number) => i));
+  if (!out?.length) return;
+  post({
+    type: 'exportPdf',
+    images: out.map((s) => ({ bytes: base64Of(s.png) })),
+    widthPx: doc.slideSize.width,
+    heightPx: doc.slideSize.height,
+    suggestedName: `${baseName(state.title)}.pdf`
+  });
 }
 
 // ---------- Preview pipeline (pptxToHtml: most faithful rendering) ----------
@@ -810,11 +973,14 @@ async function syncBytes(dirty: boolean): Promise<void> {
       state.latest = state.original;
       state.dirty = false;
       post({ type: 'sync', bytes: null, dirty: false });
+      syncChrome();
       return;
     }
     state.latest = await serializeDoc();
     state.dirty = true;
     post({ type: 'sync', bytes: toBase64(state.latest), dirty: true });
+    // syncBytes 是防抖后异步执行的，此时 renderAll 早已跑完，必须单独刷新功能区上的保存按钮
+    syncChrome();
   } catch (e: any) {
     post({ type: 'error', message: t('toast.serializeFailed', e?.message || String(e)) });
   } finally {
@@ -1695,8 +1861,34 @@ function onCanvasDblClick(e: MouseEvent) {
   else if (el.type === 'image') pickImage();
   else if (el.type === 'table') editTable(el.id);
   else if (el.type === 'chart') editChart(el.id);
+  else if (el.type === 'diagram') editDiagramText(el.id);
   else if (el.type === 'video' || el.type === 'audio') toast(t('toast.mediaNotPlayable'));
   // other element types (line, connector, picture, shape without text) have no inline text
+}
+
+/**
+ * SmartArt 文字编辑。
+ * 图示文字同时存在于数据部件（ppt/diagrams/dataN.xml）与缓存绘图部件（drawingN.xml），
+ * 只改内存里的 texts 不会写进文件，故交给 parser 的 updateDiagramTexts 同步改写两处部件。
+ */
+function editDiagramText(id: string) {
+  const el = store.findElement(id);
+  if (!el || el.type !== 'diagram') return;
+  const texts: string[] = Array.isArray(el.texts) ? el.texts.map((v: any) => String(v ?? '')) : [];
+  if (!texts.length) {
+    toast(t('insp.diagramHint'));
+    return;
+  }
+  openDiagramTextDialog(texts, {
+    save: (next) =>
+      runAction(() => {
+        store.update((doc: any) => {
+          const elx = findInDoc(doc, id);
+          if (!elx) return;
+          updateDiagramTexts(elx, next);
+        });
+      })
+  });
 }
 
 /** Open the table editor against the freshest model state. */
@@ -1839,22 +2031,36 @@ function syncChrome(): void {
   ribbon.sync(ribbonState());
 }
 
-function renderInspector() {
+let lastInspSelKey = '';
+
+function renderInspector(force = false) {
   if (state.mode !== 'edit') {
     inspectorEl.innerHTML = '';
     inspectorHeadEl.innerHTML = '';
+    lastInspSelKey = '';
     return;
   }
+  const selKey = store.sel.join(',');
+  const selectionChanged = selKey !== lastInspSelKey;
+  // 换了元素就必须重建：此时旧面板里的动画参数、几何值全属于上一个元素。
+  if (selectionChanged && !force) animEditIndex = -1;
   if (state.editingText && store.sel.length) return; // don't rebuild while typing (keeps focus)
   // 正在操作面板里的控件（取色器 / 下拉框 / 数字框）时不要重建：
   // 每次 edit 都 renderAll 一次，重建会把控件连同它身上的焦点一起换掉，原生取色器随之
   // 关闭——连续调色只能生效第一下，看着就像「改了颜色但没实时生效」。画布由 renderAll
   // 里的 renderCanvas 独立重绘，不受这里跳过的影响。
+  // 但这个保护只在「同一个选择」时有效：刚在下拉框里设完动画再点画布上另一个元素，
+  // 焦点仍在旧 select 上，若不强制重建，属性面板会一直停留在上一个元素。
   const active = document.activeElement as HTMLElement | null;
-  if (active && inspectorEl.contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) {
+  if (!force && !selectionChanged && active && inspectorEl.contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) {
     syncChrome();
     return;
   }
+  // Re-rendering wipes the DOM, so remember where the panel was scrolled to: property edits must not
+  // throw the user back to the top. A *different* selection is a new context and starts at the top.
+  const keepScroll = !selectionChanged;
+  const prevScroll = inspectorEl.scrollTop;
+  lastInspSelKey = selKey;
   inspectorEl.innerHTML = '';
   const slide = store.slide;
   renderInspectorHead();
@@ -1869,6 +2075,7 @@ function renderInspector() {
   } else {
     renderSlideInspector(slide);
   }
+  inspectorEl.scrollTop = keepScroll ? prevScroll : 0;
   syncChrome();
 }
 
@@ -2474,6 +2681,15 @@ function renderElementInspector(el: any) {
     inspectorEl.append(checkField(t('insp.dataLabels'), !!el.dataLabels, (v) => update({ dataLabels: v })));
     inspectorEl.append(h('div', { class: 'row' }, [h('button', { class: 'btn', type: 'button', onclick: () => editChart(el.id) }, [t('insp.editData')])]));
     inspectorEl.append(h('div', { class: 'empty' }, [t('insp.chartHint')]));
+  } else if (el.type === 'diagram') {
+    // SmartArt：文字在数据部件与缓存绘图部件里，改动需由 parser 的 updateDiagramTexts 同步写回
+    inspectorEl.append(textField(t('insp.name'), el.name || '', (v) => update({ name: v })));
+    inspectorEl.append(
+      h('div', { class: 'row' }, [
+        h('button', { class: 'btn', type: 'button', onclick: () => editDiagramText(el.id) }, [t('insp.editDiagramText')])
+      ])
+    );
+    inspectorEl.append(h('div', { class: 'empty' }, [t('insp.diagramHint')]));
   } else if (el.type === 'video' || el.type === 'audio') {
     inspectorEl.append(textField(t('insp.name'), el.name || '', (v) => update({ name: v })));
     inspectorEl.append(
@@ -2549,19 +2765,56 @@ function renderElementInspector(el: any) {
   inspectorEl.append(h('h4', {}, [t('insp.animations')]));
   const allAnims: any[] = Array.isArray(store.slide?.animations) ? store.slide.animations : [];
   const mine = allAnims.map((a: any, i: number) => ({ a, i })).filter((x: any) => x.a.target === el.id);
+  // 配置控件编辑「当前选中的动画」，而不是「下一次添加」的草稿。
+  // 旧实现里改类型/方向只改草稿、不动已有动画，于是无论选什么，播放出来永远是最初
+  // 添加的那条默认效果（从左侧飞入）。
+  let editIdx = currentAnimIndex();
+  if (editIdx < 0 || !allAnims[editIdx] || allAnims[editIdx].target !== el.id) {
+    editIdx = mine.length ? mine[mine.length - 1].i : -1;
+  }
+  const editAnim: any = allAnims[editIdx] || null;
+  // 没有动画时仍给一个合理的默认值，供「添加动画」按钮使用
+  const pick = {
+    cls: editAnim?.presetClass || 'entr',
+    type: editAnim?.type || (ANIM_TYPES.entr[0] || {}).value,
+    trigger: editAnim ? normTrigger(editAnim.trigger) : 'afterPrev',
+    direction: editAnim?.direction || (ANIM_DIRECTIONS[0] || {}).value,
+    duration: editAnim?.duration ?? 500
+  };
+  const patchAnim = (p: any) => {
+    Object.assign(pick, p);
+    if (editIdx >= 0 && editIdx < allAnims.length) {
+      animEditIndex = editIdx;
+      // 走统一入口，改类型/方向时同步清掉过期的 presetID/presetSubtype
+      patchCurrentAnim(p);
+    }
+  };
   if (!mine.length) inspectorEl.append(h('div', { class: 'empty' }, [t('insp.noAnimOnEl')]));
   for (const x of mine) {
     inspectorEl.append(
-      h('div', { class: 'row' }, [
+      h('div', {
+        class: 'row anim-row' + (x.i === editIdx ? ' on' : ''),
+        style: 'cursor:pointer',
+        onclick: () => {
+          animEditIndex = x.i;
+          renderInspector(true);
+          ribbon.sync(ribbonState());
+        }
+      }, [
         h('span', { style: 'flex:1;font-size:11px' }, [animLabel(x.a)]),
-        h('button', { class: 'btn', type: 'button', title: t('insp.animRemove'), onclick: () => runAction(() => actions.removeAnimation(x.i)) }, ['✕'])
+        h('button', {
+          class: 'btn', type: 'button', title: t('insp.animRemove'),
+          onclick: (e: any) => {
+            e.stopPropagation();
+            animEditIndex = -1;
+            runAction(() => actions.removeAnimation(x.i));
+          }
+        }, ['✕'])
       ])
     );
   }
-  // Default trigger is 'afterPrev' (auto-play when the slide appears) so a freshly added
-  // animation is actually visible during the slideshow without requiring a click first.
-  const pick = { cls: 'entr', type: (ANIM_TYPES.entr[0] || {}).value, trigger: 'afterPrev', direction: (ANIM_DIRECTIONS[0] || {}).value, duration: 500 };
-  const addAnim = () =>
+  const addAnim = () => {
+    animEditIndex = -1;
     runAction(() =>
       actions.addAnimation({
         target: el.id,
@@ -2572,20 +2825,15 @@ function renderElementInspector(el: any) {
         trigger: pick.trigger
       })
     );
+  };
   // Single-click add: the button always adds an animation immediately (no hidden two-step form).
   const addButton = () =>
     h('div', { class: 'row' }, [
       h('button', { class: 'btn', type: 'button', title: t('insp.animAdd'), onclick: addAnim }, ['＋ ' + t('insp.animAdd')])
     ]);
   if (!mine.length) {
-    // Element has no animation yet: keep the panel minimal — one button that adds a default
-    // animation in a single click. The configuration controls below only appear once the
-    // element actually has an animation (the inspector re-renders right after adding), so
-    // elements without animations don't show options that don't apply to them.
     inspectorEl.append(addButton());
   } else {
-    // Animation list exists: also show the configuration controls, so the next animation can
-    // be added with different options (class / type / trigger / direction / duration).
     const typeWrap = h('div', {});
     const renderTypes = () => {
       typeWrap.innerHTML = '';
@@ -2594,7 +2842,7 @@ function renderElementInspector(el: any) {
           t('insp.animType'),
           (ANIM_TYPES[pick.cls] || []).map((x: any) => ({ value: x.value, label: data('animType', x.value, x.name) })),
           pick.type,
-          (v) => (pick.type = v)
+          (v) => patchAnim({ type: v })
         )
       );
     };
@@ -2605,7 +2853,8 @@ function renderElementInspector(el: any) {
         ANIM_CLASSES.map((c: any) => ({ value: c.value, label: data('animClass', c.value, c.name) })),
         pick.cls,
         (v) => {
-          pick.cls = v;
+          const first = ((ANIM_TYPES as any)[v] || [])[0]?.value || pick.type;
+          patchAnim({ presetClass: v, type: first });
           renderTypes();
         }
       )
@@ -2616,7 +2865,7 @@ function renderElementInspector(el: any) {
         t('insp.animTrigger'),
         ['onClick', 'withPrev', 'afterPrev'].map((v) => ({ value: v, label: data('trigger', v, v) })),
         pick.trigger,
-        (v) => (pick.trigger = v)
+        (v) => patchAnim({ trigger: v })
       )
     );
     inspectorEl.append(
@@ -2624,10 +2873,10 @@ function renderElementInspector(el: any) {
         t('insp.animDirection'),
         ANIM_DIRECTIONS.map((d: any) => ({ value: d.value, label: data('animDir', d.value, d.name) })),
         pick.direction,
-        (v) => (pick.direction = v)
+        (v) => patchAnim({ direction: v })
       )
     );
-    inspectorEl.append(numField(t('insp.animDuration'), pick.duration, (v) => (pick.duration = Math.max(0, Math.round(v)))));
+    inspectorEl.append(numField(t('insp.animDuration'), pick.duration, (v) => patchAnim({ duration: Math.max(0, Math.round(v)) })));
     inspectorEl.append(addButton());
   }
 }
@@ -2989,6 +3238,21 @@ async function renderPresent(dir = 1, withTransition = true): Promise<void> {
     }
     if (state.present.global) ensureGlobalStyles(state.present.global);
     layer.innerHTML = state.present.slides[state.current] || '';
+    // 预览模式没有编辑器模型，动画随 pptxToHtml 的 data-timing 下发（每项带 OOXML spid）。
+    // 把 spid 映射成 target 后复用同一套播放逻辑：保存后重新打开（默认预览模式）仍有动画。
+    let previewAnims: any[] = [];
+    try {
+      const slideEl = layer.querySelector('.slide[data-timing]') as HTMLElement | null;
+      const payload = JSON.parse(slideEl?.dataset.timing || '{}');
+      if (Array.isArray(payload.animations)) {
+        previewAnims = payload.animations.map((a: any) => ({
+          ...a,
+          target: String(a.spid ?? a.target ?? ''),
+          trigger: a.trigger || 'onClick'
+        }));
+      }
+    } catch { previewAnims = []; }
+    applyEntranceAnimations(layer, { animations: previewAnims });
   }
 
   presentHostEl.style.width = sz.width + 'px';
@@ -3397,7 +3661,10 @@ function applyEntranceAnimations(layer: HTMLElement, slide: any): void {
   let cum = 0;
   for (const a of anims) {
     const targetId = String(a.target ?? '').replace(/"/g, '\\"');
-    const node = targetId ? (layer.querySelector(`[data-id="${targetId}"]`) as HTMLElement | null) : null;
+    // 编辑模式用 data-id（编辑器元素 id），预览模式用 _id（OOXML spid）
+    const node = targetId
+      ? (layer.querySelector(`[data-id="${targetId}"], [_id="${targetId}"]`) as HTMLElement | null)
+      : null;
     if (!node) continue;
     const kf = entranceKeyframes(a);
     // prime the hidden/start state before the layer becomes visible (no flash)
@@ -3407,7 +3674,7 @@ function applyEntranceAnimations(layer: HTMLElement, slide: any): void {
     if (start.clipPath) node.style.clipPath = start.clipPath;
     const dur = animDurationMs(a.duration);
     const opts: KeyframeAnimationOptions = { duration: dur, easing: 'ease', fill: 'both' };
-    const trigger = a.trigger || 'afterPrev';
+    const trigger = normTrigger(a.trigger);
     if (trigger === 'onClick') {
       presentClickAnims.push({ node, kf, opts, cls: a.presetClass || 'entr' });
     } else {
@@ -3423,6 +3690,8 @@ function showCtxMenu(x: number, y: number) {
   if (state.mode === 'edit') {
     const hasSel = store.sel.length > 0;
     items.push(
+      { label: t('menu.previewMode'), icon: 'showSlide', onClick: () => setMode('preview') },
+      { type: 'sep' },
       { label: t('menu.bringFront'), icon: 'zFront', disabled: !hasSel, onClick: () => runAction(() => actions.zOrder('front')) },
       { label: t('menu.sendBack'), icon: 'zBack', disabled: !hasSel, onClick: () => runAction(() => actions.zOrder('back')) },
       { type: 'sep' },
@@ -3684,6 +3953,12 @@ window.addEventListener('message', async (event: MessageEvent<HostToWebview>) =>
       case 'reverted':
         state.dirty = false;
         syncChrome();
+        break;
+      case 'flush':
+        // 保存前立即把挂起的编辑序列化，避免 Ctrl+S 抢在 350ms 防抖 / 异步序列化之前。
+        // syncBytes 会发出 `sync`，宿主的保存等待由那条消息释放。
+        if (state.mode === 'edit') void syncBytes(store.canUndo());
+        else post({ type: 'flushDone' });
         break;
       case 'info':
         toast(msg.message, msg.kind || 'info');

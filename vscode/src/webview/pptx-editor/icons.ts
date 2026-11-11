@@ -87,6 +87,8 @@ const GLYPHS: Record<string, string> = {
   lineSpacing:
     '<path d="M2 3.4h12M2 8h12M2 12.6h7"/><path d="M12.2 10.6v4M10.4 13l1.8 1.6 1.8-1.6"/>',
   props: '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M4.6 5.6h6.8M4.6 8h6.8M4.6 10.4h4"/>',
+  download: '<path d="M8 2.6v7.6M4.8 7.2L8 10.4l3.2-3.2"/><path d="M2.8 13.4h10.4"/>',
+  swap: '<path d="M2.5 5.6h9.3M9.4 3.2l2.4 2.4-2.4 2.4"/><path d="M13.5 10.4H4.2M6.6 8L4.2 10.4l2.4 2.4"/>',
   edit: '<path d="M11.4 2.6l2 2-7.6 7.6-2.6.6.6-2.6z"/><path d="M2.4 13.6h11.2"/>',
   menu: '<path d="M2.5 4.4h11M2.5 8h11M2.5 11.6h11"/>'
 };

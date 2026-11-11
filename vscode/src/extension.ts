@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import { PDFDocument } from 'pdf-lib';
 import { JdocDocument } from './document';
 import { convert, type ConvertTarget } from '@fefeding/jdoc';
 import { extToFormat, targetFormats, type SourceFormat } from './convert-formats';
@@ -99,6 +100,9 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
 
     /** 当前活动的 webview 面板（标题栏命令需要向它发消息）。 */
     private _activePanel: vscode.WebviewPanel | undefined;
+
+    /** Resolver for a pending "serialize now, before saving" handshake. */
+    private _pendingFlush: (() => void) | null = null;
 
     /**
      * 已打开的文档（key 为 uri.toString()）。用于编辑器标题栏的「切换文档」命令：
@@ -199,12 +203,32 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
                     case 'sync':
                         document.setBytes(message.bytes);
                         document.setDirty(message.dirty);
+                        this._pendingFlush?.();
+                        break;
+                    case 'flushDone':
+                        this._pendingFlush?.();
+                        break;
+                    case 'flush':
+                        // 保存前立即把挂起的编辑序列化，避免 Ctrl+S 抢在 350ms 防抖 / 异步序列化之前。
+                        // syncBytes 会发出 `sync`（上面的分支释放等待），预览模式则回 `flushDone`。
+                        await this.flushPendingSync(document);
                         break;
                     case 'save':
-                        await document.save();
+                        // 走 VS Code 标准保存：它会调用 saveCustomDocument（含保存前 flush 握手），
+                        // 并正确清除标题栏的未保存标记。直接 document.save() 会绕过 VS Code。
+                        await vscode.commands.executeCommand('workbench.action.files.save');
                         break;
                     case 'saveAs':
                         await this.saveAs(document, message.bytes);
+                        break;
+                    case 'exportImage':
+                        await this.saveImageFile(document, message);
+                        break;
+                    case 'exportImages':
+                        await this.saveImageFiles(document, message);
+                        break;
+                    case 'exportPdf':
+                        await this.savePdf(document, message);
                         break;
                     case 'revert':
                         await document.revert();
@@ -296,8 +320,90 @@ class JdocEditorProvider implements vscode.CustomEditorProvider<JdocDocument> {
         rec.dirty = document.isDirty;
     }
 
+    /**
+     * Edits are pushed to the host with a 350ms debounce plus async PPTX serialization. Without
+     * this handshake, Ctrl+S right after an edit can save the *previous* bytes (e.g. an animation
+     * added a moment ago is absent after reopening). Ask the webview to flush and wait for its
+     * `sync` reply (bounded by a timeout so saving never hangs).
+     */
+    private async flushPendingSync(document: JdocDocument): Promise<void> {
+        const panel = this._activeDoc === document ? this._activePanel : undefined;
+        if (!panel) return;
+        await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+                this._pendingFlush = null;
+                resolve();
+            }, 2000);
+            this._pendingFlush = () => {
+                clearTimeout(timer);
+                this._pendingFlush = null;
+                resolve();
+            };
+            void panel.webview.postMessage({ type: 'flush' });
+        });
+    }
+
+    // ---- 导出 PNG / PDF：webview 离屏渲染好位图，宿主负责文件对话框与写盘 ----
+    private async saveImageFile(
+        document: JdocDocument,
+        msg: { bytes: string; suggestedName: string }
+    ): Promise<void> {
+        const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.joinPath(document.uri, '..', msg.suggestedName || 'slide.png'),
+            filters: { PNG: ['png'] }
+        });
+        if (!uri) return;
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(msg.bytes, 'base64'));
+        vscode.window.showInformationMessage(loc('extension.imageSaved', 'Image saved: {0}', uri.fsPath));
+    }
+
+    private async saveImageFiles(
+        document: JdocDocument,
+        msg: { images: { name: string; bytes: string }[] }
+    ): Promise<void> {
+        const folders = await vscode.window.showOpenDialog({
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            defaultUri: vscode.Uri.joinPath(document.uri, '..'),
+            openLabel: loc('extension.chooseFolder', 'Choose Folder')
+        });
+        if (!folders?.length) return;
+        const dir = folders[0];
+        for (const img of msg.images) {
+            await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(dir, img.name), Buffer.from(img.bytes, 'base64'));
+        }
+        vscode.window.showInformationMessage(
+            loc('extension.imagesSaved', 'Saved {0} images to {1}', String(msg.images.length), dir.fsPath)
+        );
+    }
+
+    private async savePdf(
+        document: JdocDocument,
+        msg: { images: { bytes: string }[]; widthPx: number; heightPx: number; suggestedName: string }
+    ): Promise<void> {
+        if (!msg.images?.length) return;
+        const pdf = await PDFDocument.create();
+        // px → pt (1px = 0.75pt, 与解析器其它地方的换算一致)
+        const w = (msg.widthPx || 1280) * 0.75;
+        const h = (msg.heightPx || 720) * 0.75;
+        for (const img of msg.images) {
+            const embedded = await pdf.embedPng(Buffer.from(img.bytes, 'base64'));
+            const page = pdf.addPage([w, h]);
+            page.drawImage(embedded, { x: 0, y: 0, width: w, height: h });
+        }
+        const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.joinPath(document.uri, '..', msg.suggestedName || 'slides.pdf'),
+            filters: { PDF: ['pdf'] }
+        });
+        if (!uri) return;
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(await pdf.save()));
+        vscode.window.showInformationMessage(loc('extension.pdfSaved', 'PDF saved: {0}', uri.fsPath));
+    }
+
     // ---- CustomEditorProvider 必需方法 ----
     async saveCustomDocument(document: JdocDocument, _token: vscode.CancellationToken): Promise<void> {
+        await this.flushPendingSync(document);
         await document.save();
     }
     async saveCustomDocumentAs(

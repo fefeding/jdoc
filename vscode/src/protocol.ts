@@ -28,10 +28,20 @@ export type WebviewToHost =
   | { type: 'save' }
   | { type: 'saveAs'; bytes: string | null }
   | { type: 'revert' }
+  /** Save is about to happen: serialize any pending edit immediately (beats the 350ms debounce). */
+  | { type: 'flush' }
+  /** Reply to `flush` when there is nothing to serialize (e.g. preview mode). */
+  | { type: 'flushDone' }
+  /** Save one rendered slide (PNG, base64) — the host owns file dialogs and the filesystem. */
+  | { type: 'exportImage'; bytes: string; suggestedName: string }
+  /** Save every rendered slide into a picked folder. */
+  | { type: 'exportImages'; images: { name: string; bytes: string }[] }
+  /** Host assembles the rendered slide PNGs into a single PDF (pdf-lib lives host-side only). */
+  | { type: 'exportPdf'; images: { bytes: string }[]; widthPx: number; heightPx: number; suggestedName: string }
   /** 状态栏「转换格式」按钮：请求宿主对当前文档执行 jdoc.convert（无参数=活动文档）。 */
-/** 请求宿主对当前文档执行 jdoc.convert。uri 为当前文档的 uri（string），
- *  必须带上——否则宿主只能靠 activeTextEditor 猜测，同时开着其它文本文件时会转错对象。 */
-| { type: 'convert'; uri?: string }
+  /** 请求宿主对当前文档执行 jdoc.convert。uri 为当前文档的 uri（string），
+   *  必须带上——否则宿主只能靠 activeTextEditor 猜测，同时开着其它文本文件时会转错对象。 */
+  | { type: 'convert'; uri?: string }
   /** 把webview 端的解析/生成错误暴露到 Host UI。 */
   | { type: 'error'; message: string }
   /** 栅格化结果：每渲染完一页立刻回传一页，避免整本文档的 PNG 挤在一条消息里。 */
@@ -65,6 +75,7 @@ export type HostToWebview =
   | { type: 'bytes'; bytes: string; dirty: boolean }
   | { type: 'reverted' }
   | { type: 'saved' }
+  | { type: 'flush' }
   | { type: 'info'; message: string; kind?: 'info' | 'warn' | 'error' }
   /**
    * 宿主已收到 webview 的转换请求、正在弹出目标格式选择框。

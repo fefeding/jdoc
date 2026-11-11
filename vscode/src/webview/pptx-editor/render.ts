@@ -814,16 +814,66 @@ function presetFillColor(el) {
   return null; // image / pattern → 回退 CSS 渲染管线
 }
 
+/**
+ * 渐变填充 → SVG 渐变定义。
+ * 此前渐变形状走 CSS 管线（border-radius / clip-path 近似），月亮/太阳/云朵等复杂轮廓会被画错；
+ * 改为在 SVG 内定义 linearGradient/radialGradient，形状本体与预览端完全一致。
+ */
+function presetGradientDef(el): { def: Element; ref: string } | null {
+  const f = el.fill;
+  if (!f || f.type !== 'gradient') return null;
+  const stops = (f.stops || []).slice().sort((a, b) => a.position - b.position);
+  if (stops.length < 2) return null;
+  const NS = 'http://www.w3.org/2000/svg';
+  const defs = document.createElementNS(NS, 'defs');
+  const gid = `pg_${el.id || Math.random().toString(36).slice(2)}`;
+  let grad: Element;
+  if (f.gradientType === 'radial') {
+    // OOXML a:path（径向）无填充路径矩形/椭圆之分，统一按椭圆近似（与 CSS 管线一致）
+    grad = document.createElementNS(NS, 'radialGradient');
+    grad.setAttribute('id', gid);
+    grad.setAttribute('cx', '50%');
+    grad.setAttribute('cy', '50%');
+    grad.setAttribute('r', '50%');
+  } else {
+    grad = document.createElementNS(NS, 'linearGradient');
+    grad.setAttribute('id', gid);
+    // OOXML a:lin@ang：0° 向右、顺时针递增；CSS 约定 0° 向上，故 +90 后换算方向向量
+    let deg: number;
+    if (typeof f.angle === 'number') deg = ((f.angle + 90) % 360 + 360) % 360;
+    else deg = f.direction === 'vertical' ? 180 : f.direction === 'diagonal' ? 135 : 90;
+    const rad = (deg * Math.PI) / 180;
+    const dx = Math.sin(rad), dy = -Math.cos(rad);
+    grad.setAttribute('x1', `${(50 - dx * 50).toFixed(2)}%`);
+    grad.setAttribute('y1', `${(50 - dy * 50).toFixed(2)}%`);
+    grad.setAttribute('x2', `${(50 + dx * 50).toFixed(2)}%`);
+    grad.setAttribute('y2', `${(50 + dy * 50).toFixed(2)}%`);
+  }
+  stops.forEach((s) => {
+    const st = document.createElementNS(NS, 'stop');
+    st.setAttribute('offset', `${(clamp(s.position, 0, 1) * 100).toFixed(2)}%`);
+    st.setAttribute('stop-color', normalizeColor(s.color) || '#000000');
+    if (s.transparency) st.setAttribute('stop-opacity', String(Math.max(0, 1 - s.transparency / 100)));
+    grad.appendChild(st);
+  });
+  defs.appendChild(grad);
+  return { def: defs, ref: `url(#${gid})` };
+}
+
 /** 预设几何 SVG（与预览端同源公式），不支持或需 CSS 填充时返回 null */
 function presetShapeSvg(el) {
   if (!el.shapeType) return null;
+  const f = el.fill;
+  const isGradient = !!(f && typeof f === 'object' && f.type === 'gradient');
   const fill = presetFillColor(el);
-  if (fill === null) return null;
+  // 渐变形状此前被 presetFillColor 压成「首个停点的纯色」，导致只有纯色渐变看起来正常；
+  // 这里改用 SVG 渐变定义，形状本体与预览端一致。
+  const grad = isGradient ? presetGradientDef(el) : null;
+  if (fill === null && !grad) return null;
   // rect 默认走 CSS（渐变/圆角渲染精度更高）；仅纯色/无填充时改用 SVG，
   // 使虚线边框的 dasharray 与预览端一致（CSS border-style: dashed 的 dash 长度≈3×线宽，
   // 无法表达预览端 lgDash='10, 5' 这类固定图案）
   if (el.shapeType === 'rect') {
-    const f = el.fill;
     if (!(f == null || f === 'none' || f.type === 'solid')) return null;
   }
   const geo = presetShapePath(el.shapeType, el.width || 100, el.height || 100, el.adjust || {});
@@ -836,13 +886,14 @@ function presetShapeSvg(el) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;overflow:visible';
+  if (grad) svg.appendChild(grad.def);
   let tf = geo.transform || '';
   const flipTf = svgFlipTransform(el.flipH, el.flipV, W, H);
   if (flipTf) tf += (tf ? ' ' : '') + flipTf;
   const main = document.createElementNS(NS, 'path');
   main.setAttribute('d', geo.d);
   if (tf.trim()) main.setAttribute('transform', tf.trim());
-  main.setAttribute('fill', geo.noFill ? 'none' : (fill || 'none'));
+  main.setAttribute('fill', geo.noFill ? 'none' : (grad ? grad.ref : (fill || 'none')));
   if (geo.fillRule) main.setAttribute('fill-rule', geo.fillRule);
   if (lineColor) {
     main.setAttribute('stroke', lineColor);
@@ -1610,6 +1661,11 @@ export function disposeAllCharts() {
     try { chart.dispose(); } catch { /* ignore */ }
   }
   _echartsMap.clear();
+}
+
+/** 存活的 ECharts 实例（导出侧用它关闭入场动画，保证光栅化拿到的是最终帧） */
+export function chartInstances(): any[] {
+  return Array.from(_echartsMap.values()).map((e: any) => e.chart).filter(Boolean);
 }
 
 function shapeGeometry(el) {
